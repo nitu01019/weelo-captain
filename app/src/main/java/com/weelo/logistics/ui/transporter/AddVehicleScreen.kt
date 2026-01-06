@@ -1,0 +1,985 @@
+package com.weelo.logistics.ui.transporter
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Scale
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.weelo.logistics.R
+import com.weelo.logistics.data.model.*
+import com.weelo.logistics.data.repository.MockDataRepository
+import com.weelo.logistics.ui.components.PrimaryButton
+import com.weelo.logistics.ui.components.PrimaryTextField
+import com.weelo.logistics.ui.components.PrimaryTopBar
+import com.weelo.logistics.ui.theme.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.material.ripple.rememberRipple
+
+/**
+ * Add Vehicle Screen - PRD-02 & PRD-06 Compliant
+ * Multi-step: Vehicle Type → Category → Subtype → Details
+ */
+@Composable
+fun AddVehicleScreen(
+    onNavigateBack: () -> Unit,
+    onVehicleAdded: () -> Unit
+) {
+    var currentStep by remember { mutableStateOf(0) } // Start from 0 for vehicle type selection
+    // Multi-select state
+    var selectedVehicleType by remember { mutableStateOf<VehicleType?>(null) }
+    var selectedCategory by remember { mutableStateOf<TruckCategory?>(null) }
+    // Map of Subtype -> Count
+    var selectedSubtypes by remember { mutableStateOf<Map<TruckSubtype, Int>>(emptyMap()) }
+    
+    // Handle back button - go to previous step or exit
+    val handleBack = {
+        if (currentStep > 0) {
+            currentStep -= 1
+        } else {
+            onNavigateBack()
+        }
+    }
+    
+    // Handle Android system back button
+    BackHandler {
+        handleBack()
+    }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Surface)
+    ) {
+        PrimaryTopBar(
+            title = "Add Vehicle",
+            onBackClick = handleBack
+        )
+        
+        // Step Indicator (only show when past vehicle type selection)
+        if (currentStep > 0) {
+            StepIndicator(currentStep = currentStep)
+        }
+        
+        when (currentStep) {
+            0 -> SelectVehicleTypeStep(
+                onVehicleTypeSelected = { vehicleType ->
+                    selectedVehicleType = vehicleType
+                    if (vehicleType.isAvailable) {
+                        currentStep = 1
+                    }
+                }
+            )
+            1 -> SelectCategoryStep(
+                onCategorySelected = { category ->
+                    selectedCategory = category
+                    currentStep = 2
+                },
+                onBack = { currentStep = 0 }
+            )
+            2 -> {
+                var shouldGoBackToCategory by remember { mutableStateOf(false) }
+                
+                SelectSubtypeStep(
+                    category = selectedCategory!!,
+                    initialSelection = selectedSubtypes,
+                    onProceed = { selections ->
+                        selectedSubtypes = selections
+                        currentStep = 3
+                    },
+                    onBack = { currentStep = 1 },
+                    onBackPressed = { hasIntermediate ->
+                        // Return true if back was handled internally (intermediate step)
+                        // Return false if should go back to category
+                        !hasIntermediate
+                    }
+                )
+            }
+            3 -> EnterDetailsStep(
+                category = selectedCategory!!,
+                selectedSubtypes = selectedSubtypes,
+                onBack = { currentStep = 2 },
+                onAllVehiclesAdded = onVehicleAdded
+            )
+        }
+    }
+}
+
+@Composable
+fun StepIndicator(currentStep: Int) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(White)
+            .padding(16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        StepDot(step = 1, currentStep = currentStep, label = "Category")
+        StepLine(isActive = currentStep > 1)
+        StepDot(step = 2, currentStep = currentStep, label = "Type")
+        StepLine(isActive = currentStep > 2)
+        StepDot(step = 3, currentStep = currentStep, label = "Details")
+    }
+}
+
+@Composable
+fun RowScope.StepDot(step: Int, currentStep: Int, label: String) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.weight(1f)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .background(
+                    color = if (step <= currentStep) Primary else Divider,
+                    shape = androidx.compose.foundation.shape.CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = step.toString(),
+                color = White,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (step <= currentStep) Primary else TextSecondary
+        )
+    }
+}
+
+@Composable
+fun RowScope.StepLine(isActive: Boolean) {
+    Divider(
+        modifier = Modifier
+            .weight(0.5f)
+            .padding(horizontal = 8.dp),
+        color = if (isActive) Primary else Divider,
+        thickness = 2.dp
+    )
+}
+
+@Composable
+fun SelectVehicleTypeStep(onVehicleTypeSelected: (VehicleType) -> Unit) {
+    val vehicleTypes = remember { VehicleTypeCatalog.getAllVehicleTypes() }
+    var showComingSoonDialog by remember { mutableStateOf(false) }
+    var selectedTypeName by remember { mutableStateOf("") }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = "Select Vehicle Type",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = TextPrimary
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Choose the type of vehicle you want to add to your fleet",
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextSecondary
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(
+                items = vehicleTypes,
+                key = { it.id }
+            ) { vehicleType ->
+                VehicleTypeCard(
+                    vehicleType = vehicleType,
+                    onClick = {
+                        if (vehicleType.isAvailable) {
+                            onVehicleTypeSelected(vehicleType)
+                        } else {
+                            selectedTypeName = vehicleType.name
+                            showComingSoonDialog = true
+                        }
+                    }
+                )
+            }
+        }
+    }
+    
+    // Coming Soon Dialog
+    if (showComingSoonDialog) {
+        AlertDialog(
+            onDismissRequest = { showComingSoonDialog = false },
+            title = { Text("Coming Soon") },
+            text = { Text("$selectedTypeName onboarding is coming soon! Currently, only Truck is available.") },
+            confirmButton = {
+                TextButton(onClick = { showComingSoonDialog = false }) {
+                    Text("OK")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+fun VehicleTypeCard(vehicleType: VehicleType, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f),
+        onClick = onClick,
+        elevation = CardDefaults.cardElevation(2.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (vehicleType.isAvailable) White else androidx.compose.ui.graphics.Color(0xFFF5F5F5)
+        )
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Text(
+                    text = vehicleType.icon,
+                    fontSize = 64.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = vehicleType.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = if (vehicleType.isAvailable) TextPrimary else TextSecondary
+                )
+                if (!vehicleType.isAvailable) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Coming Soon",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SelectCategoryStep(
+    onCategorySelected: (TruckCategory) -> Unit,
+    onBack: () -> Unit
+) {
+    // Performance: Use remember with key to cache categories
+    val categories = remember(Unit) { VehicleCatalog.getAllCategories() }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = "Select Truck Category",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = TextPrimary
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Choose the type of truck you want to add",
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextSecondary
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2), // 2 columns for larger, popped-out cards
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            items(
+                items = categories,
+                key = { it.id }
+            ) { category ->
+                CategoryCard(
+                    category = category,
+                    onClick = { onCategorySelected(category) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun CategoryCard(category: TruckCategory, onClick: () -> Unit) {
+    // Map category to representative vehicle image - PROPER MAPPING (9 categories)
+    val imageRes = when (category.id.lowercase()) {
+        "open" -> R.drawable.vehicle_open          // Open Truck
+        "container" -> R.drawable.vehicle_container // Container
+        "lcv" -> R.drawable.vehicle_lcv            // LCV
+        "mini" -> R.drawable.vehicle_mini          // Mini/Pickup
+        "trailer" -> R.drawable.vehicle_trailer    // Trailer
+        "tipper" -> R.drawable.vehicle_tipper      // Tipper
+        "tanker" -> R.drawable.vehicle_tanker      // Tanker
+        "dumper" -> R.drawable.vehicle_dumper      // Dumper
+        "bulker" -> R.drawable.vehicle_bulker      // Bulker
+        else -> R.drawable.vehicle_open
+    }
+
+    // Granular Scaling based on user request ("Increase all very little except Tanker, Mini, Open")
+    val scaleFactor = when (category.id.lowercase()) {
+        "container" -> 1.6f       // Increased
+        "lcv" -> 1.52f            // Increased
+        "bulker" -> 1.48f         // Increased (removed haulage)
+        "trailer" -> 1.35f        // Increased (was 1.25)
+        "tipper", "dumper", "others" -> 1.45f // Increased
+        "tanker" -> 1.45f         // Excluded from increase (kept same)
+        "mini" -> 1.42f           // Excluded from increase (kept same)
+        "open" -> 1.35f           // Excluded from increase (kept same)
+        else -> 1.3f              // Default
+    }
+
+    // Glassy Gradient Brush
+    val glassBrush = androidx.compose.ui.graphics.Brush.linearGradient(
+        colors = listOf(
+            Color(0xFFFFFFFF),
+            Color(0xFFF0F4F8),
+            Color(0xFFE1E8ED)
+        ),
+        start = androidx.compose.ui.geometry.Offset(0f, 0f),
+        end = androidx.compose.ui.geometry.Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
+    )
+
+    // Interaction Source for Ripple
+    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1.1f)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = androidx.compose.material.ripple.rememberRipple(
+                    bounded = true,
+                    color = Color.Blue // "Blue wave"
+                ),
+                onClick = onClick
+            ),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = 12.dp, 
+            pressedElevation = 6.dp
+        ),
+        shape = RoundedCornerShape(24.dp), 
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent), 
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFFFFF)) 
+    ) {
+        // Apply Glassy Background
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(glassBrush)
+                .padding(0.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            // Maximized Image
+            Image(
+                painter = painterResource(id = imageRes),
+                contentDescription = category.name,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .scale(scaleFactor),
+                contentScale = ContentScale.Crop
+            )
+        }
+    }
+}
+
+@Composable
+fun SelectSubtypeStep(
+    category: TruckCategory,
+    initialSelection: Map<TruckSubtype, Int>,
+    onProceed: (Map<TruckSubtype, Int>) -> Unit,
+    onBack: () -> Unit,
+    onBackPressed: ((Boolean) -> Boolean)? = null
+) {
+    val subtypes = remember(category.id) { VehicleCatalog.getSubtypesForCategory(category.id) }
+    
+    // Special handling for LCV and Mini - need intermediate selection
+    var intermediateSelection by remember { mutableStateOf<String?>(null) }
+    
+    // Local state for selections
+    var selections by remember { mutableStateOf(initialSelection) }
+    
+    val totalCount = selections.values.sum()
+    
+    // For LCV and Mini, first show type selection buttons
+    val needsIntermediateStep = category.id.lowercase() in listOf("lcv", "mini")
+    val showSubtypes = !needsIntermediateStep || intermediateSelection != null
+    
+    // Handle back button for intermediate step
+    BackHandler(enabled = showSubtypes && needsIntermediateStep && intermediateSelection != null) {
+        intermediateSelection = null
+    }
+    
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+            ) {
+                Text(
+                    text = "Select ${category.name} Type",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                if (!showSubtypes) {
+                    // Show intermediate selection for LCV or Mini
+                    Text(
+                        text = if (category.id.lowercase() == "lcv") 
+                            "Choose LCV type first" 
+                        else 
+                            "Choose vehicle type first",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    
+                    if (category.id.lowercase() == "lcv") {
+                        // LCV Open button
+                        IntermediateTypeButton(
+                            title = "LCV Open",
+                            subtitle = "14 to 24 Feet",
+                            onClick = { intermediateSelection = "open" }
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        // LCV Container button
+                        IntermediateTypeButton(
+                            title = "LCV Container",
+                            subtitle = "14 to 32 Feet SXL",
+                            onClick = { intermediateSelection = "container" }
+                        )
+                    } else if (category.id.lowercase() == "mini") {
+                        // Pickup Truck - Dost button
+                        IntermediateTypeButton(
+                            title = "Pickup Truck - Dost",
+                            subtitle = "1.5 - 2 Ton Capacity",
+                            onClick = { intermediateSelection = "dost" }
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        // Mini Truck - Tata Ace button
+                        IntermediateTypeButton(
+                            title = "Mini Truck - Tata Ace",
+                            subtitle = "0.75 - 1 Ton Capacity",
+                            onClick = { intermediateSelection = "ace" }
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "Add quantities for the trucks you have.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    
+                    // Filter subtypes based on intermediate selection
+                    val filteredSubtypes = if (needsIntermediateStep) {
+                        when {
+                            category.id.lowercase() == "lcv" && intermediateSelection == "open" ->
+                                subtypes.filter { it.id.contains("open", ignoreCase = true) }
+                            category.id.lowercase() == "lcv" && intermediateSelection == "container" ->
+                                subtypes.filter { it.id.contains("container", ignoreCase = true) }
+                            category.id.lowercase() == "mini" && intermediateSelection == "dost" ->
+                                subtypes.filter { it.id == "dost" }
+                            category.id.lowercase() == "mini" && intermediateSelection == "ace" ->
+                                subtypes.filter { it.id == "ace" }
+                            else -> subtypes
+                        }
+                    } else {
+                        subtypes
+                    }
+                    
+                    filteredSubtypes.forEach { subtype ->
+                        val count = selections[subtype] ?: 0
+                        SubtypeCounterItem(
+                            category = category,
+                            subtype = subtype,
+                            count = count,
+                            onCountChange = { newCount ->
+                                val newSelections = selections.toMutableMap()
+                                if (newCount > 0) {
+                                    newSelections[subtype] = newCount
+                                } else {
+                                    newSelections.remove(subtype)
+                                }
+                                selections = newSelections
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                }
+                // Extra space for FAB
+                Spacer(modifier = Modifier.height(80.dp))
+            }
+        }
+        
+        // Proceed Button / Bottom Bar
+        if (totalCount > 0) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth(),
+                shadowElevation = 16.dp,
+                color = White
+            ) {
+                 Column(modifier = Modifier.padding(16.dp)) {
+                     PrimaryButton(
+                         text = "Proceed ($totalCount Vehicles)",
+                         onClick = { onProceed(selections) }
+                     )
+                 }
+            }
+        } else {
+             // Show Back button if nothing selected
+             Box(
+                 modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(16.dp)
+             ) {
+                TextButton(
+                    onClick = {
+                        // If showing subtypes (intermediate selection made), go back to intermediate
+                        if (showSubtypes && needsIntermediateStep) {
+                            intermediateSelection = null
+                        } else {
+                            onBack()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        if (showSubtypes && needsIntermediateStep) 
+                            "Back to Type Selection" 
+                        else 
+                            "Back to Categories"
+                    )
+                }
+             }
+        }
+    }
+}
+
+@Composable
+fun IntermediateTypeButton(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick,
+        elevation = CardDefaults.cardElevation(4.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = White)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+            }
+            
+            Spacer(modifier = Modifier.width(16.dp))
+            
+            Icon(
+                imageVector = Icons.Default.ArrowForward,
+                contentDescription = "Select",
+                tint = Primary,
+                modifier = Modifier.size(28.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun SubtypeCounterItem(
+    category: TruckCategory,
+    subtype: TruckSubtype, 
+    count: Int, 
+    onCountChange: (Int) -> Unit
+) {
+    // Map category to detail image resource (NEW images from user)
+    val imageRes = when (category.id.lowercase()) {
+        "container" -> R.drawable.vehicle_container_detail
+        "tanker" -> R.drawable.vehicle_tanker_detail
+        "tipper" -> R.drawable.vehicle_tipper_detail
+        "bulker" -> R.drawable.vehicle_bulker_detail
+        "trailer" -> R.drawable.vehicle_trailer_detail
+        "mini" -> R.drawable.vehicle_mini_detail
+        "lcv" -> R.drawable.vehicle_lcv_detail
+        "dumper" -> R.drawable.vehicle_dumper_detail
+        "open" -> R.drawable.vehicle_open  // No new image provided for open
+        else -> null
+    }
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (count > 0) 6.dp else 2.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (count > 0) Color(0xFFF0F7FF) else White // Highlight if selected
+        ),
+        border = if (count > 0) androidx.compose.foundation.BorderStroke(1.dp, Primary) else null
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Vehicle Image with category-specific sizing and positioning
+            if (imageRes != null) {
+                val imageSize = when (category.id.lowercase()) {
+                    "lcv" -> 80.dp        // LCV size is perfect
+                    else -> 110.dp        // Standard size for all others to keep card size consistent
+                }
+                
+                // Zoom in images without increasing card size
+                val contentScaleFactor = when (category.id.lowercase()) {
+                    "container" -> 1.7f   // Needs a lot
+                    "mini" -> 1.5f        // Zoom in
+                    "open" -> 1.5f        // Zoom in
+                    "trailer" -> 1.3f     // Moderate zoom
+                    "dumper" -> 1.3f      // Moderate zoom
+                    else -> 1.0f
+                }
+                
+                val imagePadding = when (category.id.lowercase()) {
+                    "lcv" -> 4.dp
+                    "container" -> 0.dp   
+                    "mini", "open" -> 0.dp  
+                    "trailer", "dumper" -> 1.dp
+                    else -> 2.dp
+                }
+                
+                // LCV needs vertical offset (shift down)
+                val verticalOffset = when (category.id.lowercase()) {
+                    "lcv" -> 18.dp  // Shift down MORE
+                    else -> 0.dp
+                }
+                
+                Surface(
+                    modifier = Modifier
+                        .size(imageSize)
+                        .offset(y = verticalOffset),
+                    shape = RoundedCornerShape(12.dp),
+                    color = Surface,
+                    shadowElevation = 0.dp
+                ) {
+                    Image(
+                        painter = painterResource(id = imageRes),
+                        contentDescription = subtype.name,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(imagePadding)
+                            .scale(contentScaleFactor),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.width(16.dp))
+            
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = subtype.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "${subtype.capacityTons} Ton",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+            }
+            
+            // Interaction Source for Fast Ripple
+            val interactionSourcePlus = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+            val interactionSourceMinus = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+
+            // Quantity Controls
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .background(Color(0xFFEEEEEE), RoundedCornerShape(24.dp))
+                    .padding(4.dp)
+            ) {
+               // Minus
+                if (count > 0) {
+                   Box(
+                       modifier = Modifier
+                           .size(32.dp)
+                           .clip(androidx.compose.foundation.shape.CircleShape)
+                           .background(White)
+                           .clickable(
+                               interactionSource = interactionSourceMinus,
+                               indication = androidx.compose.material.ripple.rememberRipple(color = Color.Blue, bounded = true), // Fast Blue Ripple
+                               onClick = { onCountChange(count - 1) }
+                           ),
+                       contentAlignment = Alignment.Center
+                   ) {
+                       Text("-", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                   }
+                }
+                
+                if (count > 0) {
+                    Text(
+                        text = "$count",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+                }
+                
+                // Plus
+                Box(
+                   modifier = Modifier
+                       .size(32.dp)
+                       .clip(androidx.compose.foundation.shape.CircleShape)
+                       .background(Primary)
+                       .clickable(
+                           interactionSource = interactionSourcePlus,
+                           indication = androidx.compose.material.ripple.rememberRipple(color = Color.Blue, bounded = true), // Fast Blue Ripple
+                           onClick = { onCountChange(count + 1) }
+                       ),
+                   contentAlignment = Alignment.Center
+               ) {
+                   Text("+", color = White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+               }
+            }
+        }
+    }
+}
+
+@Composable
+fun EnterDetailsStep(
+    category: TruckCategory,
+    selectedSubtypes: Map<TruckSubtype, Int>,
+    onBack: () -> Unit,
+    onAllVehiclesAdded: () -> Unit
+) {
+    // Flatten selection map to a list of subtypes (e.g., [19ft, 19ft, 20ft])
+    val vehiclesToDo = remember(selectedSubtypes) {
+        val list = mutableListOf<TruckSubtype>()
+        selectedSubtypes.forEach { (subtype, count) ->
+            repeat(count) { list.add(subtype) }
+        }
+        list
+    }
+    
+    // Track current index in the list
+    var currentIndex by remember { mutableStateOf(0) }
+    
+    // Store collected details: Map<Index, VehicleData>
+    // Just minimal data needed: Number, Model, Year
+    data class PartialVehicleData(val number: String, val model: String, val year: String)
+    val collectedData = remember { mutableStateMapOf<Int, PartialVehicleData>() }
+    
+    val currentSubtype = vehiclesToDo.getOrNull(currentIndex)
+    
+    if (currentSubtype == null) {
+        // Should not happen if map was not empty
+        onBack()
+        return
+    }
+    
+    // Form State for CURRENT vehicle
+    // Initialize with existing data if we are going back/forth (optional, currently resetting on next)
+    // To persist data when going 'Back' within step 3, we would read from collectedData.
+    var vehicleNumber by remember(currentIndex) { mutableStateOf(collectedData[currentIndex]?.number ?: "") }
+    var model by remember(currentIndex) { mutableStateOf(collectedData[currentIndex]?.model ?: "") }
+    var year by remember(currentIndex) { mutableStateOf(collectedData[currentIndex]?.year ?: "") }
+    var errorMessage by remember(currentIndex) { mutableStateOf("") }
+    
+    var isSubmitting by remember { mutableStateOf(false) }
+    
+    val scope = rememberCoroutineScope()
+    val repository = remember { MockDataRepository() }
+    
+    // Progress Label
+    val totalVehicles = vehiclesToDo.size
+    val currentNumber = currentIndex + 1
+    
+    BackHandler {
+        if (currentIndex > 0) {
+            currentIndex -= 1
+        } else {
+            onBack()
+        }
+    }
+    
+    Column(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "Vehicle Details ($currentNumber of $totalVehicles)",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "${category.name} - ${currentSubtype.name}",
+                style = MaterialTheme.typography.bodyLarge,
+                color = TextSecondary
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            
+            PrimaryTextField(
+                value = vehicleNumber,
+                onValueChange = {
+                    vehicleNumber = it.uppercase()
+                    errorMessage = ""
+                },
+                label = "Vehicle Number *",
+                placeholder = "GJ-01-AB-1234",
+                isError = errorMessage.isNotEmpty(),
+                errorMessage = errorMessage
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            PrimaryTextField(
+                value = model,
+                onValueChange = { model = it },
+                label = "Model (Optional)",
+                placeholder = "Tata, Mahindra, Ashok Leyland, etc."
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            PrimaryTextField(
+                value = year,
+                onValueChange = { if (it.length <= 4) year = it },
+                label = "Year (Optional)",
+                placeholder = "2023",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
+        }
+        
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            val isLast = currentNumber == totalVehicles
+            val buttonText = if (isLast) "Submit All Vehicles" else "Next Vehicle"
+            
+            PrimaryButton(
+                text = buttonText,
+                onClick = {
+                    when {
+                        vehicleNumber.isEmpty() -> errorMessage = "Please enter vehicle number"
+                        !vehicleNumber.matches(Regex("[A-Z]{2}-\\d{2}-[A-Z]{2}-\\d{4}")) -> 
+                            errorMessage = "Invalid format. Use: GJ-01-AB-1234"
+                        else -> {
+                            // Save current data
+                            collectedData[currentIndex] = PartialVehicleData(vehicleNumber, model, year)
+                            
+                            if (isLast) {
+                                // Submit EVERYTHING
+                                isSubmitting = true
+                                scope.launch {
+                                    // Iterate and save all
+                                    collectedData.forEach { (index, data) ->
+                                        val subtype = vehiclesToDo[index]
+                                        val vehicle = Vehicle(
+                                            id = "v_${System.currentTimeMillis()}_$index",
+                                            transporterId = "t1",
+                                            category = category,
+                                            subtype = subtype,
+                                            vehicleNumber = data.number,
+                                            model = data.model.takeIf { it.isNotEmpty() },
+                                            year = data.year.toIntOrNull(),
+                                            status = VehicleStatus.AVAILABLE
+                                        )
+                                        repository.addVehicle(vehicle)
+                                    }
+                                    onAllVehiclesAdded()
+                                }
+                            } else {
+                                // Go to next
+                                currentIndex += 1
+                            }
+                        }
+                    }
+                },
+                isLoading = isSubmitting,
+                enabled = !isSubmitting
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+    }
+}

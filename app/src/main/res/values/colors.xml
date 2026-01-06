@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Primary Colors (Orange - Transporter) -->
+    <color name="primary">#FF6B35</color>
+    <color name="primaryDark">#E85D2F</color>
+    <color name="primaryLight">#FFE5DC</color>
+    
+    <!-- Secondary Colors (Blue - Driver) -->
+    <color name="secondary">#2196F3</color>
+    <color name="secondaryDark">#1976D2</color>
+    <color name="secondaryLight">#E3F2FD</color>
+    
+    <!-- Status Colors -->
+    <color name="success">#4CAF50</color>
+    <color name="warning">#FFC107</color>
+    <color name="error">#F44336</color>
+    <color name="info">#2196F3</color>
+    
+    <!-- Neutral Colors -->
+    <color name="textPrimary">#212121</color>
+    <color name="textSecondary">#757575</color>
+    <color name="textDisabled">#BDBDBD</color>
+    <color name="background">#FFFFFF</color>
+    <color name="surface">#F5F5F5</color>
+    <color name="divider">#E0E0E0</color>
+    
+    <!-- Material Design Colors -->
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+</resources>

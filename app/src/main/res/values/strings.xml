@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Weelo Logistics</string>
+    <string name="app_tagline">Drive. Deliver. Manage.</string>
+    
+    <!-- Welcome & Onboarding -->
+    <string name="welcome_title">Welcome to Weelo</string>
+    <string name="onboarding_title_1">Manage Your Fleet</string>
+    <string name="onboarding_desc_1">Add vehicles, assign drivers, and track deliveries in real-time</string>
+    <string name="onboarding_title_2">Accept Trips Instantly</string>
+    <string name="onboarding_desc_2">Get trip requests, navigate easily, and earn more</string>
+    <string name="onboarding_title_3">One App, All Roles</string>
+    <string name="onboarding_desc_3">Be a transporter, driver, or both - switch anytime</string>
+    <string name="skip">Skip</string>
+    <string name="next">Next</string>
+    <string name="get_started">Get Started</string>
+    
+    <!-- Authentication -->
+    <string name="login">Login</string>
+    <string name="signup">Sign Up</string>
+    <string name="mobile_number">Mobile Number</string>
+    <string name="password">Password</string>
+    <string name="forgot_password">Forgot Password?</string>
+    <string name="dont_have_account">Don\'t have an account?</string>
+    <string name="already_have_account">Already have an account?</string>
+    <string name="enter_mobile">Enter your mobile number</string>
+    <string name="enter_password">Enter your password</string>
+    
+    <!-- Role Selection -->
+    <string name="select_role">What describes you best?</string>
+    <string name="role_transporter">Transporter</string>
+    <string name="role_transporter_desc">I own/manage fleet</string>
+    <string name="role_driver">Driver</string>
+    <string name="role_driver_desc">I drive vehicles</string>
+    <string name="role_both">Both</string>
+    <string name="role_both_desc">I own and drive</string>
+    <string name="continue_text">Continue</string>
+    
+    <!-- Navigation -->
+    <string name="home">Home</string>
+    <string name="fleet">Fleet</string>
+    <string name="drivers">Drivers</string>
+    <string name="trips">Trips</string>
+    <string name="profile">Profile</string>
+    <string name="more">More</string>
+    
+    <!-- Dashboard -->
+    <string name="dashboard">Dashboard</string>
+    <string name="total_vehicles">Total Vehicles</string>
+    <string name="active_drivers">Active Drivers</string>
+    <string name="active_trips">Active Trips</string>
+    <string name="today_revenue">Today\'s Revenue</string>
+    <string name="availability">Availability</string>
+    <string name="today_trips">Today\'s Trips</string>
+    <string name="today_earnings">Today\'s Earnings</string>
+    <string name="today_distance">Today\'s Distance</string>
+    
+    <!-- Actions -->
+    <string name="add_vehicle">Add Vehicle</string>
+    <string name="add_driver">Add Driver</string>
+    <string name="new_trip">New Trip</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="delete">Delete</string>
+    <string name="edit">Edit</string>
+    <string name="view_details">View Details</string>
+    
+    <!-- Status -->
+    <string name="available">Available</string>
+    <string name="in_progress">In Progress</string>
+    <string name="completed">Completed</string>
+    <string name="cancelled">Cancelled</string>
+    <string name="pending">Pending</string>
+    
+    <!-- Common -->
+    <string name="search">Search</string>
+    <string name="filter">Filter</string>
+    <string name="sort">Sort</string>
+    <string name="loading">Loading...</string>
+    <string name="error">Error</string>
+    <string name="success">Success</string>
+    <string name="no_data">No data available</string>
+    
+    <!-- Settings -->
+    <string name="settings">Settings</string>
+    <string name="notifications">Notifications</string>
+    <string name="language">Language</string>
+    <string name="help_support">Help &amp; Support</string>
+    <string name="logout">Logout</string>
+    <string name="switch_role">Switch Role</string>
+    
+    <!-- Vehicle Types -->
+    <string name="select_vehicle_type">Select Vehicle Type</string>
+    <string name="vehicle_number">Vehicle Number</string>
+    <string name="vehicle_capacity">Capacity</string>
+    
+    <!-- Trip -->
+    <string name="pickup_location">Pickup Location</string>
+    <string name="drop_location">Drop Location</string>
+    <string name="start_trip">Start Trip</string>
+    <string name="complete_trip">Complete Trip</string>
+    <string name="accept">Accept</string>
+    <string name="reject">Reject</string>
+</resources>
