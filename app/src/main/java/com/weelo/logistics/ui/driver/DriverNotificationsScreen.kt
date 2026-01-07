@@ -24,7 +24,7 @@ import java.util.*
  * Shows all notifications with actions
  */
 @Composable
-fun DriverNotificationsScreen(
+fun DriverNotificationsScreen(@Suppress("UNUSED_PARAMETER") 
     driverId: String,
     onNavigateBack: () -> Unit,
     onNavigateToTrip: (String) -> Unit

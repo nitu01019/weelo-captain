@@ -20,7 +20,7 @@ import com.weelo.logistics.ui.theme.*
  * Detailed earnings breakdown with trip-wise history
  */
 @Composable
-fun DriverEarningsScreen(
+fun DriverEarningsScreen(@Suppress("UNUSED_PARAMETER") 
     driverId: String,
     onNavigateBack: () -> Unit
 ) {

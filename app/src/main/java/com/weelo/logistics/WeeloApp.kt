@@ -1,10 +1,13 @@
 package com.weelo.logistics
 
 import android.app.Application
+// import dagger.hilt.android.HiltAndroidApp
 
 /**
- * Application class for Weelo Logistics
+ * Weelo Application Class
+ * Entry point for the application
  */
+// @HiltAndroidApp
 class WeeloApp : Application() {
     
     override fun onCreate() {

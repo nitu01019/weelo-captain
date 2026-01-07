@@ -53,7 +53,8 @@ fun DriverTripNotificationScreen(
 ) {
     val scope = rememberCoroutineScope()
     val repository = remember { MockDataRepository() }
-    var notifications by remember { mutableStateOf<List<DriverNotification>>(emptyList()) }
+    // TODO: Connect to real repository from backend
+    var notifications by remember { mutableStateOf<List<DriverTripNotification>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var hasNewNotification by remember { mutableStateOf(false) }
     
@@ -205,7 +206,7 @@ fun DriverTripNotificationScreen(
  */
 @Composable
 fun TripNotificationCard(
-    notification: DriverNotification,
+    notification: DriverTripNotification,
     onClick: () -> Unit
 ) {
     val isPending = notification.status == NotificationStatus.PENDING_RESPONSE

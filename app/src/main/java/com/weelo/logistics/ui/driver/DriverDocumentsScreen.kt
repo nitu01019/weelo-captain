@@ -20,7 +20,7 @@ import com.weelo.logistics.ui.theme.*
  * Upload and manage driver documents
  */
 @Composable
-fun DriverDocumentsScreen(
+fun DriverDocumentsScreen(@Suppress("UNUSED_PARAMETER") 
     driverId: String,
     onNavigateBack: () -> Unit
 ) {
@@ -123,11 +123,12 @@ fun DocumentCard(
     title: String,
     subtitle: String,
     status: String,
-    statusColor: androidx.compose.ui.graphics.Color,
+    @Suppress("UNUSED_PARAMETER") statusColor: androidx.compose.ui.graphics.Color,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     onView: (() -> Unit)?,
     onUpload: () -> Unit
 ) {
+    // statusColor will be used for status badge when document status UI is enhanced
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Row(

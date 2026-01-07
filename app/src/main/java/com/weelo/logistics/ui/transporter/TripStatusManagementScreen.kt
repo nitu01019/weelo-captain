@@ -49,6 +49,7 @@ fun TripStatusManagementScreen(
 ) {
     val scope = rememberCoroutineScope()
     val repository = remember { MockDataRepository() }
+    // TODO: Connect to real repository from backend
     
     var assignment by remember { mutableStateOf<TripAssignment?>(null) }
     var broadcast by remember { mutableStateOf<BroadcastTrip?>(null) }

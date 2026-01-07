@@ -226,7 +226,9 @@ class MockDataRepository {
         }
     }
     
-    suspend fun signup(name: String, mobileNumber: String, password: String, role: UserRole): Result<User> {
+    suspend fun signup(name: String, mobileNumber: String, @Suppress("UNUSED_PARAMETER") password: String, role: UserRole): Result<User> {
+        // Password validation will be implemented when backend integration is complete
+        // Currently using mock authentication
         
         val user = User(
             id = "u_${System.currentTimeMillis()}",
@@ -242,7 +244,9 @@ class MockDataRepository {
     
     // ============ Transporter Dashboard ============
     
-    suspend fun getTransporterDashboard(transporterId: String): Result<TransporterDashboard> {
+    suspend fun getTransporterDashboard(@Suppress("UNUSED_PARAMETER") transporterId: String): Result<TransporterDashboard> {
+        // TransporterId will be used for filtering when backend integration is complete
+        // Currently returning mock data for all transporters
         
         val activeVehicles = mockVehicles.count { it.status == VehicleStatus.AVAILABLE || it.status == VehicleStatus.IN_TRANSIT }
         val activeDrivers = mockDrivers.count { it.status == DriverStatus.ACTIVE || it.status == DriverStatus.ON_TRIP }
@@ -368,11 +372,13 @@ class MockDataRepository {
         return Result.failure(Exception("Trip not found"))
     }
     
-    suspend fun acceptTrip(tripId: String, driverId: String): Result<Trip> {
+    suspend fun acceptTrip(tripId: String, @Suppress("UNUSED_PARAMETER") driverId: String): Result<Trip> {
+        // DriverId will be used for assigning trip when backend integration is complete
         return updateTripStatus(tripId, TripStatus.ACCEPTED)
     }
     
-    suspend fun rejectTrip(tripId: String, driverId: String): Result<Trip> {
+    suspend fun rejectTrip(tripId: String, @Suppress("UNUSED_PARAMETER") driverId: String): Result<Trip> {
+        // DriverId will be used for logging rejection reason when backend integration is complete
         return updateTripStatus(tripId, TripStatus.REJECTED)
     }
     
@@ -550,10 +556,10 @@ class MockDataRepository {
      * Get driver notifications
      * BACKEND: Fetch via FCM or API
      */
-    suspend fun getMockDriverNotifications(driverId: String): List<DriverNotification> {
+    suspend fun getMockDriverNotifications(driverId: String): List<DriverTripNotification> {
         delay(300)
         return listOf(
-            DriverNotification(
+            DriverTripNotification(
                 notificationId = "n1",
                 assignmentId = "a1",
                 driverId = driverId,
@@ -567,7 +573,7 @@ class MockDataRepository {
                 status = NotificationStatus.PENDING_RESPONSE,
                 expiryTime = System.currentTimeMillis() + 300000 // Expires in 5 min
             ),
-            DriverNotification(
+            DriverTripNotification(
                 notificationId = "n2",
                 assignmentId = "a2",
                 driverId = driverId,
@@ -580,7 +586,7 @@ class MockDataRepository {
                 receivedAt = System.currentTimeMillis() - 600000, // 10 min ago
                 status = NotificationStatus.PENDING_RESPONSE
             ),
-            DriverNotification(
+            DriverTripNotification(
                 notificationId = "n3",
                 assignmentId = "a3",
                 driverId = driverId,
@@ -600,7 +606,7 @@ class MockDataRepository {
     /**
      * Get notification by ID
      */
-    suspend fun getMockNotificationById(notificationId: String): DriverNotification? {
+    suspend fun getMockNotificationById(notificationId: String): DriverTripNotification? {
         delay(200)
         return getMockDriverNotifications("d1").find { it.notificationId == notificationId }
     }

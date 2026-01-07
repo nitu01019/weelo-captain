@@ -98,7 +98,7 @@ data class DriverTruckAssignment(
  * 
  * BACKEND: Send this as push notification when transporter assigns a trip
  */
-data class DriverNotification(
+data class DriverTripNotification(
     val notificationId: String,
     val assignmentId: String,                   // Link to trip assignment
     val driverId: String,                       // Which driver to notify

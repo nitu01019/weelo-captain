@@ -56,6 +56,7 @@ fun LiveTrackingScreen(
 ) {
     val scope = rememberCoroutineScope()
     val repository = remember { MockDataRepository() }
+    // TODO: Connect to real repository from backend
     
     var trackingData by remember { mutableStateOf<LiveTripTracking?>(null) }
     var tripDetails by remember { mutableStateOf<Trip?>(null) }
@@ -127,7 +128,8 @@ fun LiveTrackingScreen(
                     }
                     
                     // Location indicator (for demo)
-                    trackingData?.let { tracking ->
+                    trackingData?.let { _ ->
+                        // Tracking data will be used when real-time location updates are implemented
                         Surface(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)

@@ -1,5 +1,6 @@
 package com.weelo.logistics.ui.transporter
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -10,6 +11,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.model.Vehicle
@@ -17,6 +21,8 @@ import com.weelo.logistics.data.model.VehicleStatus
 import com.weelo.logistics.data.repository.MockDataRepository
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.utils.SearchDebouncer
+import com.weelo.logistics.utils.DataSanitizer
 import kotlinx.coroutines.launch
 
 /**
@@ -34,22 +40,34 @@ fun FleetListScreen(
     var vehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var debouncedSearchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("All") }
     
+    val searchDebouncer = remember {
+        SearchDebouncer<String>(500L, scope) { query ->
+            debouncedSearchQuery = query
+        }
+    }
+    
+    // TODO: BACKEND INTEGRATION REQUIRED
+    // This screen will remain empty until backend API is connected
+    // Replace with: VehicleApiService.getVehicles(transporterId)
+    // Mock data has been removed - only real data from database will be shown
     LaunchedEffect(Unit) {
         scope.launch {
-            val result = repository.getVehicles("t1")
-            result.onSuccess { vehicleList ->
-                vehicles = vehicleList
-                isLoading = false
-            }
+            isLoading = true
+            // TODO: Call actual backend API here
+            // val result = vehicleApiService.getVehicles(transporterId)
+            // For now, vehicles list remains empty until backend is connected
+            vehicles = emptyList()  // No mock data - backend only
+            isLoading = false
         }
     }
     
     // Filter vehicles
     val filteredVehicles = vehicles.filter { vehicle ->
-        val matchesSearch = vehicle.vehicleNumber.contains(searchQuery, ignoreCase = true) ||
-                vehicle.displayName.contains(searchQuery, ignoreCase = true)
+        val matchesSearch = vehicle.vehicleNumber.contains(debouncedSearchQuery, ignoreCase = true) ||
+                vehicle.displayName.contains(debouncedSearchQuery, ignoreCase = true)
         val matchesFilter = when (selectedFilter) {
             "Available" -> vehicle.status == VehicleStatus.AVAILABLE
             "In Transit" -> vehicle.status == VehicleStatus.IN_TRANSIT
@@ -85,7 +103,10 @@ fun FleetListScreen(
             ) {
                 SearchTextField(
                     value = searchQuery,
-                    onValueChange = { searchQuery = it },
+                    onValueChange = { 
+                        searchQuery = it.trim()
+                        searchDebouncer.search(it.trim())
+                    },
                     placeholder = "Search by vehicle number or type",
                     leadingIcon = Icons.Default.Search
                 )
@@ -210,16 +231,28 @@ fun VehicleListCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Vehicle Icon
-            Box(
+            // Vehicle Icon - Use proper drawable image
+            vehicle.category.imageResId?.let { imageRes ->
+                Image(
+                    painter = painterResource(id = imageRes),
+                    contentDescription = vehicle.category.name,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(Surface),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                )
+            } ?: Box(
                 modifier = Modifier
                     .size(56.dp)
                     .background(Surface, androidx.compose.foundation.shape.CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = vehicle.category.icon,
-                    style = MaterialTheme.typography.headlineMedium
+                Icon(
+                    imageVector = Icons.Default.LocalShipping,
+                    contentDescription = vehicle.category.name,
+                    modifier = Modifier.size(32.dp),
+                    tint = Primary
                 )
             }
             

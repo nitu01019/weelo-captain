@@ -1,74 +1,38 @@
-# Weelo Logistics - Unified App
+# Weelo Captain - Logistics Management App
 
-**Version:** 2.0  
-**Platform:** Android (Kotlin)  
-**Architecture:** MVVM + Jetpack Compose  
-**Package:** `com.weelo.logistics`
+## Quick Start
 
-## 🎯 Overview
+### For Backend Developer
+Start here: **BACKEND_INTEGRATION_GUIDE_FOR_DEVELOPER.md**
 
-Single unified app for Transporters and Drivers with role-based access and seamless role switching.
+### Key Documentation
+1. **DRIVER_AUTH_BACKEND_READY.md** - Driver authentication implementation
+2. **SECURITY_HARDENING_COMPLETE.md** - Security features and OWASP compliance
+3. **API_SPECIFICATION.md** - Complete API documentation (see API_*.md files)
 
-## 🏗️ Architecture
-
-- **UI Layer:** Jetpack Compose
-- **Architecture Pattern:** MVVM (Model-View-ViewModel)
-- **Navigation:** Jetpack Navigation Component
-- **Dependency Injection:** Hilt
-- **Data:** Room Database + Mock Repositories
-
-## 📁 Project Structure
-
-```
-app/
-├── data/               # Data models, repositories
-├── domain/             # Business logic (optional)
-├── ui/                 # All UI components
-│   ├── theme/          # Theme, colors, typography
-│   ├── components/     # Reusable components
-│   ├── auth/           # Login, signup, onboarding
-│   ├── transporter/    # Transporter screens
-│   ├── driver/         # Driver screens
-│   └── shared/         # Shared screens
-└── utils/              # Helper classes
+### Build the App
+```bash
+./gradlew assembleDebug
 ```
 
-## 🚀 Features
+APK Location: `app/build/outputs/apk/debug/app-debug.apk`
 
-### Transporter Role
-- Fleet Management
-- Driver Management
-- Trip Assignment
-- Live Tracking
-- Reports & Analytics
+### Testing
+- Temporary OTP: **123456**
+- Test phone: Any 10-digit number (9876543210)
 
-### Driver Role
-- Trip Management
-- GPS Tracking
-- Earnings Tracking
-- Navigation
+## Project Structure
+- `/app/src/main/java/com/weelo/logistics/` - Source code
+- `/app/src/main/res/` - Resources (layouts, drawables, strings)
+- `build.gradle.kts` - Build configuration
 
-### Dual Role
-- Role Switching
-- Combined Dashboard
-- Unified Profile
+## Features Implemented
+✅ Phone-based authentication (OTP)
+✅ Driver & Transporter roles
+✅ Dark futuristic UI
+✅ Security hardening (OWASP compliant)
+✅ Input validation & rate limiting
+✅ Backend-ready architecture
 
-## 🎨 Design System
-
-- **Primary Color:** #FF6B35 (Orange)
-- **Secondary Color:** #2196F3 (Blue)
-- **Typography:** System Default (Roboto)
-- **Components:** Material Design 3
-
-## 📦 Dependencies
-
-See `build.gradle` files for complete dependency list.
-
-## 🧪 Testing
-
-Mock data repositories included for UI testing without backend.
-
----
-
-**Created:** January 2026  
-**Last Updated:** January 2026
+## Support
+See backend documentation files for detailed implementation guides.

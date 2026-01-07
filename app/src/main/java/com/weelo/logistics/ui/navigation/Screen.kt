@@ -11,6 +11,7 @@ sealed class Screen(val route: String) {
     object Login : Screen("login")
     object Signup : Screen("signup")
     object RoleSelection : Screen("role_selection")
+    // Language selection removed - app is English only
     
     // Transporter Screens
     object TransporterDashboard : Screen("transporter_dashboard")

@@ -24,7 +24,7 @@ import kotlinx.coroutines.launch
  * Edit personal information and upload photo
  */
 @Composable
-fun DriverProfileEditScreen(
+fun DriverProfileEditScreen(@Suppress("UNUSED_PARAMETER") 
     driverId: String,
     onNavigateBack: () -> Unit,
     onSaved: () -> Unit
@@ -61,7 +61,12 @@ fun DriverProfileEditScreen(
                             .background(Surface, androidx.compose.foundation.shape.CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("👤", style = MaterialTheme.typography.displayLarge)
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = "Profile",
+                            modifier = Modifier.size(80.dp),
+                            tint = Primary
+                        )
                     }
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = { /* TODO: Upload photo */ }) {
@@ -98,7 +103,7 @@ fun DriverProfileEditScreen(
             
             PrimaryTextField(
                 value = email,
-                onValueChange = { email = it },
+                onValueChange = { email = it.trim() },
                 label = "Email (Optional)",
                 placeholder = "your@email.com",
                 leadingIcon = Icons.Default.Email,
@@ -124,7 +129,7 @@ fun DriverProfileEditScreen(
             
             PrimaryTextField(
                 value = address,
-                onValueChange = { address = it },
+                onValueChange = { address = it.trim() },
                 label = "Address",
                 placeholder = "Enter full address",
                 leadingIcon = Icons.Default.Home,

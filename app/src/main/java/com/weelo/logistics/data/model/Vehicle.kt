@@ -1,5 +1,7 @@
 package com.weelo.logistics.data.model
 
+import com.weelo.logistics.R
+
 /**
  * Vehicle model - PRD-06 Compliant
  * Supports complex categories with subtypes
@@ -45,7 +47,8 @@ enum class VehicleStatus {
 data class TruckCategory(
     val id: String,
     val name: String,
-    val icon: String,
+    val icon: String,  // Kept for backward compatibility, but use imageResId for proper images
+    val imageResId: Int? = null,  // Drawable resource ID for vehicle image
     val description: String
 )
 
@@ -70,6 +73,7 @@ object VehicleCatalog {
         id = "open",
         name = "Open Truck",
         icon = "🚛",
+        imageResId = R.drawable.vehicle_open,
         description = "Open body trucks for general cargo"
     )
     
@@ -93,6 +97,7 @@ object VehicleCatalog {
         id = "container",
         name = "Container",
         icon = "📦",
+        imageResId = R.drawable.vehicle_container,
         description = "Container trucks for enclosed cargo"
     )
     
@@ -111,6 +116,7 @@ object VehicleCatalog {
         id = "lcv",
         name = "LCV",
         icon = "🚐",
+        imageResId = R.drawable.vehicle_lcv,
         description = "Light Commercial Vehicles"
     )
     
@@ -137,6 +143,7 @@ object VehicleCatalog {
         id = "mini",
         name = "Mini/Pickup",
         icon = "🛻",
+        imageResId = R.drawable.vehicle_mini,
         description = "Small pickup trucks"
     )
     
@@ -150,6 +157,7 @@ object VehicleCatalog {
         id = "trailer",
         name = "Trailer",
         icon = "🚛",
+        imageResId = R.drawable.vehicle_trailer,
         description = "Heavy trailer trucks"
     )
     
@@ -171,6 +179,7 @@ object VehicleCatalog {
         id = "tipper",
         name = "Tipper",
         icon = "🚜",
+        imageResId = R.drawable.vehicle_tipper,
         description = "Tipping trucks for loose material"
     )
     
@@ -191,6 +200,7 @@ object VehicleCatalog {
         id = "tanker",
         name = "Tanker",
         icon = "🛢️",
+        imageResId = R.drawable.vehicle_tanker,
         description = "Liquid transport tankers"
     )
     
@@ -210,6 +220,7 @@ object VehicleCatalog {
         id = "dumper",
         name = "Dumper",
         icon = "🚛",
+        imageResId = R.drawable.vehicle_dumper,
         description = "Dumper trucks for construction material"
     )
     
@@ -229,6 +240,7 @@ object VehicleCatalog {
         id = "bulker",
         name = "Bulker",
         icon = "🚛",
+        imageResId = R.drawable.vehicle_bulker,
         description = "Bulk carriers for cement/ash"
     )
 

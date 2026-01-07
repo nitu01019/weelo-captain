@@ -1,7 +1,22 @@
 package com.weelo.logistics.data.model
 
 /**
- * Driver model - Simplified driver information for transporter's view
+ * Driver Data Model
+ * 
+ * Represents a driver in the system with simplified information for transporter's view.
+ * 
+ * @property id Unique driver identifier
+ * @property name Driver's full name
+ * @property mobileNumber Driver's phone number (10 digits)
+ * @property licenseNumber Driver's license number (validated)
+ * @property transporterId ID of the transporter this driver is registered with
+ * @property assignedVehicleId ID of vehicle currently assigned (null if unassigned)
+ * @property isAvailable Availability status for accepting trips
+ * @property rating Average driver rating from completed trips (0-5 scale)
+ * @property totalTrips Total number of trips completed
+ * @property profileImageUrl Optional URL to driver's profile picture
+ * @property status Current driver account status
+ * @property createdAt Account creation timestamp (milliseconds since epoch)
  */
 data class Driver(
     val id: String,
@@ -19,17 +34,36 @@ data class Driver(
 )
 
 /**
- * Driver Status
+ * Driver Status Enum
+ * 
+ * Defines the current status of a driver's account.
  */
 enum class DriverStatus {
-    ACTIVE,         // Active and can take trips
-    ON_TRIP,        // Currently on a trip
-    INACTIVE,       // Not available
-    SUSPENDED       // Account suspended
+    /** Active and available to take trips */
+    ACTIVE,
+    
+    /** Currently on an active trip */
+    ON_TRIP,
+    
+    /** Not available for trips (offline) */
+    INACTIVE,
+    
+    /** Account suspended by admin */
+    SUSPENDED
 }
 
 /**
- * Driver Earnings
+ * Driver Earnings Data Model
+ * 
+ * Tracks driver's earnings across different time periods.
+ * 
+ * @property driverId Driver's unique identifier
+ * @property todayEarnings Total earnings for today (in rupees)
+ * @property weekEarnings Total earnings for current week
+ * @property monthEarnings Total earnings for current month
+ * @property totalEarnings Total lifetime earnings
+ * @property todayTrips Number of trips completed today
+ * @property totalTrips Total number of trips completed (all time)
  */
 data class DriverEarnings(
     val driverId: String,
@@ -42,7 +76,18 @@ data class DriverEarnings(
 )
 
 /**
- * Driver Performance
+ * Driver Performance Metrics
+ * 
+ * Comprehensive performance analytics for a driver.
+ * 
+ * @property driverId Driver's unique identifier
+ * @property rating Average customer rating (0-5 scale)
+ * @property totalTrips Total number of trips assigned
+ * @property completedTrips Number of successfully completed trips
+ * @property cancelledTrips Number of cancelled trips
+ * @property avgTripTime Average trip completion time (in minutes)
+ * @property totalDistance Total distance covered across all trips (in kilometers)
+ * @property onTimeDeliveryRate Percentage of on-time deliveries (0-100)
  */
 data class DriverPerformance(
     val driverId: String,
@@ -50,7 +95,7 @@ data class DriverPerformance(
     val totalTrips: Int,
     val completedTrips: Int,
     val cancelledTrips: Int,
-    val avgTripTime: Long, // in minutes
-    val totalDistance: Double, // in km
-    val onTimeDeliveryRate: Float // percentage
+    val avgTripTime: Long,
+    val totalDistance: Double,
+    val onTimeDeliveryRate: Float
 )

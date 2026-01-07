@@ -29,6 +29,7 @@ fun DriverTripNavigationScreen(
 ) {
     val scope = rememberCoroutineScope()
     val repository = remember { MockDataRepository() }
+    // TODO: Connect to real repository from backend
     var trip by remember { mutableStateOf<Trip?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var showCompleteDialog by remember { mutableStateOf(false) }

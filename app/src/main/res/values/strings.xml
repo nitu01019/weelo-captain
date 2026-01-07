@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Weelo Logistics</string>
+    <string name="hello_weelo_captains">Hello Weelo Captains</string>
+    <string name="select_app_language">Select App Language</string>
+    <string name="confirm">Confirm</string>
+    <string name="welcome">Welcome</string>
     <string name="app_tagline">Drive. Deliver. Manage.</string>
     
     <!-- Welcome & Onboarding -->
@@ -101,4 +105,12 @@
     <string name="complete_trip">Complete Trip</string>
     <string name="accept">Accept</string>
     <string name="reject">Reject</string>
+    
+    <!-- Driver Dashboard -->
+    <string name="hello_driver">Hello Driver!</string>
+    <string name="offline">OFFLINE</string>
+    <string name="today_summary">Today\'s Summary</string>
+    <string name="distance">Distance</string>
+    <string name="earnings">Earnings</string>
+    <string name="retry">Retry</string>
 </resources>

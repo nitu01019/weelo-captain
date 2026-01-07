@@ -33,6 +33,7 @@ fun DriverTripHistoryScreen(
 ) {
     val scope = rememberCoroutineScope()
     val repository = remember { MockDataRepository() }
+    // TODO: Connect to real repository from backend
     var trips by remember { mutableStateOf<List<Trip>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var selectedFilter by remember { mutableStateOf("All") }
@@ -74,7 +75,7 @@ fun DriverTripHistoryScreen(
         Column(Modifier.fillMaxWidth().background(White).padding(16.dp)) {
             SearchTextField(
                 value = searchQuery,
-                onValueChange = { searchQuery = it },
+                onValueChange = { searchQuery = it.trim() },
                 placeholder = "Search by customer or location",
                 leadingIcon = Icons.Default.Search
             )

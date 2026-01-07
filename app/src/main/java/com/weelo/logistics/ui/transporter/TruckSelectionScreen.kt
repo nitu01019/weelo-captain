@@ -45,6 +45,7 @@ fun TruckSelectionScreen(
 ) {
     val scope = rememberCoroutineScope()
     val repository = remember { MockDataRepository() }
+    // TODO: Connect to real repository from backend
     
     var broadcast by remember { mutableStateOf<BroadcastTrip?>(null) }
     var availableVehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }

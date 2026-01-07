@@ -20,7 +20,7 @@ import com.weelo.logistics.ui.theme.*
  * Shows detailed performance metrics and analytics
  */
 @Composable
-fun DriverPerformanceScreen(
+fun DriverPerformanceScreen(@Suppress("UNUSED_PARAMETER") 
     driverId: String,
     onNavigateBack: () -> Unit
 ) {

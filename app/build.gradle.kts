@@ -1,8 +1,9 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    // Disabled Hilt for now - can be enabled when backend integration is ready
-    // id("com.google.dagger.hilt.android")
+    id("org.jetbrains.kotlin.plugin.serialization") version "1.9.22"
+    // Hilt temporarily disabled for build
+    // id("com.google.dagger.hilt.android") version "2.48"
     // kotlin("kapt")
 }
 
@@ -84,7 +85,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.6.2")
     
-    // Hilt for Dependency Injection (Disabled - not needed for UI-only mock data)
+    // Hilt for Dependency Injection - Temporarily disabled
     // implementation("com.google.dagger:hilt-android:2.48")
     // kapt("com.google.dagger:hilt-android-compiler:2.48")
     // implementation("androidx.hilt:hilt-navigation-compose:1.1.0")
@@ -97,6 +98,9 @@ dependencies {
     // DataStore
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     
+    // Kotlinx Serialization
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
+    
     // Gson for JSON
     implementation("com.google.code.gson:gson:2.10.1")
     
@@ -104,8 +108,14 @@ dependencies {
     implementation("com.google.android.gms:play-services-maps:18.2.0")
     implementation("com.google.android.gms:play-services-location:21.0.1")
     
+    // Kotlin coroutines support for Google Play Services
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+    
     // Coil for Image Loading
     implementation("io.coil-kt:coil-compose:2.5.0")
+    
+    // Security - Encrypted SharedPreferences
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     
     // Retrofit (prepared for future backend integration)
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
@@ -126,7 +136,6 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
-// Kapt config disabled - not needed for current UI-only implementation
 // kapt {
 //     correctErrorTypes = true
 // }

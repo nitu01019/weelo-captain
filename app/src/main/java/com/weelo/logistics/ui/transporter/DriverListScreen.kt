@@ -17,6 +17,8 @@ import com.weelo.logistics.data.model.DriverStatus
 import com.weelo.logistics.data.repository.MockDataRepository
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.utils.SearchDebouncer
+import com.weelo.logistics.utils.DataSanitizer
 import kotlinx.coroutines.launch
 
 @Composable
@@ -30,7 +32,14 @@ fun DriverListScreen(
     var drivers by remember { mutableStateOf<List<Driver>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var debouncedSearchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("All") }
+    
+    val searchDebouncer = remember {
+        SearchDebouncer<String>(500L, scope) { query ->
+            debouncedSearchQuery = query
+        }
+    }
     
     LaunchedEffect(Unit) {
         scope.launch {
@@ -42,8 +51,8 @@ fun DriverListScreen(
     }
     
     val filteredDrivers = drivers.filter { driver ->
-        val matchesSearch = driver.name.contains(searchQuery, ignoreCase = true) ||
-                driver.mobileNumber.contains(searchQuery)
+        val matchesSearch = driver.name.contains(debouncedSearchQuery, ignoreCase = true) ||
+                driver.mobileNumber.contains(debouncedSearchQuery)
         val matchesFilter = when (selectedFilter) {
             "Available" -> driver.status == DriverStatus.ACTIVE && driver.isAvailable
             "On Trip" -> driver.status == DriverStatus.ON_TRIP
@@ -63,7 +72,10 @@ fun DriverListScreen(
             Column(Modifier.fillMaxWidth().background(White).padding(16.dp)) {
                 SearchTextField(
                     value = searchQuery,
-                    onValueChange = { searchQuery = it },
+                    onValueChange = { 
+                        searchQuery = it.trim()
+                        searchDebouncer.search(it.trim())
+                    },
                     placeholder = "Search by name or mobile",
                     leadingIcon = Icons.Default.Search
                 )
@@ -143,11 +155,16 @@ fun DriverCard(driver: Driver, onClick: () -> Unit) {
                 Modifier.size(56.dp).background(Surface, androidx.compose.foundation.shape.CircleShape),
                 Alignment.Center
             ) {
-                Text("👤", style = MaterialTheme.typography.headlineMedium)
+                Icon(
+                    imageVector = Icons.Default.Person,
+                    contentDescription = "Driver",
+                    modifier = Modifier.size(40.dp),
+                    tint = Primary
+                )
             }
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
-                Text(driver.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(DataSanitizer.sanitizeForDisplay(driver.name), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
                 Text(driver.mobileNumber, style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
                 Spacer(Modifier.height(4.dp))

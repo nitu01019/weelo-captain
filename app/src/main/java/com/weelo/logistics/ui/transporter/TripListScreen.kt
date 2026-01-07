@@ -17,6 +17,7 @@ import com.weelo.logistics.data.model.TripStatus
 import com.weelo.logistics.data.repository.MockDataRepository
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.utils.DataSanitizer
 import kotlinx.coroutines.launch
 
 @Composable
@@ -112,7 +113,7 @@ fun TripCard(trip: Trip, onClick: () -> Unit) {
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(trip.customerName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(DataSanitizer.sanitizeForDisplay(trip.customerName), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 StatusChip(
                     text = when (trip.status) {
                         TripStatus.PENDING -> "Pending"
@@ -132,7 +133,7 @@ fun TripCard(trip: Trip, onClick: () -> Unit) {
                 )
             }
             Spacer(Modifier.height(8.dp))
-            Text("${trip.pickupLocation.address} → ${trip.dropLocation.address}", 
+            Text("${DataSanitizer.sanitizeForDisplay(trip.pickupLocation.address)} → ${DataSanitizer.sanitizeForDisplay(trip.dropLocation.address)}", 
                  style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
             Spacer(Modifier.height(4.dp))
             Text("₹${String.format("%.0f", trip.fare)} • ${trip.distance} km",

@@ -20,6 +20,8 @@ import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.repository.MockDataRepository
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.utils.ClickDebouncer
+import com.weelo.logistics.utils.DataSanitizer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -54,8 +56,10 @@ fun TripAcceptDeclineScreen(
 ) {
     val scope = rememberCoroutineScope()
     val repository = remember { MockDataRepository() }
+    val clickDebouncer = remember { ClickDebouncer(500L) }
+    // TODO: Connect to real repository from backend
     
-    var notification by remember { mutableStateOf<DriverNotification?>(null) }
+    var notification by remember { mutableStateOf<DriverTripNotification?>(null) }
     var assignmentDetails by remember { mutableStateOf<TripAssignment?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var isProcessing by remember { mutableStateOf(false) }
@@ -116,7 +120,7 @@ fun TripAcceptDeclineScreen(
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    "Respond within ${getRemainingTime(notif.expiryTime!!)} minutes",
+                                    "Respond within ${getRemainingTime(notif.expiryTime)} minutes",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = White
@@ -346,7 +350,10 @@ fun TripAcceptDeclineScreen(
                     ) {
                         // Decline Button
                         OutlinedButton(
-                            onClick = { showDeclineDialog = true },
+                            onClick = { 
+                                if (!clickDebouncer.canClick()) return@OutlinedButton
+                                showDeclineDialog = true 
+                            },
                             modifier = Modifier
                                 .weight(1f)
                                 .height(56.dp),
@@ -369,7 +376,10 @@ fun TripAcceptDeclineScreen(
                         
                         // Accept Button
                         Button(
-                            onClick = { showAcceptDialog = true },
+                            onClick = { 
+                                if (!clickDebouncer.canClick()) return@Button
+                                showAcceptDialog = true 
+                            },
                             modifier = Modifier
                                 .weight(1f)
                                 .height(56.dp),
@@ -464,7 +474,9 @@ fun TripAcceptDeclineScreen(
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = declineReason,
-                        onValueChange = { declineReason = it },
+                        onValueChange = { 
+                            declineReason = DataSanitizer.sanitizeForApi(it) ?: ""
+                        },
                         placeholder = { Text("e.g., Not available, Too far...") },
                         modifier = Modifier.fillMaxWidth(),
                         maxLines = 3

@@ -45,6 +45,7 @@ fun BroadcastListScreen(
 ) {
     val scope = rememberCoroutineScope()
     val repository = remember { MockDataRepository() }
+    // TODO: Connect to real repository from backend
     var broadcasts by remember { mutableStateOf<List<BroadcastTrip>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var selectedFilter by remember { mutableStateOf("All") }

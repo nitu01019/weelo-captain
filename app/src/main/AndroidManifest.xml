@@ -9,6 +9,12 @@
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    
+    <!-- SMS Auto-Read for OTP (Google Play Services SMS Retriever API) -->
+    <!-- No runtime permission needed - works automatically with SMS Retriever API -->
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="com.google.android.gms.permission.RECEIVE_SMS" />
 
     <application
         android:name=".WeeloApp"

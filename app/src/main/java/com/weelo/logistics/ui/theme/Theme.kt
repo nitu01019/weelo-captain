@@ -76,7 +76,7 @@ private val DarkColorScheme = darkColorScheme(
 
 @Composable
 fun WeeloTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = false, // Force light theme
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) {

@@ -14,7 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.model.TripStatus
-import com.weelo.logistics.data.repository.MockDataRepository
+// MockDataRepository removed - all data from backend only
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.launch
@@ -32,17 +32,28 @@ import kotlinx.coroutines.launch
 @Composable
 fun TransporterDashboardScreen(
     onNavigateToFleet: () -> Unit = {},
-    onNavigateToDrivers: () -> Unit = {},
-    onNavigateToTrips: () -> Unit = {},
+    @Suppress("UNUSED_PARAMETER") onNavigateToDrivers: () -> Unit = {},
+    @Suppress("UNUSED_PARAMETER") onNavigateToTrips: () -> Unit = {},
     onNavigateToAddVehicle: () -> Unit = {},
     onNavigateToAddDriver: () -> Unit = {},
-    onNavigateToCreateTrip: () -> Unit = {}
+    @Suppress("UNUSED_PARAMETER") onNavigateToCreateTrip: () -> Unit = {},
+    onLogout: () -> Unit = {}
 ) {
+    // Handle back button press - go to role selection
+    androidx.activity.compose.BackHandler {
+        onLogout()
+    }
+    // Navigation parameters will be used when dashboard statistics and quick actions are implemented
+    
     // Empty dashboard - no fake data
+    // These will be used when backend API integration is complete
+    @Suppress("UNUSED_VARIABLE")
     var dashboardData by remember { 
         mutableStateOf<com.weelo.logistics.data.model.TransporterDashboard?>(null) 
     }
+    @Suppress("UNUSED_VARIABLE")
     var isLoading by remember { mutableStateOf(false) }
+    @Suppress("UNUSED_VARIABLE")
     var errorMessage by remember { mutableStateOf<String?>(null) }
     
     // TODO: Uncomment when backend is ready

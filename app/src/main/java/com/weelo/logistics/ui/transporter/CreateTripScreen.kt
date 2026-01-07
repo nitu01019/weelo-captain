@@ -17,6 +17,10 @@ import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.repository.MockDataRepository
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.utils.ClickDebouncer
+import com.weelo.logistics.utils.InputValidator
+import com.weelo.logistics.utils.DataSanitizer
+import com.weelo.logistics.utils.CreateTripRequest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -39,6 +43,8 @@ fun CreateTripScreen(
     
     val scope = rememberCoroutineScope()
     val repository = remember { MockDataRepository() }
+    val clickDebouncer = remember { ClickDebouncer(500L) }
+    // TODO: Connect to real repository from backend
     var vehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
     var drivers by remember { mutableStateOf<List<Driver>>(emptyList()) }
     
@@ -64,7 +70,7 @@ fun CreateTripScreen(
             PrimaryTextField(
                 value = customerName,
                 onValueChange = { customerName = it; errorMessage = "" },
-                label = "Customer Name *",
+                label = "Customer Name * *",
                 placeholder = "ABC Industries",
                 leadingIcon = Icons.Default.Person
             )
@@ -72,7 +78,7 @@ fun CreateTripScreen(
             PrimaryTextField(
                 value = customerMobile,
                 onValueChange = { if (it.length <= 10) customerMobile = it },
-                label = "Customer Mobile *",
+                label = "Customer Mobile * *",
                 placeholder = "10-digit number",
                 leadingIcon = Icons.Default.Phone,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone)
@@ -83,8 +89,8 @@ fun CreateTripScreen(
             
             PrimaryTextField(
                 value = pickupAddress,
-                onValueChange = { pickupAddress = it },
-                label = "Pickup Address *",
+                onValueChange = { pickupAddress = it.trim() },
+                label = "Pickup Address * *",
                 placeholder = "Enter pickup location",
                 leadingIcon = Icons.Default.LocationOn,
                 maxLines = 2
@@ -92,8 +98,8 @@ fun CreateTripScreen(
             
             PrimaryTextField(
                 value = dropAddress,
-                onValueChange = { dropAddress = it },
-                label = "Drop Address *",
+                onValueChange = { dropAddress = it.trim() },
+                label = "Drop Address * *",
                 placeholder = "Enter drop location",
                 leadingIcon = Icons.Default.LocationOn,
                 maxLines = 2
@@ -101,7 +107,7 @@ fun CreateTripScreen(
             
             PrimaryTextField(
                 value = goodsType,
-                onValueChange = { goodsType = it },
+                onValueChange = { goodsType = it.trim() },
                 label = "Goods Type *",
                 placeholder = "Electronics, Furniture, etc.",
                 leadingIcon = Icons.Default.Category
@@ -110,14 +116,14 @@ fun CreateTripScreen(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 PrimaryTextField(
                     value = weight,
-                    onValueChange = { weight = it },
-                    label = "Weight",
+                    onValueChange = { weight = it.trim() },
+                    label = "Weight *",
                     placeholder = "500 kg",
                     modifier = Modifier.weight(1f)
                 )
                 PrimaryTextField(
                     value = fare,
-                    onValueChange = { fare = it },
+                    onValueChange = { fare = it.trim() },
                     label = "Fare *",
                     placeholder = "2500",
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -158,8 +164,23 @@ fun CreateTripScreen(
             PrimaryButton(
                 text = "Create Trip",
                 onClick = {
+                    // Debounce to prevent rapid clicks
+                    if (!clickDebouncer.canClick()) return@PrimaryButton
+                    
+                    // Validate inputs
+                    val nameValidation = InputValidator.validateName(customerName)
+                    if (!nameValidation.isValid) {
+                        errorMessage = nameValidation.errorMessage!!
+                        return@PrimaryButton
+                    }
+                    
+                    val phoneValidation = InputValidator.validatePhoneNumber(customerMobile)
+                    if (customerMobile.isNotEmpty() && !phoneValidation.isValid) {
+                        errorMessage = phoneValidation.errorMessage!!
+                        return@PrimaryButton
+                    }
+                    
                     when {
-                        customerName.isEmpty() -> errorMessage = "Enter customer name"
                         pickupAddress.isEmpty() -> errorMessage = "Enter pickup address"
                         dropAddress.isEmpty() -> errorMessage = "Enter drop address"
                         selectedVehicleId == null -> errorMessage = "Select a vehicle"
@@ -167,16 +188,17 @@ fun CreateTripScreen(
                         else -> {
                             isLoading = true
                             scope.launch {
+                                // Sanitize user inputs
                                 val trip = Trip(
                                     id = "trip_${System.currentTimeMillis()}",
                                     transporterId = "t1",
                                     vehicleId = selectedVehicleId!!,
                                     driverId = selectedDriverId,
-                                    pickupLocation = Location(0.0, 0.0, pickupAddress),
-                                    dropLocation = Location(0.0, 0.0, dropAddress),
-                                    customerName = customerName,
+                                    pickupLocation = Location(0.0, 0.0, DataSanitizer.sanitizeForApi(pickupAddress) ?: ""),
+                                    dropLocation = Location(0.0, 0.0, DataSanitizer.sanitizeForApi(dropAddress) ?: ""),
+                                    customerName = DataSanitizer.sanitizeForApi(customerName) ?: "",
                                     customerMobile = customerMobile,
-                                    goodsType = goodsType,
+                                    goodsType = DataSanitizer.sanitizeForApi(goodsType) ?: "",
                                     weight = weight,
                                     fare = fare.toDoubleOrNull() ?: 0.0,
                                     status = TripStatus.ASSIGNED
@@ -187,7 +209,8 @@ fun CreateTripScreen(
                         }
                     }
                 },
-                isLoading = isLoading
+                isLoading = isLoading,
+                enabled = !isLoading
             )
         }
     }

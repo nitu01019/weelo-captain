@@ -23,12 +23,14 @@ fun WeeloNavigation(
         composable(Screen.Splash.route) {
             SplashScreen(
                 onNavigateToOnboarding = {
-                    navController.navigate(Screen.Onboarding.route) {
+                    // Onboarding removed - navigate directly to role selection
+                    navController.navigate(Screen.RoleSelection.route) {
                         popUpTo(Screen.Splash.route) { inclusive = true }
                     }
                 },
                 onNavigateToLogin = {
-                    navController.navigate(Screen.Login.route) {
+                    // Skip onboarding - go directly to role selection
+                    navController.navigate(Screen.RoleSelection.route) {
                         popUpTo(Screen.Splash.route) { inclusive = true }
                     }
                 },
@@ -44,32 +46,14 @@ fun WeeloNavigation(
                 }
             )
         }
-        
-        composable(Screen.Onboarding.route) {
-            OnboardingScreen(
-                onComplete = {
-                    navController.navigate(Screen.RoleSelection.route) {
-                        popUpTo(Screen.Onboarding.route) { inclusive = true }
-                    }
-                }
-            )
-        }
+
+        // Onboarding screen removed - users go directly to role selection after splash
         
         composable(Screen.RoleSelection.route) {
             RoleSelectionScreen(
                 onRoleSelected = { role ->
-                    // TODO: Temporarily skip login/signup - go directly to dashboard
-                    val destination = if (role == "TRANSPORTER") {
-                        Screen.TransporterDashboard.route
-                    } else {
-                        Screen.DriverDashboard.route
-                    }
-                    navController.navigate(destination) {
-                        popUpTo(Screen.Onboarding.route) { inclusive = true }
-                    }
-                    
-                    // Original flow (commented out for now):
-                    // navController.navigate("${Screen.Login.route}/$role")
+                    // Navigate to login screen for selected role
+                    navController.navigate("${Screen.Login.route}/$role")
                 }
             )
         }
@@ -79,10 +63,10 @@ fun WeeloNavigation(
             LoginScreen(
                 role = role,
                 onNavigateToSignup = {
-                    navController.navigate("${Screen.Signup.route}/$role/new")
+                    navController.navigate("${Screen.Signup.route}/$role")
                 },
                 onNavigateToOTP = { mobile, selectedRole ->
-                    navController.navigate("otp_verification/$mobile/$selectedRole")
+                    navController.navigate("otp_verification/$mobile/$selectedRole/login")
                 },
                 onNavigateBack = {
                     navController.popBackStack()
@@ -90,42 +74,53 @@ fun WeeloNavigation(
             )
         }
         
-        composable("otp_verification/{mobile}/{role}") { backStackEntry ->
+        composable("otp_verification/{mobile}/{role}/{type}") { backStackEntry ->
             val mobile = backStackEntry.arguments?.getString("mobile") ?: ""
             val role = backStackEntry.arguments?.getString("role") ?: "TRANSPORTER"
+            val type = backStackEntry.arguments?.getString("type") ?: "login"
             OTPVerificationScreen(
-                mobileNumber = mobile,
+                phoneNumber = mobile,
                 role = role,
                 onNavigateBack = {
                     navController.popBackStack()
                 },
-                onVerifySuccess = { verifiedRole ->
-                    // Check if user exists, if not go to signup
-                    navController.navigate("${Screen.Signup.route}/$verifiedRole/$mobile") {
-                        popUpTo("otp_verification/{mobile}/{role}") { inclusive = true }
+                onVerifySuccess = {
+                    if (type == "signup") {
+                        // Continue to name/location steps (handled in SignupScreen)
+                        navController.navigate("${Screen.Signup.route}/$role/step2") {
+                            popUpTo("otp_verification/{mobile}/{role}/{type}") { inclusive = true }
+                        }
+                    } else {
+                        // Login - go to dashboard
+                        val destination = if (role == "TRANSPORTER") {
+                            Screen.TransporterDashboard.route
+                        } else {
+                            Screen.DriverDashboard.route
+                        }
+                        navController.navigate(destination) {
+                            // Clear auth stack, but keep RoleSelection as back target
+                            popUpTo(Screen.RoleSelection.route) { inclusive = false }
+                        }
                     }
                 }
             )
         }
         
-        composable("${Screen.Signup.route}/{role}/{mobile}") { backStackEntry ->
+        composable("${Screen.Signup.route}/{role}") { backStackEntry ->
             val role = backStackEntry.arguments?.getString("role") ?: "TRANSPORTER"
-            val mobile = backStackEntry.arguments?.getString("mobile") ?: ""
             SignupScreen(
                 role = role,
-                mobileNumber = mobile,
+                onNavigateToLogin = {
+                    navController.navigate("${Screen.Login.route}/$role") {
+                        popUpTo(Screen.RoleSelection.route) { inclusive = false }
+                    }
+                },
+                onNavigateToOTP = { mobile, selectedRole, isSignup ->
+                    val type = if (isSignup) "signup" else "login"
+                    navController.navigate("otp_verification/$mobile/$selectedRole/$type")
+                },
                 onNavigateBack = {
                     navController.popBackStack()
-                },
-                onSignupSuccess = { signupRole ->
-                    val destination = if (signupRole == "TRANSPORTER") {
-                        Screen.TransporterDashboard.route
-                    } else {
-                        Screen.DriverDashboard.route
-                    }
-                    navController.navigate(destination) {
-                        popUpTo(Screen.Splash.route) { inclusive = true }
-                    }
                 }
             )
         }
@@ -138,7 +133,13 @@ fun WeeloNavigation(
                 onNavigateToTrips = { navController.navigate(Screen.TripList.route) },
                 onNavigateToAddVehicle = { navController.navigate(Screen.AddVehicle.route) },
                 onNavigateToAddDriver = { navController.navigate(Screen.AddDriver.route) },
-                onNavigateToCreateTrip = { navController.navigate(Screen.CreateTrip.route) }
+                onNavigateToCreateTrip = { navController.navigate(Screen.CreateTrip.route) },
+                onLogout = {
+                    // Back button or logout goes to role selection
+                    navController.navigate(Screen.RoleSelection.route) {
+                        popUpTo(Screen.Splash.route) { inclusive = true }
+                    }
+                }
             )
         }
         
@@ -184,6 +185,7 @@ fun WeeloNavigation(
         
         composable(Screen.AddDriver.route) {
             com.weelo.logistics.ui.transporter.AddDriverScreen(
+                transporterId = "TRP-001", // TODO: Get from user session
                 onNavigateBack = { navController.popBackStack() },
                 onDriverAdded = {
                     navController.popBackStack(Screen.DriverList.route, inclusive = false)
@@ -235,7 +237,18 @@ fun WeeloNavigation(
         
         // Driver Dashboard
         composable(Screen.DriverDashboard.route) {
-            com.weelo.logistics.ui.driver.DriverDashboardScreen()
+            com.weelo.logistics.ui.driver.DriverDashboardScreen(
+                onNavigateToNotifications = { /* TODO: Implement */ },
+                onNavigateToTripHistory = { /* TODO: Implement */ },
+                onNavigateToProfile = { /* TODO: Implement */ },
+                onOpenFullMap = { tripId -> /* TODO: Implement */ },
+                onLogout = {
+                    // Back button or logout goes to role selection
+                    navController.navigate(Screen.RoleSelection.route) {
+                        popUpTo(Screen.Splash.route) { inclusive = true }
+                    }
+                }
+            )
         }
         
         // Driver Performance

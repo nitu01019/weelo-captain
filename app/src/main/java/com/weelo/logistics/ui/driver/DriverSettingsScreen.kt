@@ -1,5 +1,6 @@
 package com.weelo.logistics.ui.driver
 
+import android.app.Activity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -11,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.ui.components.PrimaryTopBar
@@ -26,8 +28,10 @@ fun DriverSettingsScreen(
     onNavigateBack: () -> Unit,
     onLogout: () -> Unit
 ) {
+    // val context = LocalContext.current  // Reserved for future use
     var notificationsEnabled by remember { mutableStateOf(true) }
     var showLogoutDialog by remember { mutableStateOf(false) }
+    // Language selection removed - app is English only
     
     Column(Modifier.fillMaxSize().background(Surface)) {
         PrimaryTopBar(title = "Settings", onBackClick = onNavigateBack)
@@ -55,13 +59,7 @@ fun DriverSettingsScreen(
             }
             
             SectionCard("Preferences") {
-                SettingRow(
-                    icon = Icons.Default.Language,
-                    title = "Language",
-                    subtitle = "English",
-                    onClick = { /* TODO */ }
-                )
-                Divider()
+                // Language selection removed - app is English only
                 SettingRow(
                     icon = Icons.Default.DarkMode,
                     title = "Theme",
@@ -141,6 +139,8 @@ fun DriverSettingsScreen(
             }
         )
     }
+    
+    // Language dialog removed - app is English only
 }
 
 @Composable

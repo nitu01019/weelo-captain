@@ -56,7 +56,12 @@ fun DriverDetailsScreen(
             ) {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(SecondaryLight)) {
                     Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("👤", style = MaterialTheme.typography.displayLarge)
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = "Driver",
+                            modifier = Modifier.size(80.dp),
+                            tint = Primary
+                        )
                         Spacer(Modifier.height(12.dp))
                         Text(d.name, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(4.dp))

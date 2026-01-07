@@ -148,10 +148,12 @@ object RetrofitClient {
      * Save access token to secure storage
      * TODO: Implement actual token storage
      */
+    @Suppress("UNUSED_PARAMETER")
     fun saveAccessToken(token: String) {
         // TODO: Save to EncryptedSharedPreferences
         // Example:
         // securePreferences.edit().putString("access_token", token).apply()
+        // Currently not implemented - will be added when backend integration is complete
     }
     
     /**

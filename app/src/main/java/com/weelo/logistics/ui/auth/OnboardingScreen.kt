@@ -5,6 +5,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,8 +47,8 @@ fun OnboardingScreen(
                 .padding(16.dp),
             contentAlignment = Alignment.TopEnd
         ) {
-            WeeloTextButton(
-                text = "Skip",
+                WeeloTextButton(
+                text = androidx.compose.ui.res.stringResource(com.weelo.logistics.R.string.skip),
                 onClick = onComplete
             )
         }
@@ -58,19 +61,19 @@ fun OnboardingScreen(
             OnboardingPage(
                 page = when (page) {
                     0 -> OnboardingPageData(
-                        emoji = "🚛",
-                        title = "Manage Your Fleet",
-                        description = "Add vehicles, assign drivers, and track deliveries in real-time. Complete control at your fingertips."
+                        icon = Icons.Default.LocalShipping,
+                        title = androidx.compose.ui.res.stringResource(com.weelo.logistics.R.string.onboarding_title_1),
+                        description = androidx.compose.ui.res.stringResource(com.weelo.logistics.R.string.onboarding_desc_1)
                     )
                     1 -> OnboardingPageData(
-                        emoji = "📱",
-                        title = "Accept Trips Instantly",
-                        description = "Get trip requests, navigate easily, and earn more. Drive smart with GPS navigation."
+                        icon = Icons.Default.PhoneAndroid,
+                        title = androidx.compose.ui.res.stringResource(com.weelo.logistics.R.string.onboarding_title_2),
+                        description = androidx.compose.ui.res.stringResource(com.weelo.logistics.R.string.onboarding_desc_2)
                     )
                     else -> OnboardingPageData(
-                        emoji = "🔄",
-                        title = "One App, All Roles",
-                        description = "Be a transporter, driver, or both. Switch between roles anytime with a single tap."
+                        icon = Icons.Default.Refresh,
+                        title = androidx.compose.ui.res.stringResource(com.weelo.logistics.R.string.onboarding_title_3),
+                        description = androidx.compose.ui.res.stringResource(com.weelo.logistics.R.string.onboarding_desc_3)
                     )
                 }
             )
@@ -106,7 +109,7 @@ fun OnboardingScreen(
         ) {
             if (pagerState.currentPage < 2) {
                 PrimaryButton(
-                    text = "Next",
+                    text = androidx.compose.ui.res.stringResource(com.weelo.logistics.R.string.next),
                     onClick = {
                         scope.launch {
                             pagerState.animateScrollToPage(pagerState.currentPage + 1)
@@ -115,7 +118,7 @@ fun OnboardingScreen(
                 )
             } else {
                 PrimaryButton(
-                    text = "Get Started",
+                    text = androidx.compose.ui.res.stringResource(com.weelo.logistics.R.string.get_started),
                     onClick = onComplete
                 )
             }
@@ -124,7 +127,7 @@ fun OnboardingScreen(
 }
 
 data class OnboardingPageData(
-    val emoji: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
     val title: String,
     val description: String
 )
@@ -138,9 +141,11 @@ fun OnboardingPage(page: OnboardingPageData) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text(
-            text = page.emoji,
-            fontSize = 100.sp
+        Icon(
+            imageVector = page.icon,
+            contentDescription = page.title,
+            modifier = Modifier.size(100.dp),
+            tint = Primary
         )
         
         Spacer(modifier = Modifier.height(32.dp))
