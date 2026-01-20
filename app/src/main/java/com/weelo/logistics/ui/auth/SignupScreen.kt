@@ -292,9 +292,8 @@ fun SignupScreen(
                             } else {
                                 isLoading = true
                                 scope.launch {
-                                    delay(1000)
                                     // TODO BACKEND: Register user with API
-                                    // For now, navigate to dashboard
+                                    // Navigate instantly - no fake delays ⚡
                                     onNavigateToLogin()
                                 }
                             }

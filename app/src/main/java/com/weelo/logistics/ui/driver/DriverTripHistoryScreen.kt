@@ -138,7 +138,11 @@ fun DriverTripHistoryScreen(
                     }
                 }
                 
-                items(filteredTrips) { trip ->
+                // OPTIMIZATION: Add keys to prevent unnecessary recompositions
+                items(
+                    items = filteredTrips,
+                    key = { it.id }
+                ) { trip ->
                     TripHistoryCard(trip, onClick = { onNavigateToTripDetails(trip.id) })
                 }
             }

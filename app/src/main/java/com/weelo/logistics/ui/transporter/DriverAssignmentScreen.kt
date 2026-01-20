@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -544,8 +545,11 @@ fun DriverPickerBottomSheet(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(availableDrivers.size) { index ->
-                            val driver = availableDrivers[index]
+                        // OPTIMIZATION: Add keys to prevent unnecessary recompositions
+                        items(
+                            items = availableDrivers,
+                            key = { it.id }
+                        ) { driver ->
                             DriverSelectCard(
                                 driver = driver,
                                 onClick = {

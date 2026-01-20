@@ -1,56 +1,27 @@
 package com.weelo.logistics.data.api
 
-import com.weelo.logistics.data.model.User
 import retrofit2.Response
 import retrofit2.http.*
 
 /**
- * Authentication API Service
+ * Authentication API Service - Matches weelo-backend
  * 
- * BACKEND INTEGRATION NOTES:
- * ==========================
- * Base URL: https://api.weelo.in/v1/
- * 
- * All endpoints require proper error handling:
- * - 200: Success
- * - 400: Bad Request (validation errors)
- * - 401: Unauthorized (invalid credentials)
- * - 404: Not Found
- * - 500: Server Error
+ * Backend: weelo-backend/src/modules/auth/
+ * Base URL: http://10.0.2.2:3000/api/v1/ (emulator) or your IP for device
  * 
  * Authentication Flow:
- * 1. User enters mobile number -> sendOTP()
- * 2. User enters OTP code -> verifyOTP()
- * 3. Backend returns JWT token
- * 4. Store token securely (use EncryptedSharedPreferences)
- * 5. Include token in all subsequent requests via Interceptor
+ * 1. POST /auth/send-otp - Send OTP to phone
+ * 2. POST /auth/verify-otp - Verify OTP, get tokens
+ * 3. Store accessToken & refreshToken securely
+ * 4. Include "Authorization: Bearer {accessToken}" in all requests
+ * 
+ * Development: OTPs are logged to backend console - check terminal
  */
 interface AuthApiService {
     
     /**
-     * Send OTP to mobile number
-     * 
-     * ENDPOINT: POST /auth/send-otp
-     * 
-     * Request Body:
-     * {
-     *   "mobileNumber": "9876543210",
-     *   "countryCode": "+91"
-     * }
-     * 
-     * Response (200 OK):
-     * {
-     *   "success": true,
-     *   "message": "OTP sent successfully",
-     *   "otpId": "otp_123456",
-     *   "expiresIn": 300
-     * }
-     * 
-     * Response (400 Bad Request):
-     * {
-     *   "success": false,
-     *   "error": "Invalid mobile number"
-     * }
+     * Send OTP to phone number
+     * POST /api/v1/auth/send-otp
      */
     @POST("auth/send-otp")
     suspend fun sendOTP(
@@ -58,194 +29,161 @@ interface AuthApiService {
     ): Response<SendOTPResponse>
     
     /**
-     * Verify OTP and login/signup
-     * 
-     * ENDPOINT: POST /auth/verify-otp
-     * 
-     * Request Body:
-     * {
-     *   "mobileNumber": "9876543210",
-     *   "otp": "123456",
-     *   "otpId": "otp_123456",
-     *   "deviceId": "device_unique_id",
-     *   "fcmToken": "fcm_token_for_push_notifications"
-     * }
-     * 
-     * Response (200 OK):
-     * {
-     *   "success": true,
-     *   "user": {
-     *     "id": "user_123",
-     *     "name": "John Doe",
-     *     "mobileNumber": "9876543210",
-     *     "email": "john@example.com",
-     *     "roles": ["DRIVER", "TRANSPORTER"],
-     *     "isNewUser": false
-     *   },
-     *   "token": {
-     *     "accessToken": "jwt_access_token",
-     *     "refreshToken": "jwt_refresh_token",
-     *     "expiresIn": 3600
-     *   }
-     * }
-     * 
-     * Response (401 Unauthorized):
-     * {
-     *   "success": false,
-     *   "error": "Invalid OTP"
-     * }
+     * Verify OTP and get tokens
+     * POST /api/v1/auth/verify-otp
      */
     @POST("auth/verify-otp")
     suspend fun verifyOTP(
         @Body request: VerifyOTPRequest
-    ): Response<AuthResponse>
+    ): Response<VerifyOTPResponse>
     
     /**
-     * Complete user profile (for new users after OTP verification)
-     * 
-     * ENDPOINT: POST /auth/complete-profile
-     * Headers: Authorization: Bearer {accessToken}
-     * 
-     * Request Body:
-     * {
-     *   "name": "John Doe",
-     *   "email": "john@example.com",
-     *   "role": "DRIVER" // or "TRANSPORTER"
-     * }
-     * 
-     * Response (200 OK):
-     * {
-     *   "success": true,
-     *   "user": {User object with updated details}
-     * }
+     * Refresh access token
+     * POST /api/v1/auth/refresh
      */
-    @POST("auth/complete-profile")
-    suspend fun completeProfile(
-        @Header("Authorization") token: String,
-        @Body request: CompleteProfileRequest
-    ): Response<User>
-    
-    /**
-     * Refresh access token using refresh token
-     * 
-     * ENDPOINT: POST /auth/refresh-token
-     * 
-     * Request Body:
-     * {
-     *   "refreshToken": "jwt_refresh_token"
-     * }
-     * 
-     * Response (200 OK):
-     * {
-     *   "success": true,
-     *   "accessToken": "new_jwt_access_token",
-     *   "expiresIn": 3600
-     * }
-     */
-    @POST("auth/refresh-token")
+    @POST("auth/refresh")
     suspend fun refreshToken(
         @Body request: RefreshTokenRequest
     ): Response<RefreshTokenResponse>
     
     /**
-     * Logout user
-     * 
-     * ENDPOINT: POST /auth/logout
-     * Headers: Authorization: Bearer {accessToken}
-     * 
-     * Request Body:
-     * {
-     *   "deviceId": "device_unique_id",
-     *   "fcmToken": "fcm_token"
-     * }
-     * 
-     * Response (200 OK):
-     * {
-     *   "success": true,
-     *   "message": "Logged out successfully"
-     * }
+     * Logout and invalidate tokens
+     * POST /api/v1/auth/logout
      */
     @POST("auth/logout")
     suspend fun logout(
-        @Header("Authorization") token: String,
-        @Body request: LogoutRequest
+        @Header("Authorization") token: String
     ): Response<LogoutResponse>
     
     /**
-     * Get current user profile
-     * 
-     * ENDPOINT: GET /auth/me
-     * Headers: Authorization: Bearer {accessToken}
-     * 
-     * Response (200 OK):
-     * {
-     *   "success": true,
-     *   "user": {User object}
-     * }
+     * Get current user info
+     * GET /api/v1/auth/me
      */
     @GET("auth/me")
     suspend fun getCurrentUser(
         @Header("Authorization") token: String
-    ): Response<User>
+    ): Response<GetCurrentUserResponse>
 }
 
-// ============== Request/Response Data Classes ==============
+// ============== Request Data Classes ==============
 
+/**
+ * Send OTP Request
+ * Matches: weelo-backend/src/modules/auth/auth.schema.ts -> sendOtpSchema
+ */
 data class SendOTPRequest(
-    val mobileNumber: String,
-    val countryCode: String = "+91"
+    val phone: String,  // 10-digit phone number e.g. "9876543210"
+    val role: String = "transporter"  // "customer", "transporter", or "driver"
 )
 
+/**
+ * Verify OTP Request
+ * Matches: weelo-backend/src/modules/auth/auth.schema.ts -> verifyOtpSchema
+ */
+data class VerifyOTPRequest(
+    val phone: String,      // 10-digit phone number
+    val otp: String,        // 6-digit OTP from backend console
+    val role: String = "transporter",
+    val deviceId: String? = null,
+    val deviceName: String? = null
+)
+
+/**
+ * Refresh Token Request
+ * Matches: weelo-backend/src/modules/auth/auth.schema.ts -> refreshTokenSchema
+ */
+data class RefreshTokenRequest(
+    val refreshToken: String
+)
+
+// ============== Response Data Classes ==============
+
+/**
+ * Standard API Error format from backend
+ */
+data class ApiError(
+    val code: String? = null,
+    val message: String? = null
+)
+
+/**
+ * Send OTP Response
+ */
 data class SendOTPResponse(
     val success: Boolean,
+    val data: SendOTPData? = null,
+    val error: ApiError? = null
+)
+
+data class SendOTPData(
     val message: String,
-    val otpId: String,
     val expiresIn: Int
 )
 
-data class VerifyOTPRequest(
-    val mobileNumber: String,
-    val otp: String,
-    val otpId: String,
-    val deviceId: String,
-    val fcmToken: String?
+/**
+ * Verify OTP Response
+ * Returns user info and JWT tokens
+ */
+data class VerifyOTPResponse(
+    val success: Boolean,
+    val data: VerifyOTPData? = null,
+    val error: ApiError? = null
 )
 
-data class AuthResponse(
-    val success: Boolean,
-    val user: User,
-    val token: TokenData,
-    val error: String? = null
+data class VerifyOTPData(
+    val user: AuthUser,
+    val tokens: TokenData,
+    val isNewUser: Boolean
+)
+
+data class AuthUser(
+    val id: String,
+    val phone: String,
+    val role: String,
+    val name: String? = null,
+    val email: String? = null,
+    val company: String? = null,
+    val isProfileComplete: Boolean = false
 )
 
 data class TokenData(
     val accessToken: String,
     val refreshToken: String,
-    val expiresIn: Int
+    val expiresIn: Long  // seconds until expiry
 )
 
-data class CompleteProfileRequest(
-    val name: String,
-    val email: String?,
-    val role: String // "DRIVER" or "TRANSPORTER"
-)
-
-data class RefreshTokenRequest(
-    val refreshToken: String
-)
-
+/**
+ * Refresh Token Response
+ */
 data class RefreshTokenResponse(
     val success: Boolean,
+    val data: RefreshTokenData? = null,
+    val error: ApiError? = null
+)
+
+data class RefreshTokenData(
     val accessToken: String,
-    val expiresIn: Int
+    val expiresIn: Long
 )
 
-data class LogoutRequest(
-    val deviceId: String,
-    val fcmToken: String?
-)
-
+/**
+ * Logout Response
+ */
 data class LogoutResponse(
     val success: Boolean,
-    val message: String
+    val message: String? = null,
+    val error: ApiError? = null
+)
+
+/**
+ * Get Current User Response
+ */
+data class GetCurrentUserResponse(
+    val success: Boolean,
+    val data: CurrentUserData? = null,
+    val error: ApiError? = null
+)
+
+data class CurrentUserData(
+    val user: AuthUser
 )

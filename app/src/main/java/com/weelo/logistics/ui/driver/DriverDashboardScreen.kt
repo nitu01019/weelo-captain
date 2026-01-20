@@ -20,6 +20,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.roundToInt
@@ -48,35 +49,109 @@ fun DriverDashboardScreen(
     onNavigateToNotifications: () -> Unit = {},
     onNavigateToTripHistory: () -> Unit = {},
     onNavigateToProfile: () -> Unit = {},
+    onNavigateToEarnings: () -> Unit = {},
+    onNavigateToDocuments: () -> Unit = {},
+    onNavigateToSettings: () -> Unit = {},
     onOpenFullMap: (String) -> Unit = {},
     onLogout: () -> Unit = {}
 ) {
     val dashboardState by viewModel.dashboardState.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val scope = rememberCoroutineScope()
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    
+    // Optimize: Use derivedStateOf to prevent unnecessary recompositions
+    val driverProfile by remember {
+        derivedStateOf {
+            when (val state = dashboardState) {
+                is DriverDashboardState.Success -> DrawerUserProfile(
+                    id = state.data.driverId,
+                    name = "Driver",
+                    phone = "",
+                    role = "driver"
+                )
+                else -> null
+            }
+        }
+    }
+    
+    // Optimize: Use derivedStateOf for notification count
+    val notificationCount by remember {
+        derivedStateOf {
+            when (val state = dashboardState) {
+                is DriverDashboardState.Success -> state.data.notifications.count { !it.isRead }
+                else -> 0
+            }
+        }
+    }
+    
+    // Optimize: Remember callbacks to prevent recreation
+    val closeDrawerAndNavigate: (() -> Unit) -> Unit = remember(scope, drawerState) {
+        { action ->
+            scope.launch { 
+                drawerState.close()
+                action()
+            }
+        }
+    }
+    
+    // Optimize: Create menu items only when notificationCount changes
+    val menuItems = remember(notificationCount) {
+        createDriverMenuItems(
+            onDashboard = { },
+            onTripHistory = { },
+            onEarnings = { },
+            onDocuments = { },
+            onSettings = { },
+            notificationCount = notificationCount
+        )
+    }
     
     // Load data when screen first opens
     LaunchedEffect(Unit) {
         viewModel.loadDashboardData()
     }
     
-    // Handle back button press - go to role selection
+    // BACK BUTTON DISABLED - User must explicitly logout from profile
+    // Back press is consumed but does nothing
     androidx.activity.compose.BackHandler {
-        onLogout()
+        // Do nothing - prevents going back to login/role selection
     }
     
-    Scaffold(
-        topBar = {
-            DashboardTopBar(
-                unreadCount = when (dashboardState) {
-                    is DriverDashboardState.Success -> 
-                        (dashboardState as DriverDashboardState.Success).data.notifications.count { !it.isRead }
-                    else -> 0
-                },
-                onNotificationsClick = onNavigateToNotifications,
-                onProfileClick = onNavigateToProfile
-            )
+    // Main Navigation Drawer - Optimized for smooth performance
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = true,
+        drawerContent = {
+            ModalDrawerSheet(
+                modifier = Modifier.width(280.dp) // Slightly narrower for faster animation
+            ) {
+                DrawerContentInternal(
+                    userProfile = driverProfile,
+                    isLoading = dashboardState is DriverDashboardState.Loading,
+                    selectedItemId = "dashboard",
+                    menuItems = menuItems,
+                    onProfileClick = {
+                        closeDrawerAndNavigate(onNavigateToProfile)
+                    },
+                    onLogout = {
+                        closeDrawerAndNavigate(onLogout)
+                    }
+                )
+            }
         }
-    ) { paddingValues ->
+    ) {
+        Scaffold(
+            topBar = {
+                DriverDashboardTopBar(
+                    driverName = "Driver",
+                    unreadCount = notificationCount,
+                    onMenuClick = remember(scope, drawerState) { { scope.launch { drawerState.open() } } },
+                    onNotificationsClick = onNavigateToNotifications,
+                    onProfileClick = onNavigateToProfile
+                )
+            }
+        ) { paddingValues ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -107,9 +182,85 @@ fun DriverDashboardScreen(
                 }
             }
         }
-    }
+        } // End Scaffold
+    } // End ModalNavigationDrawer
 }
 
+/**
+ * Driver Dashboard Top Bar with hamburger menu
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DriverDashboardTopBar(
+    driverName: String,
+    unreadCount: Int,
+    onMenuClick: () -> Unit,
+    onNotificationsClick: () -> Unit,
+    onProfileClick: () -> Unit
+) {
+    TopAppBar(
+        title = {
+            Column {
+                Text(
+                    text = "Welcome, ${driverName.split(" ").firstOrNull() ?: "Driver"}!",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Text(
+                    text = getCurrentGreeting(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+            }
+        },
+        navigationIcon = {
+            IconButton(onClick = onMenuClick) {
+                Icon(
+                    imageVector = Icons.Default.Menu,
+                    contentDescription = "Menu",
+                    tint = TextPrimary
+                )
+            }
+        },
+        actions = {
+            // Notifications with badge
+            IconButton(onClick = onNotificationsClick) {
+                Box {
+                    Icon(
+                        imageVector = Icons.Default.Notifications,
+                        contentDescription = "Notifications",
+                        tint = TextPrimary
+                    )
+                    if (unreadCount > 0) {
+                        Badge(
+                            containerColor = Error,
+                            modifier = Modifier.align(Alignment.TopEnd)
+                        ) {
+                            Text(
+                                text = if (unreadCount > 99) "99+" else unreadCount.toString(),
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                }
+            }
+            // Profile
+            IconButton(onClick = onProfileClick) {
+                Icon(
+                    imageVector = Icons.Default.AccountCircle,
+                    contentDescription = "Profile",
+                    tint = TextPrimary
+                )
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = White
+        )
+    )
+}
+
+// Keep old DashboardTopBar for backward compatibility (can be removed later)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DashboardTopBar(
@@ -231,7 +382,11 @@ private fun DashboardContent(
                     )
                 }
             } else {
-                items(data.recentTrips.take(5)) { trip ->
+                // OPTIMIZATION: Add keys to prevent unnecessary recompositions
+                items(
+                    items = data.recentTrips.take(5),
+                    key = { it.tripId }
+                ) { trip ->
                     TripHistoryItem(trip = trip)
                 }
             }
@@ -256,7 +411,11 @@ private fun DashboardContent(
                     )
                 }
             } else {
-                items(data.notifications.take(3)) { notification ->
+                // OPTIMIZATION: Add keys to prevent unnecessary recompositions
+                items(
+                    items = data.notifications.take(3),
+                    key = { it.id }
+                ) { notification ->
                     NotificationItem(
                         notification = notification,
                         onMarkAsRead = { onMarkNotificationAsRead(notification.id) }

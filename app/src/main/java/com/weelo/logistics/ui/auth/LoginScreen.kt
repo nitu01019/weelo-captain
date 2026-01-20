@@ -35,8 +35,13 @@ import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.ClickDebouncer
 import com.weelo.logistics.utils.GlobalRateLimiters
 import com.weelo.logistics.utils.InputValidator
+import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.data.api.SendOTPRequest
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import android.util.Log
 
 /**
  * Modern Login Screen - Redesigned for speed and clarity
@@ -70,11 +75,10 @@ fun LoginScreen(
     val clickDebouncer = remember { ClickDebouncer(500L) }
     val keyboardController = LocalSoftwareKeyboardController.current
     
-    // Navigate after success message is shown
+    // Navigate after success - instant for speed ⚡
     LaunchedEffect(successMessage) {
         successMessage?.let {
-            // Small delay to show success message and complete composition
-            delay(400)
+            delay(100) // Minimal delay for visual feedback
             onNavigateToOTP(phoneNumber, role)
         }
     }
@@ -167,19 +171,38 @@ fun LoginScreen(
                             return@launch
                         }
                         
-                        // Simulate API call
-                        delay(800)
-                        
-                        // BACKEND TODO: Replace with actual API call
-                        // val result = authRepository.sendOTP(phoneNumber, role)
-                        // Mock success
-                        isLoading = false
-                        successMessage = if (role == "DRIVER") {
-                            "OTP sent to your transporter"
-                        } else {
-                            "OTP sent to your phone"
+                        // Make actual API call
+                        try {
+                            // Backend expects 10-digit phone number without country code
+                            val roleForApi = role.lowercase() // Backend expects lowercase: "driver" or "transporter"
+                            
+                            Log.d("LoginScreen", "Sending OTP to: $phoneNumber, role: $roleForApi")
+                            
+                            val response = withContext(Dispatchers.IO) {
+                                RetrofitClient.authApi.sendOTP(
+                                    SendOTPRequest(
+                                        phone = phoneNumber,
+                                        role = roleForApi
+                                    )
+                                )
+                            }
+                            
+                            isLoading = false
+                            
+                            if (response.isSuccessful && response.body()?.success == true) {
+                                // OTP sent successfully
+                                Log.d("LoginScreen", "OTP sent successfully")
+                                successMessage = "OTP sent to your phone"
+                            } else {
+                                val errorBody = response.errorBody()?.string()
+                                Log.e("LoginScreen", "OTP failed: ${response.code()} - $errorBody")
+                                errorMessage = response.body()?.error?.message ?: "Failed to send OTP"
+                            }
+                        } catch (e: Exception) {
+                            isLoading = false
+                            Log.e("LoginScreen", "Send OTP error: ${e.message}", e)
+                            errorMessage = "Network error. Please try again."
                         }
-                        // Navigation happens automatically via LaunchedEffect
                     }
                 },
                 enabled = phoneNumber.length == 10 && !isLoading,

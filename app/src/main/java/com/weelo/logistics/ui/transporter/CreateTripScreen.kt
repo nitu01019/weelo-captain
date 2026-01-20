@@ -20,7 +20,6 @@ import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.ClickDebouncer
 import com.weelo.logistics.utils.InputValidator
 import com.weelo.logistics.utils.DataSanitizer
-import com.weelo.logistics.utils.CreateTripRequest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 

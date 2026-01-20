@@ -1,7 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Main App Theme -->
     <style name="Theme.WeeloLogistics" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">@color/white</item>
         <item name="android:windowLightStatusBar">true</item>
+    </style>
+    
+    <!-- ⚡ Splash Screen Theme - INSTANT like Rapido -->
+    <style name="Theme.WeeloLogistics.Splash" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- Window background shows circle INSTANTLY -->
+        <item name="android:windowBackground">@drawable/splash_full_background</item>
+        <item name="android:statusBarColor">@color/splashBackground</item>
+        <item name="android:navigationBarColor">@color/splashBackground</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

@@ -13,159 +13,291 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.weelo.logistics.data.model.TripStatus
-// MockDataRepository removed - all data from backend only
+import com.weelo.logistics.data.api.VehicleListData
+import com.weelo.logistics.data.api.DriverListData
+import com.weelo.logistics.data.api.UserProfile
+import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 /**
- * Transporter Dashboard Screen - Backend Ready
+ * Transporter Dashboard Screen - Connected to Backend
  * 
- * CURRENT STATE: Shows zero/empty data until backend is connected
+ * Fetches real data from weelo-backend:
+ * - User profile from GET /api/v1/profile
+ * - Vehicle stats from GET /api/v1/vehicles/stats
+ * - Driver stats from GET /api/v1/driver/list
  * 
- * TODO: Connect to backend
- * - Uncomment repository call
- * - Fetch real dashboard data
- * - Handle loading and error states
+ * Features:
+ * - Navigation Drawer with real user profile
+ * - Hamburger menu to open drawer
+ * - Real-time stats from database
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TransporterDashboardScreen(
     onNavigateToFleet: () -> Unit = {},
-    @Suppress("UNUSED_PARAMETER") onNavigateToDrivers: () -> Unit = {},
-    @Suppress("UNUSED_PARAMETER") onNavigateToTrips: () -> Unit = {},
+    onNavigateToDrivers: () -> Unit = {},
+    onNavigateToTrips: () -> Unit = {},
     onNavigateToAddVehicle: () -> Unit = {},
     onNavigateToAddDriver: () -> Unit = {},
-    @Suppress("UNUSED_PARAMETER") onNavigateToCreateTrip: () -> Unit = {},
+    onNavigateToCreateTrip: () -> Unit = {},
+    onNavigateToProfile: () -> Unit = {},
+    onNavigateToBroadcasts: () -> Unit = {},
+    onNavigateToSettings: () -> Unit = {},
     onLogout: () -> Unit = {}
 ) {
-    // Handle back button press - go to role selection
+    // BACK BUTTON DISABLED - User must explicitly logout from drawer
+    // Back press is consumed but does nothing
     androidx.activity.compose.BackHandler {
-        onLogout()
+        // Do nothing - prevents going back to login/role selection
     }
-    // Navigation parameters will be used when dashboard statistics and quick actions are implemented
     
-    // Empty dashboard - no fake data
-    // These will be used when backend API integration is complete
-    @Suppress("UNUSED_VARIABLE")
-    var dashboardData by remember { 
-        mutableStateOf<com.weelo.logistics.data.model.TransporterDashboard?>(null) 
-    }
-    @Suppress("UNUSED_VARIABLE")
-    var isLoading by remember { mutableStateOf(false) }
-    @Suppress("UNUSED_VARIABLE")
+    val scope = rememberCoroutineScope()
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    
+    // Dashboard state
+    var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var vehicleStats by remember { mutableStateOf<VehicleListData?>(null) }
+    var driverStats by remember { mutableStateOf<DriverListData?>(null) }
+    var isBackendConnected by remember { mutableStateOf(false) }
     
-    // TODO: Uncomment when backend is ready
-    // LaunchedEffect(Unit) {
-    //     isLoading = true
-    //     val repository = TransporterRepository()
-    //     val result = repository.getTransporterDashboard(transporterId)
-    //     result.onSuccess { data ->
-    //         dashboardData = data
-    //         isLoading = false
-    //     }.onFailure { error ->
-    //         errorMessage = error.message
-    //         isLoading = false
-    //     }
-    // }
+    // User profile state
+    var userProfile by remember { mutableStateOf<UserProfile?>(null) }
+    var isProfileLoading by remember { mutableStateOf(true) }
     
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Surface)
-    ) {
-        // Top Bar with Role Switcher placeholder
-        SimpleTopBar(
-            title = "Dashboard",
-            actions = {
-                IconButton(onClick = { /* TODO: Navigate to notifications */ }) {
-                    Icon(
-                        imageVector = Icons.Default.Notifications,
-                        contentDescription = "Notifications",
-                        tint = TextPrimary
-                    )
-                }
-            }
-        )
+    // OPTIMIZATION: Fetch all data in parallel for faster loading
+    LaunchedEffect(Unit) {
+        isLoading = true
+        isProfileLoading = true
+        errorMessage = null
         
-        // Show backend not connected message or empty dashboard
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+        // Launch all API calls in parallel using async
+        coroutineScope {
+            val profileDeferred = async(Dispatchers.IO) {
+                try { RetrofitClient.profileApi.getProfile() } catch (e: Exception) { null }
+            }
+            val vehicleDeferred = async(Dispatchers.IO) {
+                try { RetrofitClient.vehicleApi.getVehicles() } catch (e: Exception) { null }
+            }
+            val driverDeferred = async(Dispatchers.IO) {
+                try { RetrofitClient.driverApi.getDriverList() } catch (e: Exception) { null }
+            }
+            
+            // Process profile immediately when ready
+            val profileResponse = profileDeferred.await()
+            if (profileResponse?.isSuccessful == true && profileResponse.body()?.success == true) {
+                userProfile = profileResponse.body()?.data?.user
+            }
+            isProfileLoading = false
+            
+            // Process other responses
+            val vehicleResponse = vehicleDeferred.await()
+            android.util.Log.d("Dashboard", "Vehicle API response: ${vehicleResponse?.code()} - ${vehicleResponse?.body()}")
+            if (vehicleResponse?.isSuccessful == true && vehicleResponse.body()?.success == true) {
+                vehicleStats = vehicleResponse.body()?.data
+                android.util.Log.d("Dashboard", "Vehicle stats loaded: total=${vehicleStats?.total}")
+                isBackendConnected = true
+            } else {
+                android.util.Log.e("Dashboard", "Vehicle API failed: ${vehicleResponse?.errorBody()?.string()}")
+            }
+            
+            val driverResponse = driverDeferred.await()
+            if (driverResponse?.isSuccessful == true && driverResponse.body()?.success == true) {
+                driverStats = driverResponse.body()?.data
+                isBackendConnected = true
+            }
+            
+            if (profileResponse == null && vehicleResponse == null && driverResponse == null) {
+                errorMessage = "Cannot connect to backend"
+                isBackendConnected = false
+            }
+        }
+        
+        isLoading = false
+    }
+    
+    // Convert UserProfile to DrawerUserProfile
+    val drawerProfile = userProfile?.let {
+        DrawerUserProfile(
+            id = it.id,
+            phone = it.phone,
+            name = it.name ?: "",
+            role = it.role,
+            email = it.email,
+            businessName = it.getBusinessDisplayName(),
+            isVerified = it.isVerified
+        )
+    }
+    
+    // Navigation drawer menu items
+    val menuItems = createTransporterMenuItems(
+        onDashboard = { scope.launch { drawerState.close() } },
+        onFleet = { 
+            scope.launch { drawerState.close() }
+            onNavigateToFleet()
+        },
+        onDrivers = { 
+            scope.launch { drawerState.close() }
+            onNavigateToDrivers()
+        },
+        onTrips = { 
+            scope.launch { drawerState.close() }
+            onNavigateToTrips()
+        },
+        onBroadcasts = { 
+            scope.launch { drawerState.close() }
+            onNavigateToBroadcasts()
+        },
+        onSettings = { 
+            scope.launch { drawerState.close() }
+            onNavigateToSettings()
+        }
+    )
+    
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                modifier = Modifier.width(300.dp)
+            ) {
+                // Use the NavigationDrawer components
+                DrawerContentInternal(
+                    userProfile = drawerProfile,
+                    isLoading = isProfileLoading,
+                    selectedItemId = "dashboard",
+                    menuItems = menuItems,
+                    onProfileClick = {
+                        scope.launch { drawerState.close() }
+                        onNavigateToProfile()
+                    },
+                    onLogout = {
+                        scope.launch { drawerState.close() }
+                        // Clear tokens and logout
+                        RetrofitClient.clearAllData()
+                        onLogout()
+                    }
+                )
+            }
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Surface)
         ) {
-                // Statistics Cards
-                item {
+            // Top Bar with Hamburger Menu
+            TopAppBar(
+                title = {
                     Text(
-                        text = "Overview",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
+                        text = "Dashboard",
+                        fontWeight = FontWeight.SemiBold
                     )
+                },
+                navigationIcon = {
+                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        Icon(
+                            imageVector = Icons.Default.Menu,
+                            contentDescription = "Menu",
+                            tint = TextPrimary
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { /* TODO: Navigate to notifications */ }) {
+                        Icon(
+                            imageVector = Icons.Default.Notifications,
+                            contentDescription = "Notifications",
+                            tint = TextPrimary
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = androidx.compose.ui.graphics.Color.White
+                )
+            )
+            
+            // Show loading indicator
+            if (isLoading) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = Primary)
                 }
-                
-                item {
-                    LazyRow(
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Welcome Message with User Name
+                    userProfile?.let { profile ->
+                        Text(
+                            text = "Welcome, ${profile.name?.split(" ")?.firstOrNull() ?: "Transporter"}!",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                    }
+                    
+                    // Statistics - Total Vehicles & Total Drivers
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        item {
-                            Card(
-                                modifier = Modifier.width(150.dp),
-                                onClick = onNavigateToFleet,
-                                elevation = CardDefaults.cardElevation(Elevation.low),
-                                shape = androidx.compose.foundation.shape.RoundedCornerShape(BorderRadius.medium)
-                            ) {
-                                InfoCard(
-                                    icon = Icons.Default.DirectionsCar,
-                                    title = "Total Vehicles",
-                                    value = "0",
-                                    modifier = Modifier.width(150.dp)
-                                )
-                            }
-                        }
-                        item {
-                            InfoCard(
-                                icon = Icons.Default.Person,
-                                title = "Active Drivers",
-                                value = "0",
-                                modifier = Modifier.width(150.dp),
-                                iconTint = Secondary
-                            )
-                        }
-                        item {
+                        // Total Vehicles Card - Animated counter (1,2,3...N)
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            onClick = onNavigateToFleet,
+                            elevation = CardDefaults.cardElevation(Elevation.low),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(BorderRadius.medium)
+                        ) {
                             InfoCard(
                                 icon = Icons.Default.LocalShipping,
-                                title = "Active Trips",
-                                value = "0",
-                                modifier = Modifier.width(150.dp),
-                                iconTint = Info
+                                title = "Total Vehicles",
+                                value = "${vehicleStats?.total ?: 0}",
+                                modifier = Modifier.fillMaxWidth(),
+                                animateValue = true,
+                                targetCount = vehicleStats?.total ?: 0
                             )
                         }
-                        item {
+                        
+                        // Total Drivers Card - Animated counter (1,2,3...N)
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            onClick = onNavigateToDrivers,
+                            elevation = CardDefaults.cardElevation(Elevation.low),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(BorderRadius.medium)
+                        ) {
                             InfoCard(
-                                icon = Icons.Default.AccountBalance,
-                                title = "Today's Revenue",
-                                value = "₹0",
-                                modifier = Modifier.width(150.dp),
-                                iconTint = Success
+                                icon = Icons.Default.People,
+                                title = "Total Drivers",
+                                value = "${driverStats?.total ?: 0}",
+                                modifier = Modifier.fillMaxWidth(),
+                                iconTint = Secondary,
+                                animateValue = true,
+                                targetCount = driverStats?.total ?: 0
                             )
                         }
                     }
-                }
-                
-                // Quick Actions
-                item {
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    // Quick Actions - Add Vehicle & Add Driver
                     Text(
                         text = "Quick Actions",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary,
-                        modifier = Modifier.padding(top = 8.dp)
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary
                     )
-                }
-                
-                item {
+                    
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -184,25 +316,7 @@ fun TransporterDashboardScreen(
                         )
                     }
                 }
-                
-                // Recent Trips
-                item {
-                    Text(
-                        text = "Recent Trips",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                }
-                
-                // Always show empty state until backend is connected
-                item {
-                    EmptyStateCard(
-                        icon = Icons.Default.CloudOff,
-                        message = "Backend not connected. Connect backend to see real data."
-                    )
-                }
+            }
         }
     }
 }
@@ -261,19 +375,19 @@ fun TripListItem(trip: com.weelo.logistics.data.model.Trip) {
             Column(horizontalAlignment = Alignment.End) {
                 StatusChip(
                     text = when (trip.status) {
-                        TripStatus.PENDING -> "Pending"
-                        TripStatus.ASSIGNED -> "Assigned"
-                        TripStatus.ACCEPTED -> "Accepted"
-                        TripStatus.IN_PROGRESS -> "In Progress"
-                        TripStatus.COMPLETED -> "Completed"
-                        TripStatus.REJECTED -> "Rejected"
-                        TripStatus.CANCELLED -> "Cancelled"
+                        com.weelo.logistics.data.model.TripStatus.PENDING -> "Pending"
+                        com.weelo.logistics.data.model.TripStatus.ASSIGNED -> "Assigned"
+                        com.weelo.logistics.data.model.TripStatus.ACCEPTED -> "Accepted"
+                        com.weelo.logistics.data.model.TripStatus.IN_PROGRESS -> "In Progress"
+                        com.weelo.logistics.data.model.TripStatus.COMPLETED -> "Completed"
+                        com.weelo.logistics.data.model.TripStatus.REJECTED -> "Rejected"
+                        com.weelo.logistics.data.model.TripStatus.CANCELLED -> "Cancelled"
                     },
                     status = when (trip.status) {
-                        TripStatus.PENDING -> ChipStatus.PENDING
-                        TripStatus.IN_PROGRESS -> ChipStatus.IN_PROGRESS
-                        TripStatus.COMPLETED -> ChipStatus.COMPLETED
-                        TripStatus.CANCELLED -> ChipStatus.CANCELLED
+                        com.weelo.logistics.data.model.TripStatus.PENDING -> ChipStatus.PENDING
+                        com.weelo.logistics.data.model.TripStatus.IN_PROGRESS -> ChipStatus.IN_PROGRESS
+                        com.weelo.logistics.data.model.TripStatus.COMPLETED -> ChipStatus.COMPLETED
+                        com.weelo.logistics.data.model.TripStatus.CANCELLED -> ChipStatus.CANCELLED
                         else -> ChipStatus.AVAILABLE
                     }
                 )

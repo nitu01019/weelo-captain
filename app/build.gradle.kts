@@ -2,6 +2,8 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization") version "1.9.22"
+    // Firebase
+    id("com.google.gms.google-services")
     // Hilt temporarily disabled for build
     // id("com.google.dagger.hilt.android") version "2.48"
     // kotlin("kapt")
@@ -25,12 +27,33 @@ android {
     }
 
     buildTypes {
-        release {
+        debug {
+            // Debug build - development settings
             isMinifyEnabled = false
+            isDebuggable = true
+            
+            // Debug suffix for package name (allows both debug and release on same device)
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
+        
+        release {
+            // =================================================================
+            // RELEASE BUILD - PRODUCTION SECURITY SETTINGS
+            // =================================================================
+            // SECURITY: Enable code shrinking and obfuscation
+            // This makes reverse engineering much harder
+            isMinifyEnabled = true
+            isShrinkResources = true
+            isDebuggable = false
+            
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            
+            // TODO: Add signing config for release
+            // signingConfig = signingConfigs.getByName("release")
         }
     }
     
@@ -69,6 +92,9 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
     implementation("androidx.activity:activity-compose:1.8.2")
+    
+    // ⚡ Splash Screen API - Eliminates cold start white screen
+    implementation("androidx.core:core-splashscreen:1.0.1")
     
     // Compose
     implementation(platform("androidx.compose:compose-bom:2023.10.01"))
@@ -121,10 +147,22 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    
+    // Image loading with caching - OPTIMIZATION
+    implementation("io.coil-kt:coil-compose:2.5.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    
+    // Socket.IO for real-time communication
+    implementation("io.socket:socket.io-client:2.1.0") {
+        exclude(group = "org.json", module = "json")
+    }
+    
+    // Firebase for Push Notifications
+    implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
+    implementation("com.google.firebase:firebase-messaging-ktx")
     
     // Testing
     testImplementation("junit:junit:4.13.2")

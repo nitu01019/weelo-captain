@@ -167,7 +167,11 @@ fun DriverTripNotificationScreen(
                         }
                     }
                     
-                    items(pendingNotifications) { notification ->
+                    // OPTIMIZATION: Add keys to prevent unnecessary recompositions
+                    items(
+                        items = pendingNotifications,
+                        key = { it.notificationId }
+                    ) { notification ->
                         TripNotificationCard(
                             notification = notification,
                             onClick = { onNavigateToTripDetails(notification.notificationId) }
@@ -188,7 +192,11 @@ fun DriverTripNotificationScreen(
                         )
                     }
                     
-                    items(readNotifications) { notification ->
+                    // OPTIMIZATION: Add keys to prevent unnecessary recompositions
+                    items(
+                        items = readNotifications,
+                        key = { it.notificationId }
+                    ) { notification ->
                         TripNotificationCard(
                             notification = notification,
                             onClick = { onNavigateToTripDetails(notification.notificationId) }

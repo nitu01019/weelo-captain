@@ -12,15 +12,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.weelo.logistics.data.model.Driver
-import com.weelo.logistics.data.model.DriverStatus
-import com.weelo.logistics.data.repository.MockDataRepository
+import com.weelo.logistics.data.api.DriverData
+import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.SearchDebouncer
 import com.weelo.logistics.utils.DataSanitizer
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
+/**
+ * DriverListScreen - Shows all drivers from backend database
+ * 
+ * Fetches real data from: GET /api/v1/driver/list
+ * No mock data - only real drivers saved in database
+ */
 @Composable
 fun DriverListScreen(
     onNavigateBack: () -> Unit,
@@ -28,12 +35,15 @@ fun DriverListScreen(
     onNavigateToDriverDetails: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
-    val repository = remember { MockDataRepository() }
-    var drivers by remember { mutableStateOf<List<Driver>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
+    var drivers by remember { mutableStateOf<List<DriverData>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var debouncedSearchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("All") }
+    var totalDrivers by remember { mutableStateOf(0) }
+    var availableDrivers by remember { mutableStateOf(0) }
+    var onTripDrivers by remember { mutableStateOf(0) }
     
     val searchDebouncer = remember {
         SearchDebouncer<String>(500L, scope) { query ->
@@ -41,31 +51,57 @@ fun DriverListScreen(
         }
     }
     
+    // Fetch drivers from backend
     LaunchedEffect(Unit) {
         scope.launch {
-            repository.getDrivers("t1").onSuccess { driverList ->
-                drivers = driverList
+            isLoading = true
+            errorMessage = null
+            
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.driverApi.getDriverList()
+                }
+                
+                if (response.isSuccessful && response.body()?.success == true) {
+                    val data = response.body()?.data
+                    drivers = data?.drivers ?: emptyList()
+                    totalDrivers = data?.total ?: 0
+                    availableDrivers = data?.online ?: 0
+                    // onTrip count will be calculated from drivers list
+                    onTripDrivers = drivers.count { it.isOnTrip }
+                } else {
+                    errorMessage = response.body()?.error?.message ?: "Failed to load drivers"
+                }
+            } catch (e: Exception) {
+                errorMessage = "Network error: ${e.message}"
+            } finally {
                 isLoading = false
             }
         }
     }
     
-    val filteredDrivers = drivers.filter { driver ->
-        val matchesSearch = driver.name.contains(debouncedSearchQuery, ignoreCase = true) ||
-                driver.mobileNumber.contains(debouncedSearchQuery)
-        val matchesFilter = when (selectedFilter) {
-            "Available" -> driver.status == DriverStatus.ACTIVE && driver.isAvailable
-            "On Trip" -> driver.status == DriverStatus.ON_TRIP
-            "Inactive" -> driver.status == DriverStatus.INACTIVE
-            else -> true
+    // OPTIMIZATION: Use derivedStateOf to prevent unnecessary recomposition
+    // Only recalculates when drivers, debouncedSearchQuery, or selectedFilter changes
+    val filteredDrivers by remember(drivers, debouncedSearchQuery, selectedFilter) {
+        derivedStateOf {
+            drivers.filter { driver ->
+                val matchesSearch = (driver.name ?: "").contains(debouncedSearchQuery, ignoreCase = true) ||
+                        driver.phone.contains(debouncedSearchQuery)
+                val matchesFilter = when (selectedFilter) {
+                    "Available" -> driver.isOnline && !driver.isOnTrip
+                    "On Trip" -> driver.isOnTrip
+                    "Offline" -> !driver.isOnline
+                    else -> true
+                }
+                matchesSearch && matchesFilter
+            }
         }
-        matchesSearch && matchesFilter
     }
     
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize().background(Surface)) {
             PrimaryTopBar(
-                title = "Drivers (${drivers.size})",
+                title = "Drivers ($totalDrivers)",
                 onBackClick = onNavigateBack
             )
             
@@ -76,7 +112,7 @@ fun DriverListScreen(
                         searchQuery = it.trim()
                         searchDebouncer.search(it.trim())
                     },
-                    placeholder = "Search by name or mobile",
+                    placeholder = "Search by name or phone",
                     leadingIcon = Icons.Default.Search
                 )
                 Spacer(Modifier.height(12.dp))
@@ -99,12 +135,35 @@ fun DriverListScreen(
                         onClick = { selectedFilter = "On Trip" },
                         label = { Text("On Trip") }
                     )
+                    FilterChip(
+                        selected = selectedFilter == "Offline",
+                        onClick = { selectedFilter = "Offline" },
+                        label = { Text("Offline") }
+                    )
                 }
             }
             
             if (isLoading) {
+                // OPTIMIZATION: Skeleton loading for better perceived performance
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    SkeletonList(itemCount = 5)
+                }
+            } else if (errorMessage != null) {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    CircularProgressIndicator(color = Primary)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
+                        Icon(Icons.Default.CloudOff, null, Modifier.size(64.dp), tint = TextDisabled)
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            errorMessage ?: "Error loading drivers",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = TextSecondary
+                        )
+                    }
                 }
             } else if (filteredDrivers.isEmpty()) {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
@@ -112,7 +171,12 @@ fun DriverListScreen(
                         Icon(Icons.Default.Person, null, Modifier.size(64.dp), tint = TextDisabled)
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            if (searchQuery.isEmpty()) "No drivers yet" else "No drivers found",
+                            if (searchQuery.isEmpty() && drivers.isEmpty()) 
+                                "No drivers yet\nTap + to add your first driver" 
+                            else if (searchQuery.isEmpty()) 
+                                "No drivers match filter"
+                            else 
+                                "No drivers found",
                             style = MaterialTheme.typography.bodyLarge,
                             color = TextSecondary
                         )
@@ -124,8 +188,8 @@ fun DriverListScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(filteredDrivers) { driver ->
-                        DriverCard(driver) { onNavigateToDriverDetails(driver.id) }
+                    items(filteredDrivers, key = { it.id }) { driver ->
+                        DriverCardFromApi(driver) { onNavigateToDriverDetails(driver.id) }
                     }
                 }
             }
@@ -141,8 +205,11 @@ fun DriverListScreen(
     }
 }
 
+/**
+ * DriverCard for API data - displays driver from backend
+ */
 @Composable
-fun DriverCard(driver: Driver, onClick: () -> Unit) {
+fun DriverCardFromApi(driver: DriverData, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick,
@@ -151,41 +218,69 @@ fun DriverCard(driver: Driver, onClick: () -> Unit) {
         colors = CardDefaults.cardColors(White)
     ) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Driver Avatar
             Box(
                 Modifier.size(56.dp).background(Surface, androidx.compose.foundation.shape.CircleShape),
                 Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.Person,
-                    contentDescription = "Driver",
-                    modifier = Modifier.size(40.dp),
-                    tint = Primary
+                val initial = (driver.name?.firstOrNull() ?: driver.phone.lastOrNull() ?: 'D').uppercase()
+                Text(
+                    text = initial.toString(),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = Primary
                 )
             }
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
-                Text(DataSanitizer.sanitizeForDisplay(driver.name), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    text = driver.name ?: "Driver",
+                    style = MaterialTheme.typography.titleMedium, 
+                    fontWeight = FontWeight.Bold
+                )
                 Spacer(Modifier.height(4.dp))
-                Text(driver.mobileNumber, style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+                Text(
+                    text = "+91 ${driver.phone}",
+                    style = MaterialTheme.typography.bodyMedium, 
+                    color = TextSecondary
+                )
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("⭐ ${String.format("%.1f", driver.rating)}", style = MaterialTheme.typography.bodySmall)
+                    // Show rating if available, else show 0
+                    Text(
+                        text = "⭐ ${String.format("%.1f", driver.rating ?: 0f)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     Spacer(Modifier.width(8.dp))
-                    Text("${driver.totalTrips} trips", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    // Show total trips (0 for new drivers)
+                    Text(
+                        text = "${driver.totalTrips} trips",
+                        style = MaterialTheme.typography.bodySmall, 
+                        color = TextSecondary
+                    )
+                }
+                // Show license number if available
+                driver.licenseNumber?.let { license ->
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "License: $license",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
                 }
             }
             Spacer(Modifier.width(12.dp))
+            // Status chip based on online/trip status
             StatusChip(
-                text = when (driver.status) {
-                    DriverStatus.ACTIVE -> if (driver.isAvailable) "Available" else "Offline"
-                    DriverStatus.ON_TRIP -> "On Trip"
-                    DriverStatus.INACTIVE -> "Inactive"
-                    DriverStatus.SUSPENDED -> "Suspended"
+                text = when {
+                    driver.isOnTrip -> "On Trip"
+                    driver.isOnline -> "Available"
+                    else -> "Offline"
                 },
-                status = when (driver.status) {
-                    DriverStatus.ACTIVE -> if (driver.isAvailable) ChipStatus.AVAILABLE else ChipStatus.COMPLETED
-                    DriverStatus.ON_TRIP -> ChipStatus.IN_PROGRESS
-                    else -> ChipStatus.CANCELLED
+                status = when {
+                    driver.isOnTrip -> ChipStatus.IN_PROGRESS
+                    driver.isOnline -> ChipStatus.AVAILABLE
+                    else -> ChipStatus.COMPLETED
                 }
             )
         }

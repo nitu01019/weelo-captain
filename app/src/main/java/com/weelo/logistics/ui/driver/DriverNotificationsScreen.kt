@@ -100,7 +100,11 @@ fun DriverNotificationsScreen(@Suppress("UNUSED_PARAMETER")
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(filteredNotifications) { notification ->
+                // OPTIMIZATION: Add keys to prevent unnecessary recompositions
+                items(
+                    items = filteredNotifications,
+                    key = { it.id }
+                ) { notification ->
                     NotificationCard(
                         notification = notification,
                         onClick = {

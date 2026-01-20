@@ -10,42 +10,31 @@ import com.weelo.logistics.ui.auth.*
 /**
  * Main Navigation component
  * Sets up the navigation graph for the entire app
+ * 
+ * @param isLoggedIn - from SplashActivity, true if user has valid token
+ * @param userRole - from SplashActivity, the user's role (TRANSPORTER/DRIVER)
  */
 @Composable
 fun WeeloNavigation(
-    navController: NavHostController = rememberNavController()
+    navController: NavHostController = rememberNavController(),
+    isLoggedIn: Boolean = false,
+    userRole: String? = null
 ) {
+    // Determine start destination based on login status
+    val startDestination = if (isLoggedIn && userRole != null) {
+        if (userRole.uppercase() == "TRANSPORTER") {
+            Screen.TransporterDashboard.route
+        } else {
+            Screen.DriverDashboard.route
+        }
+    } else {
+        Screen.RoleSelection.route
+    }
+    
     NavHost(
         navController = navController,
-        startDestination = Screen.Splash.route
+        startDestination = startDestination
     ) {
-        // Welcome & Auth Flow
-        composable(Screen.Splash.route) {
-            SplashScreen(
-                onNavigateToOnboarding = {
-                    // Onboarding removed - navigate directly to role selection
-                    navController.navigate(Screen.RoleSelection.route) {
-                        popUpTo(Screen.Splash.route) { inclusive = true }
-                    }
-                },
-                onNavigateToLogin = {
-                    // Skip onboarding - go directly to role selection
-                    navController.navigate(Screen.RoleSelection.route) {
-                        popUpTo(Screen.Splash.route) { inclusive = true }
-                    }
-                },
-                onNavigateToDashboard = { role ->
-                    val destination = if (role == "TRANSPORTER") {
-                        Screen.TransporterDashboard.route
-                    } else {
-                        Screen.DriverDashboard.route
-                    }
-                    navController.navigate(destination) {
-                        popUpTo(Screen.Splash.route) { inclusive = true }
-                    }
-                }
-            )
-        }
 
         // Onboarding screen removed - users go directly to role selection after splash
         
@@ -134,12 +123,23 @@ fun WeeloNavigation(
                 onNavigateToAddVehicle = { navController.navigate(Screen.AddVehicle.route) },
                 onNavigateToAddDriver = { navController.navigate(Screen.AddDriver.route) },
                 onNavigateToCreateTrip = { navController.navigate(Screen.CreateTrip.route) },
+                onNavigateToProfile = { navController.navigate("transporter_profile") },
+                onNavigateToBroadcasts = { navController.navigate(Screen.BroadcastList.route) },
+                onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                 onLogout = {
                     // Back button or logout goes to role selection
                     navController.navigate(Screen.RoleSelection.route) {
                         popUpTo(Screen.Splash.route) { inclusive = true }
                     }
                 }
+            )
+        }
+        
+        // Transporter Profile Screen
+        composable("transporter_profile") {
+            com.weelo.logistics.ui.transporter.TransporterProfileScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onProfileUpdated = { /* Refresh will happen automatically */ }
             )
         }
         
@@ -240,14 +240,24 @@ fun WeeloNavigation(
             com.weelo.logistics.ui.driver.DriverDashboardScreen(
                 onNavigateToNotifications = { /* TODO: Implement */ },
                 onNavigateToTripHistory = { /* TODO: Implement */ },
-                onNavigateToProfile = { /* TODO: Implement */ },
+                onNavigateToProfile = { navController.navigate("driver_profile") },
                 onOpenFullMap = { tripId -> /* TODO: Implement */ },
                 onLogout = {
+                    // Clear tokens and logout
+                    com.weelo.logistics.data.remote.RetrofitClient.clearAllData()
                     // Back button or logout goes to role selection
                     navController.navigate(Screen.RoleSelection.route) {
                         popUpTo(Screen.Splash.route) { inclusive = true }
                     }
                 }
+            )
+        }
+        
+        // Driver Profile Screen
+        composable("driver_profile") {
+            com.weelo.logistics.ui.driver.DriverProfileScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onProfileUpdated = { /* Refresh will happen automatically */ }
             )
         }
         

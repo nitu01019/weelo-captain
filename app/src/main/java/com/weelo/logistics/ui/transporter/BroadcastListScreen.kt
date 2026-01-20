@@ -167,7 +167,11 @@ fun BroadcastListScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(filteredBroadcasts) { broadcast ->
+                // OPTIMIZATION: Add keys to prevent unnecessary recompositions
+                items(
+                    items = filteredBroadcasts,
+                    key = { it.broadcastId }
+                ) { broadcast ->
                     BroadcastCard(
                         broadcast = broadcast,
                         onClick = { onNavigateToBroadcastDetails(broadcast.broadcastId) }

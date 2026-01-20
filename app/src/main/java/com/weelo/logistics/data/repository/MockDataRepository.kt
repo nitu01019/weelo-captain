@@ -285,9 +285,9 @@ class MockDataRepository {
             todayDistance = completedTrips.sumOf { it.distance },
             weekEarnings = completedTrips.sumOf { it.fare } * 5, // Mock weekly data
             monthEarnings = completedTrips.sumOf { it.fare } * 20, // Mock monthly data
-            rating = driver?.rating ?: 0f,
+            rating = (driver?.rating ?: 0f).toDouble(),
             totalTrips = driver?.totalTrips ?: 0,
-            pendingTrips = pendingTrips
+            pendingTrips = pendingTrips.size
         )
         
         return Result.success(dashboard)

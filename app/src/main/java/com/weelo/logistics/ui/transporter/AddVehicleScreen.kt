@@ -17,9 +17,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Agriculture
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Construction
+import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Scale
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -334,9 +337,13 @@ fun RowScope.StepLine(isActive: Boolean) {
 
 @Composable
 fun SelectVehicleTypeStep(onVehicleTypeSelected: (VehicleType) -> Unit) {
+    // OPTIMIZATION: Cache vehicle types list - never changes
     val vehicleTypes = remember { VehicleTypeCatalog.getAllVehicleTypes() }
     var showComingSoonDialog by remember { mutableStateOf(false) }
     var selectedTypeName by remember { mutableStateOf("") }
+    
+    // OPTIMIZATION: Stable lambda references to prevent recomposition
+    val onDismissDialog = remember { { showComingSoonDialog = false } }
     
     Column(
         modifier = Modifier
@@ -384,11 +391,11 @@ fun SelectVehicleTypeStep(onVehicleTypeSelected: (VehicleType) -> Unit) {
     // Coming Soon Dialog
     if (showComingSoonDialog) {
         AlertDialog(
-            onDismissRequest = { showComingSoonDialog = false },
+            onDismissRequest = onDismissDialog,
             title = { Text("Coming Soon") },
             text = { Text("$selectedTypeName onboarding is coming soon! Currently, only Truck is available.") },
             confirmButton = {
-                TextButton(onClick = { showComingSoonDialog = false }) {
+                TextButton(onClick = onDismissDialog) {
                     Text("OK")
                 }
             }
@@ -398,15 +405,36 @@ fun SelectVehicleTypeStep(onVehicleTypeSelected: (VehicleType) -> Unit) {
 
 @Composable
 fun VehicleTypeCard(vehicleType: VehicleType, onClick: () -> Unit) {
+    // Get the appropriate icon based on vehicle type
+    val icon = when (vehicleType.iconName) {
+        "truck" -> Icons.Default.LocalShipping
+        "tractor" -> Icons.Default.Agriculture
+        "jcb" -> Icons.Default.Construction
+        "tempo" -> Icons.Default.LocalShipping
+        else -> Icons.Default.LocalShipping
+    }
+    
+    // Icon colors
+    val iconColor = when (vehicleType.iconName) {
+        "truck" -> Primary
+        "tractor" -> Color(0xFF4CAF50) // Green for agriculture
+        "jcb" -> Color(0xFFFF9800) // Orange for construction
+        "tempo" -> Color(0xFF2196F3) // Blue for tempo
+        else -> Primary
+    }
+    
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(1f),
         onClick = onClick,
-        elevation = CardDefaults.cardElevation(2.dp),
-        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(4.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (vehicleType.isAvailable) White else androidx.compose.ui.graphics.Color(0xFFF5F5F5)
+            containerColor = if (vehicleType.isAvailable) 
+                White
+            else 
+                Color(0xFFF5F5F5) // Gray for coming soon
         )
     ) {
         Box(
@@ -418,17 +446,36 @@ fun VehicleTypeCard(vehicleType: VehicleType, onClick: () -> Unit) {
                 verticalArrangement = Arrangement.Center,
                 modifier = Modifier.padding(16.dp)
             ) {
-                Text(
-                    text = vehicleType.icon,
-                    fontSize = 64.sp
-                )
-                Spacer(modifier = Modifier.height(12.dp))
+                // Icon with background circle
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .background(
+                            color = if (vehicleType.isAvailable) 
+                                iconColor.copy(alpha = 0.1f) 
+                            else 
+                                Color.Gray.copy(alpha = 0.1f),
+                            shape = androidx.compose.foundation.shape.CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = vehicleType.name,
+                        modifier = Modifier.size(48.dp),
+                        tint = if (vehicleType.isAvailable) iconColor else Color.Gray
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
                 Text(
                     text = vehicleType.name,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = if (vehicleType.isAvailable) TextPrimary else TextSecondary
                 )
+                
                 if (!vehicleType.isAvailable) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
@@ -1053,166 +1100,8 @@ fun SubtypeCounterItem(
     }
 }
 
-@Composable
-fun EnterDetailsStep(
-    category: TruckCategory,
-    selectedSubtypes: Map<TruckSubtype, Int>,
-    onBack: () -> Unit,
-    onAllVehiclesAdded: () -> Unit
-) {
-    // Flatten selection map to a list of subtypes (e.g., [19ft, 19ft, 20ft])
-    val vehiclesToDo = remember(selectedSubtypes) {
-        val list = mutableListOf<TruckSubtype>()
-        selectedSubtypes.forEach { (subtype, count) ->
-            repeat(count) { list.add(subtype) }
-        }
-        list
-    }
-    
-    // Track current index in the list
-    var currentIndex by remember { mutableStateOf(0) }
-    
-    // Store collected details: Map<Index, VehicleData>
-    // Just minimal data needed: Number, Model, Year
-    data class PartialVehicleData(val number: String, val model: String, val year: String)
-    val collectedData = remember { mutableStateMapOf<Int, PartialVehicleData>() }
-    
-    val currentSubtype = vehiclesToDo.getOrNull(currentIndex)
-    
-    if (currentSubtype == null) {
-        // Should not happen if map was not empty
-        onBack()
-        return
-    }
-    
-    // Form State for CURRENT vehicle
-    // Initialize with existing data if we are going back/forth (optional, currently resetting on next)
-    // To persist data when going 'Back' within step 3, we would read from collectedData.
-    var vehicleNumber by remember(currentIndex) { mutableStateOf(collectedData[currentIndex]?.number ?: "") }
-    var model by remember(currentIndex) { mutableStateOf(collectedData[currentIndex]?.model ?: "") }
-    var year by remember(currentIndex) { mutableStateOf(collectedData[currentIndex]?.year ?: "") }
-    var errorMessage by remember(currentIndex) { mutableStateOf("") }
-    
-    var isSubmitting by remember { mutableStateOf(false) }
-    
-    val scope = rememberCoroutineScope()
-    val repository = remember { MockDataRepository() }
-    // TODO: Connect to real repository from backend
-    
-    // Progress Label
-    val totalVehicles = vehiclesToDo.size
-    val currentNumber = currentIndex + 1
-    
-    BackHandler {
-        if (currentIndex > 0) {
-            currentIndex -= 1
-        } else {
-            onBack()
-        }
-    }
-    
-    Column(
-        modifier = Modifier.fillMaxSize()
-    ) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-        ) {
-            Text(
-                text = "Vehicle Details ($currentNumber of $totalVehicles)",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "${category.name} - ${currentSubtype.name}",
-                style = MaterialTheme.typography.bodyLarge,
-                color = TextSecondary
-            )
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            PrimaryTextField(
-                value = vehicleNumber,
-                onValueChange = {
-                    vehicleNumber = it.uppercase()
-                    errorMessage = ""
-                },
-                label = "Vehicle Number * *",
-                placeholder = "GJ-01-AB-1234",
-                isError = errorMessage.isNotEmpty(),
-                errorMessage = errorMessage
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            PrimaryTextField(
-                value = model,
-                onValueChange = { model = it.trim() },
-                label = "Model (Optional) *",
-                placeholder = "Tata, Mahindra, Ashok Leyland, etc."
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            PrimaryTextField(
-                value = year,
-                onValueChange = { if (it.length <= 4) year = it },
-                label = "Year (Optional) *",
-                placeholder = "2023",
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-            )
-        }
-        
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            val isLast = currentNumber == totalVehicles
-            val buttonText = if (isLast) "Submit All Vehicles" else "Next Vehicle"
-            
-            PrimaryButton(
-                text = buttonText,
-                onClick = {
-                    when {
-                        vehicleNumber.isEmpty() -> errorMessage = "Please enter vehicle number"
-                        !vehicleNumber.matches(Regex("[A-Z]{2}-\\d{2}-[A-Z]{2}-\\d{4}")) -> 
-                            errorMessage = "Invalid format. Use: GJ-01-AB-1234"
-                        else -> {
-                            // Save current data
-                            collectedData[currentIndex] = PartialVehicleData(vehicleNumber, model, year)
-                            
-                            if (isLast) {
-                                // Submit EVERYTHING
-                                isSubmitting = true
-                                scope.launch {
-                                    // Iterate and save all
-                                    collectedData.forEach { (index, data) ->
-                                        val subtype = vehiclesToDo[index]
-                                        val vehicle = Vehicle(
-                                            id = "v_${System.currentTimeMillis()}_$index",
-                                            transporterId = "t1",
-                                            category = category,
-                                            subtype = subtype,
-                                            vehicleNumber = data.number,
-                                            model = data.model.takeIf { it.isNotEmpty() },
-                                            year = data.year.toIntOrNull(),
-                                            status = VehicleStatus.AVAILABLE
-                                        )
-                                        repository.addVehicle(vehicle)
-                                    }
-                                    onAllVehiclesAdded()
-                                }
-                            } else {
-                                // Go to next
-                                currentIndex += 1
-                            }
-                        }
-                    }
-                },
-                isLoading = isSubmitting,
-                enabled = !isSubmitting
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-        }
-    }
-}
+// =============================================================================
+// NOTE: EnterDetailsStep was removed - replaced by VehicleDataEntryScreen
+// which provides better UX with backend integration, batch saving, and
+// proper hierarchical data structure.
+// =============================================================================

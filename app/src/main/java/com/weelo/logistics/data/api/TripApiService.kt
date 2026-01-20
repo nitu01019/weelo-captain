@@ -295,3 +295,10 @@ data class RouteStep(
     val distance: Double,
     val duration: Int
 )
+
+// Generic response for simple success/error responses
+data class GenericResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val error: String? = null
+)

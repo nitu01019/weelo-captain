@@ -33,8 +33,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.InputValidator
+import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.data.api.VerifyOTPRequest
+import com.weelo.logistics.data.api.SendOTPRequest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Modern OTP Verification Screen - Redesigned for speed and clarity
@@ -85,11 +90,11 @@ fun OTPVerificationScreen(
         canResend = true
     }
     
-    // Auto-verify when 6 digits entered
+    // Auto-verify when 6 digits entered - INSTANT ⚡
     LaunchedEffect(otpValue) {
         if (otpValue.length == 6) {
             keyboardController?.hide()
-            delay(200) // Tiny delay for better UX
+            delay(50) // Minimal delay for keyboard to hide
             
             val validation = InputValidator.validateOTP(otpValue)
             if (!validation.isValid) {
@@ -101,16 +106,46 @@ fun OTPVerificationScreen(
             isLoading = true
             errorMessage = ""
             
-            // BACKEND TODO: Replace with actual API call
-            // val result = authRepository.verifyOTP(phoneNumber, otpValue, role)
-            // Mock verification
-            delay(800)
-            
-            // Success - navigate after showing message
-            isLoading = false
-            successMessage = "Verified successfully!"
-            delay(500) // Show success message
-            onVerifySuccess() // Then navigate
+            // Make actual API call to verify OTP
+            try {
+                val roleForApi = role.lowercase()
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.authApi.verifyOTP(
+                        VerifyOTPRequest(
+                            phone = phoneNumber,
+                            otp = otpValue,
+                            role = roleForApi
+                        )
+                    )
+                }
+                
+                isLoading = false
+                
+                if (response.isSuccessful && response.body()?.success == true) {
+                    val data = response.body()?.data
+                    
+                    // Save tokens securely
+                    data?.tokens?.let { tokens ->
+                        RetrofitClient.saveTokens(tokens.accessToken, tokens.refreshToken)
+                    }
+                    
+                    // Save user info
+                    data?.user?.let { user ->
+                        RetrofitClient.saveUserInfo(user.id, user.role)
+                    }
+                    
+                    successMessage = "Verified successfully!"
+                    delay(150) // Quick success feedback ⚡
+                    onVerifySuccess()
+                } else {
+                    errorMessage = response.body()?.error?.message ?: "Invalid OTP. Please try again."
+                    otpValue = ""
+                }
+            } catch (e: Exception) {
+                isLoading = false
+                errorMessage = "Network error. Please try again."
+                otpValue = ""
+            }
         }
     }
     
@@ -200,8 +235,21 @@ fun OTPVerificationScreen(
                     errorMessage = ""
                     
                     scope.launch {
-                        // BACKEND TODO: Call resend OTP API
-                        delay(500)
+                        // Call resend OTP API
+                        try {
+                            val roleForApi = role.lowercase()
+                            withContext(Dispatchers.IO) {
+                                RetrofitClient.authApi.sendOTP(
+                                    SendOTPRequest(
+                                        phone = phoneNumber,
+                                        role = roleForApi
+                                    )
+                                )
+                            }
+                        } catch (e: Exception) {
+                            errorMessage = "Failed to resend OTP"
+                        }
+                        
                         // Restart timer
                         while (resendTimer > 0) {
                             delay(1000)

@@ -5,6 +5,10 @@
     <color name="primaryDark">#E85D2F</color>
     <color name="primaryLight">#FFE5DC</color>
     
+    <!-- Splash Screen Colors (Like Rapido) -->
+    <color name="splashBackground">#4A2C00</color>
+    <color name="splashCircle">#FFD54F</color>
+    
     <!-- Secondary Colors (Blue - Driver) -->
     <color name="secondary">#2196F3</color>
     <color name="secondaryDark">#1976D2</color>

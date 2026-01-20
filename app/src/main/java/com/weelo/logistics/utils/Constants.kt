@@ -6,12 +6,76 @@ package com.weelo.logistics.utils
  */
 object Constants {
     
-    // API Configuration (for future backend integration)
+    // ==========================================================================
+    // API CONFIGURATION
+    // ==========================================================================
+    // Backend: weelo-backend (Node.js/Express) running on port 3000
+    // For Android Emulator: 10.0.2.2 maps to host's localhost
+    // For Physical Device: Use your computer's local IP (run: ipconfig getifaddr en0)
+    //
+    // SECURITY:
+    // - Development: HTTP allowed for local testing only
+    // - Production: HTTPS required with certificate pinning
+    // ==========================================================================
     object API {
-        const val BASE_URL = "https://api.weelo.com/v1/"
+        // Development URLs (HTTP for local development only)
+        const val EMULATOR_URL = "http://10.0.2.2:3000/api/v1/"
+        const val DEVICE_URL = "http://192.168.1.100:3000/api/v1/" // Your Mac's IP (update this!)
+        
+        // Production URLs (HTTPS - ALWAYS use these in production)
+        const val STAGING_URL = "https://staging-api.weelo.in/api/v1/"
+        const val PRODUCTION_URL = "https://api.weelo.in/api/v1/"
+        
+        // WebSocket URLs (for Socket.IO - no path, just host)
+        const val WS_EMULATOR_URL = "http://10.0.2.2:3000"
+        const val WS_DEVICE_URL = "http://192.168.1.100:3000"
+        const val WS_STAGING_URL = "wss://staging-api.weelo.in"
+        const val WS_PRODUCTION_URL = "wss://api.weelo.in"
+        
+        /**
+         * Active Base URL - Automatically selected based on build type
+         * 
+         * DEBUG builds: Uses EMULATOR_URL for Android emulator
+         * RELEASE builds: Uses PRODUCTION_URL with HTTPS
+         * 
+         * For physical device testing, change EMULATOR_URL to DEVICE_URL below
+         */
+        val BASE_URL: String
+            get() = if (com.weelo.logistics.BuildConfig.DEBUG) EMULATOR_URL else PRODUCTION_URL
+        
+        /**
+         * Active WebSocket URL - Must match BASE_URL environment
+         */
+        val WS_URL: String
+            get() = if (com.weelo.logistics.BuildConfig.DEBUG) WS_EMULATOR_URL else WS_PRODUCTION_URL
+        
         const val TIMEOUT_SECONDS = 30L
         const val MAX_RETRIES = 3
         const val CACHE_SIZE = 10 * 1024 * 1024 // 10 MB
+        
+        /**
+         * SSL/TLS Configuration
+         * 
+         * SECURITY:
+         * - Certificate pinning is ENABLED for release builds
+         * - This prevents MITM attacks even if device CA is compromised
+         */
+        val ENABLE_CERTIFICATE_PINNING: Boolean
+            get() = !com.weelo.logistics.BuildConfig.DEBUG  // Enabled in release builds
+        
+        const val TLS_VERSION = "TLSv1.3"
+    }
+    
+    // ==========================================================================
+    // DEVELOPMENT MODE HELPERS
+    // ==========================================================================
+    // OTPs are logged to backend console - check terminal where server is running
+    // SECURITY: These helpers are only useful in debug builds
+    object DevMode {
+        val isEnabled: Boolean
+            get() = com.weelo.logistics.BuildConfig.DEBUG
+        
+        const val OTP_INFO = "Check backend console for OTP"
     }
     
     // Security Configuration

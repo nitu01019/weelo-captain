@@ -1,11 +1,12 @@
 package com.weelo.logistics.ui.components
 
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -15,9 +16,37 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.weelo.logistics.ui.theme.*
 
+// Static cache to track animated cards across recompositions/navigation
+private object AnimationCache {
+    // Stores: cardKey -> lastAnimatedCount
+    private val animatedCounts = mutableMapOf<String, Int>()
+    
+    fun hasAnimated(key: String): Boolean = animatedCounts.containsKey(key)
+    
+    fun getLastCount(key: String): Int = animatedCounts[key] ?: 0
+    
+    fun setAnimated(key: String, count: Int) {
+        animatedCounts[key] = count
+    }
+    
+    // Call this when app starts fresh (optional)
+    fun reset() {
+        animatedCounts.clear()
+    }
+}
+
 /**
- * Info Card - Display stats/metrics
+ * Info Card - Display stats/metrics with animated counting
  * Usage: Dashboard cards showing count, revenue, etc.
+ * 
+ * Animation triggers:
+ * - ONCE when app opens and data first loads
+ * - Again ONLY when new data is added (count increases)
+ * - Static otherwise (no re-animation on navigation)
+ * 
+ * @param animateValue If true, animates number from 0 to target (1,2,3...N)
+ * @param targetCount The target number to animate to (used when animateValue=true)
+ * @param cardKey Unique key for this card to track animation state
  */
 @Composable
 fun InfoCard(
@@ -25,8 +54,56 @@ fun InfoCard(
     title: String,
     value: String,
     modifier: Modifier = Modifier,
-    iconTint: Color = Primary
+    iconTint: Color = Primary,
+    animateValue: Boolean = false,
+    targetCount: Int = 0,
+    cardKey: String = title // Use title as default key
 ) {
+    // Current display value
+    var displayCount by remember { mutableIntStateOf(
+        if (AnimationCache.hasAnimated(cardKey)) AnimationCache.getLastCount(cardKey) else 0
+    )}
+    
+    // Check if should animate
+    val lastAnimatedCount = AnimationCache.getLastCount(cardKey)
+    val hasAnimatedBefore = AnimationCache.hasAnimated(cardKey)
+    val shouldAnimate = animateValue && targetCount > 0 && 
+                        (!hasAnimatedBefore || targetCount > lastAnimatedCount)
+    
+    // Animate only when needed
+    LaunchedEffect(targetCount, shouldAnimate) {
+        if (shouldAnimate && targetCount > 0) {
+            val startFrom = if (!hasAnimatedBefore) 0 else lastAnimatedCount
+            
+            // Smooth counting animation
+            val duration = 800L // 800ms for smooth effect
+            val startTime = System.currentTimeMillis()
+            val diff = targetCount - startFrom
+            
+            while (true) {
+                val elapsed = System.currentTimeMillis() - startTime
+                val progress = (elapsed.toFloat() / duration).coerceIn(0f, 1f)
+                
+                // Ease out cubic for smooth deceleration
+                val easedProgress = 1f - (1f - progress) * (1f - progress) * (1f - progress)
+                
+                displayCount = (startFrom + (diff * easedProgress)).toInt()
+                
+                if (progress >= 1f) break
+                kotlinx.coroutines.delay(16) // ~60fps
+            }
+            
+            displayCount = targetCount
+            AnimationCache.setAnimated(cardKey, targetCount)
+        } else if (targetCount > 0) {
+            // No animation needed - show value instantly
+            displayCount = targetCount
+        }
+    }
+    
+    // Display value
+    val displayValue = if (animateValue && targetCount > 0) displayCount.toString() else value
+    
     Card(
         modifier = modifier,
         elevation = CardDefaults.cardElevation(
@@ -51,7 +128,7 @@ fun InfoCard(
             )
             Spacer(modifier = Modifier.height(Spacing.small))
             Text(
-                text = value,
+                text = displayValue,
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = TextPrimary

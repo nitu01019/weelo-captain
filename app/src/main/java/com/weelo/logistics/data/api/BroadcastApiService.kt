@@ -240,6 +240,89 @@ interface BroadcastApiService {
         @Header("Authorization") token: String,
         @Body request: CreateBroadcastRequest
     ): Response<CreateBroadcastResponse>
+    
+    // =================================================================
+    // NEW: TRUCK REQUEST APIs (Multi-Truck Order System)
+    // =================================================================
+    
+    /**
+     * Get active truck requests for transporter
+     * 
+     * Returns only requests matching the transporter's registered vehicle types.
+     * Grouped by order for easier display.
+     * 
+     * ENDPOINT: GET /bookings/requests/active
+     * Headers: Authorization: Bearer {accessToken}
+     * 
+     * Response (200 OK):
+     * {
+     *   "success": true,
+     *   "data": {
+     *     "orders": [
+     *       {
+     *         "order": { order details },
+     *         "requests": [ truck requests for this order ]
+     *       }
+     *     ],
+     *     "count": 5
+     *   }
+     * }
+     */
+    @GET("bookings/requests/active")
+    suspend fun getActiveTruckRequests(
+        @Header("Authorization") token: String
+    ): Response<ActiveTruckRequestsResponse>
+    
+    /**
+     * Accept a specific truck request
+     * 
+     * LIGHTNING FAST: This instantly assigns the truck to you.
+     * Other transporters are immediately notified it's no longer available.
+     * 
+     * ENDPOINT: POST /bookings/requests/{requestId}/accept
+     * Headers: Authorization: Bearer {accessToken}
+     * 
+     * Request Body:
+     * {
+     *   "vehicleId": "veh_123",     // Your vehicle to assign
+     *   "driverId": "drv_456"       // Optional: specific driver
+     * }
+     * 
+     * Response (200 OK):
+     * {
+     *   "success": true,
+     *   "data": {
+     *     "request": { updated truck request with assignment },
+     *   }
+     * }
+     * 
+     * Response (400 - Already Taken):
+     * {
+     *   "success": false,
+     *   "error": {
+     *     "code": "REQUEST_ALREADY_TAKEN",
+     *     "message": "This truck was just taken by another transporter"
+     *   }
+     * }
+     */
+    @POST("bookings/requests/{requestId}/accept")
+    suspend fun acceptTruckRequest(
+        @Header("Authorization") token: String,
+        @Path("requestId") requestId: String,
+        @Body request: AcceptTruckRequestBody
+    ): Response<AcceptTruckRequestResponse>
+    
+    /**
+     * Get order details with all truck requests
+     * 
+     * ENDPOINT: GET /bookings/orders/{orderId}
+     * Headers: Authorization: Bearer {accessToken}
+     */
+    @GET("bookings/orders/{orderId}")
+    suspend fun getOrderDetails(
+        @Header("Authorization") token: String,
+        @Path("orderId") orderId: String
+    ): Response<OrderDetailsResponse>
 }
 
 // ============== Request/Response Data Classes ==============
@@ -323,4 +406,113 @@ data class CreateBroadcastResponse(
     val success: Boolean,
     val broadcast: BroadcastTrip,
     val notifiedDrivers: Int
+)
+
+// =================================================================
+// NEW: TRUCK REQUEST DATA CLASSES (Multi-Truck Order System)
+// =================================================================
+
+/**
+ * Response for active truck requests
+ */
+data class ActiveTruckRequestsResponse(
+    val success: Boolean,
+    val data: ActiveTruckRequestsData?
+)
+
+data class ActiveTruckRequestsData(
+    val orders: List<OrderWithRequests>,
+    val count: Int
+)
+
+data class OrderWithRequests(
+    val order: OrderInfo,
+    val requests: List<TruckRequestInfo>
+)
+
+data class OrderInfo(
+    val id: String,
+    val customerId: String,
+    val customerName: String,
+    val customerPhone: String,
+    val pickup: LocationInfo,
+    val drop: LocationInfo,
+    val distanceKm: Int,
+    val totalTrucks: Int,
+    val trucksFilled: Int,
+    val totalAmount: Int,
+    val goodsType: String?,
+    val weight: String?,
+    val status: String,
+    val expiresAt: String,
+    val createdAt: String
+)
+
+data class LocationInfo(
+    val latitude: Double,
+    val longitude: Double,
+    val address: String,
+    val city: String?,
+    val state: String?
+)
+
+data class TruckRequestInfo(
+    val id: String,
+    val orderId: String,
+    val requestNumber: Int,
+    val vehicleType: String,
+    val vehicleSubtype: String,
+    val pricePerTruck: Int,
+    val status: String,
+    val assignedTransporterId: String?,
+    val assignedVehicleNumber: String?,
+    val assignedDriverName: String?,
+    val createdAt: String
+)
+
+/**
+ * Request body for accepting a truck request
+ */
+data class AcceptTruckRequestBody(
+    val vehicleId: String,
+    val driverId: String? = null
+)
+
+/**
+ * Response after accepting a truck request
+ */
+data class AcceptTruckRequestResponse(
+    val success: Boolean,
+    val data: AcceptTruckRequestData?,
+    val error: ApiErrorInfo?
+)
+
+data class AcceptTruckRequestData(
+    val request: TruckRequestInfo
+)
+
+data class ApiErrorInfo(
+    val code: String,
+    val message: String
+)
+
+/**
+ * Response for order details
+ */
+data class OrderDetailsResponse(
+    val success: Boolean,
+    val data: OrderDetailsData?
+)
+
+data class OrderDetailsData(
+    val order: OrderInfo,
+    val requests: List<TruckRequestInfo>,
+    val summary: OrderSummaryInfo
+)
+
+data class OrderSummaryInfo(
+    val totalTrucks: Int,
+    val trucksFilled: Int,
+    val trucksSearching: Int,
+    val trucksExpired: Int
 )

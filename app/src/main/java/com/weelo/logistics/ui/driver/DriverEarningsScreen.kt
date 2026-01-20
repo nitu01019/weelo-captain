@@ -139,7 +139,11 @@ fun DriverEarningsScreen(@Suppress("UNUSED_PARAMETER")
                     )
                 }
                 
-                items(getSampleEarnings()) { earning ->
+                // OPTIMIZATION: Add keys to prevent unnecessary recompositions
+                items(
+                    items = getSampleEarnings(),
+                    key = { it.tripId }
+                ) { earning ->
                     EarningCard(earning)
                 }
             }

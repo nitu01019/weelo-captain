@@ -1,120 +1,140 @@
 package com.weelo.logistics.data.api
 
-import retrofit2.http.Body
-import retrofit2.http.POST
+import retrofit2.Response
+import retrofit2.http.*
 
 /**
- * Driver Authentication API Service
+ * =============================================================================
+ * DRIVER AUTH API SERVICE
+ * =============================================================================
  * 
- * Backend-ready interface for driver authentication
- * Driver OTP is sent to their assigned transporter
+ * Separate authentication service for DRIVERS.
  * 
- * BACKEND IMPLEMENTATION REQUIRED
+ * FLOW:
+ * 1. Driver enters their phone number
+ * 2. System finds which transporter this driver belongs to
+ * 3. OTP is sent to TRANSPORTER's phone (not driver's)
+ * 4. Driver gets OTP from transporter and enters it
+ * 5. Driver gets authenticated and can access Driver Dashboard
+ * 
+ * ENDPOINTS:
+ * POST /api/v1/driver-auth/send-otp    - Send OTP to transporter
+ * POST /api/v1/driver-auth/verify-otp  - Verify OTP and get tokens
+ * =============================================================================
  */
 interface DriverAuthApiService {
-    
+
     /**
-     * Send OTP for Driver Login
+     * Send OTP for driver login
+     * OTP is sent to the TRANSPORTER's phone, not driver's
      * 
-     * Flow:
-     * 1. Backend receives driver phone number
-     * 2. Looks up driver in database
-     * 3. Finds driver's assigned transporter
-     * 4. Sends OTP to TRANSPORTER's phone
-     * 5. Returns transporter info to show in UI
-     * 
-     * @param request Driver phone number
-     * @return DriverOTPResponse with transporter info
+     * @param request Contains driver's phone number
+     * @return Response with masked transporter phone for UI hint
      */
-    @POST("api/v1/driver/send-otp")
-    suspend fun sendDriverOTP(
-        @Body request: DriverOTPRequest
-    ): DriverOTPResponse
-    
+    @POST("driver-auth/send-otp")
+    suspend fun sendOtp(
+        @Body request: DriverSendOtpRequest
+    ): Response<DriverSendOtpResponse>
+
     /**
-     * Verify Driver OTP
+     * Verify OTP and authenticate driver
      * 
-     * @param request Driver phone and OTP
-     * @return Auth token and driver details
+     * @param request Contains driver's phone and OTP received from transporter
+     * @return Response with JWT tokens and driver profile
      */
-    @POST("api/v1/driver/verify-otp")
-    suspend fun verifyDriverOTP(
-        @Body request: VerifyOTPRequest
-    ): DriverAuthResponse
+    @POST("driver-auth/verify-otp")
+    suspend fun verifyOtp(
+        @Body request: DriverVerifyOtpRequest
+    ): Response<DriverVerifyOtpResponse>
+
+    /**
+     * Get pending OTP for testing (Development only)
+     * 
+     * @param driverPhone Driver's phone number
+     * @return The pending OTP if exists
+     */
+    @GET("driver-auth/debug-otp")
+    suspend fun getDebugOtp(
+        @Query("driverPhone") driverPhone: String
+    ): Response<DriverDebugOtpResponse>
 }
 
+// =============================================================================
+// REQUEST MODELS
+// =============================================================================
+
 /**
- * Request: Driver sends phone number
+ * Request to send OTP for driver login
  */
-data class DriverOTPRequest(
+data class DriverSendOtpRequest(
+    val driverPhone: String
+)
+
+/**
+ * Request to verify OTP and login driver
+ */
+data class DriverVerifyOtpRequest(
     val driverPhone: String,
-    val deviceId: String? = null
+    val otp: String
 )
 
+// =============================================================================
+// RESPONSE MODELS
+// =============================================================================
+
 /**
- * Response: Backend returns transporter info
+ * Response after requesting OTP
  */
-data class DriverOTPResponse(
+data class DriverSendOtpResponse(
     val success: Boolean,
-    val message: String,
-    val transporterName: String,      // e.g., "ABC Logistics"
-    val transporterPhone: String,     // Masked: "91234XXXXX"
-    val otpSentTo: String,            // "transporter"
-    val expiryMinutes: Int = 5
+    val message: String?,
+    val data: DriverOtpData?,
+    val error: ApiError?
 )
 
-// VerifyOTPRequest is already defined in AuthApiService.kt - reusing that
+data class DriverOtpData(
+    val transporterPhoneMasked: String,  // e.g., "78****631"
+    val driverId: String,
+    val driverName: String,
+    val expiresInMinutes: Int
+)
 
 /**
- * Response: Authentication success
+ * Response after verifying OTP - contains tokens and driver info
  */
-data class DriverAuthResponse(
+data class DriverVerifyOtpResponse(
     val success: Boolean,
-    val message: String,
-    val driver: DriverDTO? = null,
-    val authToken: String? = null,
-    val refreshToken: String? = null
+    val message: String?,
+    val data: DriverAuthData?,
+    val error: ApiError?
 )
 
-/**
- * Driver Data Transfer Object
- */
-data class DriverDTO(
+data class DriverAuthData(
+    val accessToken: String,
+    val refreshToken: String,
+    val driver: DriverProfile,
+    val role: String  // "DRIVER"
+)
+
+data class DriverProfile(
     val id: String,
-    val phone: String,
     val name: String,
+    val phone: String,
     val transporterId: String,
     val transporterName: String,
-    val status: String,              // "active", "inactive", "suspended"
     val licenseNumber: String?,
-    val vehicleAssigned: String?
+    val profilePhoto: String?
 )
 
 /**
- * BACKEND IMPLEMENTATION GUIDE:
- * 
- * POST /api/v1/driver/send-otp
- * {
- *   "driverPhone": "9876543210"
- * }
- * 
- * Backend Logic:
- * 1. Look up driver: SELECT * FROM drivers WHERE phone = '9876543210'
- * 2. If not found: return 404 "Driver not found. Contact your transporter."
- * 3. Get transporter: SELECT * FROM transporters WHERE id = driver.transporter_id
- * 4. Generate OTP: otp = random 6-digit
- * 5. Send SMS to transporter.phone with message:
- *    "Driver [driverName] ([driverPhone]) is logging in. OTP: [otp]"
- * 6. Store in cache: redis.set("otp:driver:9876543210", otp, EX=300)
- * 7. Return response with transporter name
- * 
- * Response:
- * {
- *   "success": true,
- *   "message": "OTP sent to your transporter",
- *   "transporterName": "ABC Logistics",
- *   "transporterPhone": "91234XXXXX",
- *   "otpSentTo": "transporter",
- *   "expiryMinutes": 5
- * }
+ * Debug OTP response (Development only)
  */
+data class DriverDebugOtpResponse(
+    val success: Boolean,
+    val data: DebugOtpData?
+)
+
+data class DebugOtpData(
+    val otp: String?,
+    val message: String
+)

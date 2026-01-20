@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Network Security Configuration for Weelo Captain App
+    =====================================================
+    
+    This configuration enforces HTTPS for all network connections in production
+    while allowing HTTP for local development.
+    
+    SECURITY FEATURES:
+    1. HTTPS enforced for production domains
+    2. Certificate pinning for extra security (when enabled)
+    3. Cleartext (HTTP) allowed only for local development IPs
+    4. System CA certificates trusted
+    
+    For production release:
+    - Remove debug-overrides section
+    - Enable certificate pinning with real certificate hashes
+-->
+<network-security-config>
+    
+    <!-- Default config: HTTPS only -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <!-- Trust system CAs -->
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    
+    <!-- Production domain configuration -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">weelo.in</domain>
+        <domain includeSubdomains="true">api.weelo.in</domain>
+        <domain includeSubdomains="true">staging-api.weelo.in</domain>
+        
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+        
+        <!-- 
+            Certificate Pinning (enable for production)
+            
+            To generate pins, run:
+            openssl s_client -connect api.weelo.in:443 -servername api.weelo.in | \
+                openssl x509 -pubkey -noout | \
+                openssl pkey -pubin -outform der | \
+                openssl dgst -sha256 -binary | \
+                openssl enc -base64
+            
+            Add backup pins from intermediate and root CAs
+        -->
+        <!--
+        <pin-set expiration="2026-12-31">
+            <pin digest="SHA-256">YOUR_LEAF_CERTIFICATE_PIN_HERE=</pin>
+            <pin digest="SHA-256">YOUR_INTERMEDIATE_CA_PIN_HERE=</pin>
+            <pin digest="SHA-256">YOUR_ROOT_CA_BACKUP_PIN_HERE=</pin>
+        </pin-set>
+        -->
+    </domain-config>
+    
+    <!-- Development: Allow cleartext for local IPs only -->
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Android Emulator localhost -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+        
+        <!-- Common local development IPs -->
+        <domain includeSubdomains="false">192.168.1.100</domain>
+        <domain includeSubdomains="false">192.168.0.100</domain>
+        <domain includeSubdomains="false">172.21.110.115</domain>
+        
+        <!-- localhost -->
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+    
+    <!-- Debug overrides: Allow user-installed CAs in debug builds -->
+    <debug-overrides>
+        <trust-anchors>
+            <!-- Trust system CAs -->
+            <certificates src="system" />
+            <!-- Also trust user-installed CAs (for proxy debugging like Charles) -->
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+    
+</network-security-config>

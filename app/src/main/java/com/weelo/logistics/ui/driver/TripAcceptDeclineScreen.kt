@@ -442,7 +442,7 @@ fun TripAcceptDeclineScreen(
                         isProcessing = true
                         // BACKEND: Accept trip API call
                         scope.launch {
-                            delay(1500) // Mock delay
+                            delay(300) // TODO: Replace with actual API call
                             isProcessing = false
                             showSuccessDialog = true
                         }
@@ -490,7 +490,7 @@ fun TripAcceptDeclineScreen(
                         isProcessing = true
                         // BACKEND: Decline trip API call
                         scope.launch {
-                            delay(1000)
+                            delay(200) // TODO: Replace with actual API call
                             isProcessing = false
                             onNavigateBack()
                         }
