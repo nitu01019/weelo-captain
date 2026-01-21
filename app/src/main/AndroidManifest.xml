@@ -4,11 +4,15 @@
 
     <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     
     <!-- SMS Auto-Read for OTP (Google Play Services SMS Retriever API) -->
     <!-- No runtime permission needed - works automatically with SMS Retriever API -->
@@ -47,12 +51,13 @@
             android:theme="@style/Theme.WeeloLogistics"
             android:windowSoftInputMode="adjustResize" />
         
-        <!-- GPS Tracking Service (for future use) -->
+        <!-- GPS Tracking Service - Real-time location for trips -->
         <service
             android:name=".utils.GPSTrackingService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="location" />
+            android:foregroundServiceType="location"
+            android:permission="android.permission.FOREGROUND_SERVICE_LOCATION" />
         
         <!-- Firebase Cloud Messaging Service -->
         <service

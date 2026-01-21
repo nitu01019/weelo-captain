@@ -209,6 +209,14 @@ fun TransporterDashboardScreen(
                     }
                 },
                 actions = {
+                    // Availability Toggle (Compact) - Online/Offline Status
+                    AvailabilityToggleCompact(
+                        modifier = Modifier.padding(end = 4.dp),
+                        onStatusChanged = { isOnline ->
+                            android.util.Log.d("Dashboard", "Transporter availability: ${if (isOnline) "ONLINE" else "OFFLINE"}")
+                        }
+                    )
+                    
                     IconButton(onClick = { /* TODO: Navigate to notifications */ }) {
                         Icon(
                             imageVector = Icons.Default.Notifications,

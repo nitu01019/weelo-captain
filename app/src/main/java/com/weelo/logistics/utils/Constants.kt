@@ -16,38 +16,133 @@ object Constants {
     // SECURITY:
     // - Development: HTTP allowed for local testing only
     // - Production: HTTPS required with certificate pinning
+    //
+    // AWS MIGRATION:
+    // - When moving to AWS, update PRODUCTION_URL and WS_PRODUCTION_URL
+    // - Example: "https://api.weelo.in" → "https://api.weelologistics.com"
+    // - Certificate pinning hashes will need to be updated for new domain
     // ==========================================================================
     object API {
-        // Development URLs (HTTP for local development only)
-        const val EMULATOR_URL = "http://10.0.2.2:3000/api/v1/"
-        const val DEVICE_URL = "http://192.168.1.100:3000/api/v1/" // Your Mac's IP (update this!)
-        
-        // Production URLs (HTTPS - ALWAYS use these in production)
-        const val STAGING_URL = "https://staging-api.weelo.in/api/v1/"
-        const val PRODUCTION_URL = "https://api.weelo.in/api/v1/"
-        
-        // WebSocket URLs (for Socket.IO - no path, just host)
-        const val WS_EMULATOR_URL = "http://10.0.2.2:3000"
-        const val WS_DEVICE_URL = "http://192.168.1.100:3000"
-        const val WS_STAGING_URL = "wss://staging-api.weelo.in"
-        const val WS_PRODUCTION_URL = "wss://api.weelo.in"
         
         /**
-         * Active Base URL - Automatically selected based on build type
+         * =====================================================================
+         * ENVIRONMENT SELECTOR
+         * =====================================================================
+         * Change this single value to switch between environments:
+         * - EMULATOR: Testing on Android emulator (localhost via 10.0.2.2)
+         * - DEVICE: Testing on physical phone over WiFi
+         * - STAGING: Pre-production testing
+         * - PRODUCTION: Live production (AWS/Cloud)
          * 
-         * DEBUG builds: Uses EMULATOR_URL for Android emulator
-         * RELEASE builds: Uses PRODUCTION_URL with HTTPS
+         * FOR PHYSICAL DEVICE TESTING:
+         * 1. Find your laptop's WiFi IP: Run `ipconfig getifaddr en0` in terminal
+         * 2. Update DEVICE_IP below with that IP
+         * 3. Set currentEnvironment = Environment.DEVICE
+         * 4. Ensure both phone and laptop are on same WiFi network
+         */
+        enum class Environment {
+            EMULATOR,    // Android emulator → laptop localhost
+            DEVICE,      // Physical phone → laptop over WiFi
+            STAGING,     // Staging server (pre-production)
+            PRODUCTION   // Live production server (AWS)
+        }
+        
+        /**
+         * CURRENT ACTIVE ENVIRONMENT
+         * ===========================
+         * Change this to switch environments easily!
          * 
-         * For physical device testing, change EMULATOR_URL to DEVICE_URL below
+         * For development: EMULATOR or DEVICE
+         * For testing: STAGING
+         * For release: PRODUCTION (auto-selected for release builds)
+         */
+        private val currentEnvironment: Environment
+            get() = if (com.weelo.logistics.BuildConfig.DEBUG) {
+                Environment.DEVICE  // <-- Change to EMULATOR if using emulator
+            } else {
+                Environment.PRODUCTION
+            }
+        
+        /**
+         * YOUR LAPTOP'S WIFI IP ADDRESS
+         * ==============================
+         * Update this when testing on physical device!
+         * 
+         * To find your IP:
+         * - Mac: Run `ipconfig getifaddr en0` in Terminal
+         * - Windows: Run `ipconfig` and find IPv4 Address
+         * - Linux: Run `hostname -I`
+         * 
+         * Make sure phone and laptop are on SAME WiFi network!
+         */
+        private const val DEVICE_IP = "192.168.1.10"  // <-- UPDATE THIS WITH YOUR IP!
+        
+        // Port where backend runs
+        private const val PORT = "3000"
+        
+        // API version path
+        private const val API_PATH = "/api/v1/"
+        
+        // =============================================================
+        // URL DEFINITIONS (Don't change unless server locations change)
+        // =============================================================
+        
+        // Development URLs (HTTP - local only)
+        private const val EMULATOR_HOST = "10.0.2.2"  // Android's localhost alias
+        private val EMULATOR_URL = "http://$EMULATOR_HOST:$PORT$API_PATH"
+        private val DEVICE_URL = "http://$DEVICE_IP:$PORT$API_PATH"
+        
+        // Production URLs (HTTPS - AWS/Cloud)
+        // Update these when migrating to AWS
+        private const val STAGING_HOST = "staging-api.weelo.in"
+        private const val PRODUCTION_HOST = "api.weelo.in"
+        private const val STAGING_URL = "https://$STAGING_HOST$API_PATH"
+        private const val PRODUCTION_URL = "https://$PRODUCTION_HOST$API_PATH"
+        
+        // WebSocket URLs (for Socket.IO real-time communication)
+        private val WS_EMULATOR_URL = "http://$EMULATOR_HOST:$PORT"
+        private val WS_DEVICE_URL = "http://$DEVICE_IP:$PORT"
+        private const val WS_STAGING_URL = "wss://$STAGING_HOST"
+        private const val WS_PRODUCTION_URL = "wss://$PRODUCTION_HOST"
+        
+        // =============================================================
+        // ACTIVE URLS (Auto-selected based on currentEnvironment)
+        // =============================================================
+        
+        /**
+         * Active Base URL - Used for all REST API calls
          */
         val BASE_URL: String
-            get() = if (com.weelo.logistics.BuildConfig.DEBUG) EMULATOR_URL else PRODUCTION_URL
+            get() = when (currentEnvironment) {
+                Environment.EMULATOR -> EMULATOR_URL
+                Environment.DEVICE -> DEVICE_URL
+                Environment.STAGING -> STAGING_URL
+                Environment.PRODUCTION -> PRODUCTION_URL
+            }
         
         /**
-         * Active WebSocket URL - Must match BASE_URL environment
+         * Active WebSocket URL - Used for real-time communication
          */
         val WS_URL: String
-            get() = if (com.weelo.logistics.BuildConfig.DEBUG) WS_EMULATOR_URL else WS_PRODUCTION_URL
+            get() = when (currentEnvironment) {
+                Environment.EMULATOR -> WS_EMULATOR_URL
+                Environment.DEVICE -> WS_DEVICE_URL
+                Environment.STAGING -> WS_STAGING_URL
+                Environment.PRODUCTION -> WS_PRODUCTION_URL
+            }
+        
+        /**
+         * Check if currently in development mode
+         */
+        val isDevelopment: Boolean
+            get() = currentEnvironment == Environment.EMULATOR || 
+                    currentEnvironment == Environment.DEVICE
+        
+        /**
+         * Get human-readable environment name (for logging/debugging)
+         */
+        val environmentName: String
+            get() = currentEnvironment.name
         
         const val TIMEOUT_SECONDS = 30L
         const val MAX_RETRIES = 3
@@ -59,11 +154,30 @@ object Constants {
          * SECURITY:
          * - Certificate pinning is ENABLED for release builds
          * - This prevents MITM attacks even if device CA is compromised
+         * 
+         * AWS MIGRATION NOTE:
+         * When changing production domain, update certificate pin hashes!
          */
         val ENABLE_CERTIFICATE_PINNING: Boolean
-            get() = !com.weelo.logistics.BuildConfig.DEBUG  // Enabled in release builds
+            get() = !isDevelopment  // Enabled in staging/production
         
         const val TLS_VERSION = "TLSv1.3"
+        
+        /**
+         * Log current configuration (call at app startup for debugging)
+         */
+        fun logConfiguration() {
+            android.util.Log.i("WeeloAPI", """
+                |╔══════════════════════════════════════════════════════════════╗
+                |║  WEELO API CONFIGURATION                                     ║
+                |╠══════════════════════════════════════════════════════════════╣
+                |║  Environment: $environmentName
+                |║  Base URL: $BASE_URL
+                |║  WebSocket URL: $WS_URL
+                |║  Certificate Pinning: ${if (ENABLE_CERTIFICATE_PINNING) "ENABLED" else "DISABLED"}
+                |╚══════════════════════════════════════════════════════════════╝
+            """.trimMargin())
+        }
     }
     
     // ==========================================================================

@@ -64,6 +64,13 @@ object SocketIOService {
     private val _errors = MutableSharedFlow<SocketError>(replay = 0, extraBufferCapacity = 10)
     val errors: SharedFlow<SocketError> = _errors.asSharedFlow()
     
+    // Fleet/Vehicle update events (NEW - for real-time fleet updates)
+    private val _fleetUpdated = MutableSharedFlow<FleetUpdatedNotification>(replay = 1, extraBufferCapacity = 20)
+    val fleetUpdated: SharedFlow<FleetUpdatedNotification> = _fleetUpdated.asSharedFlow()
+    
+    private val _vehicleRegistered = MutableSharedFlow<VehicleRegisteredNotification>(replay = 1, extraBufferCapacity = 10)
+    val vehicleRegistered: SharedFlow<VehicleRegisteredNotification> = _vehicleRegistered.asSharedFlow()
+    
     // Stored credentials for reconnection
     private var serverUrl: String? = null
     private var authToken: String? = null
@@ -86,6 +93,13 @@ object SocketIOService {
         const val NEW_ORDER_ALERT = "new_order_alert"
         const val ACCEPT_CONFIRMATION = "accept_confirmation"
         const val ERROR = "error"
+        
+        // Fleet/Vehicle events (NEW - for real-time fleet updates)
+        const val VEHICLE_REGISTERED = "vehicle_registered"
+        const val VEHICLE_UPDATED = "vehicle_updated"
+        const val VEHICLE_DELETED = "vehicle_deleted"
+        const val VEHICLE_STATUS_CHANGED = "vehicle_status_changed"
+        const val FLEET_UPDATED = "fleet_updated"
         
         // Client -> Server
         const val JOIN_BOOKING = "join_booking"
@@ -219,16 +233,111 @@ object SocketIOService {
             on(Events.BOOKING_FULLY_FILLED) { args ->
                 handleBookingFullyFilled(args)
             }
+            
+            // =================================================================
+            // FLEET/VEHICLE EVENTS - Real-time fleet updates
+            // =================================================================
+            
+            // Vehicle registered (new vehicle added to fleet)
+            on(Events.VEHICLE_REGISTERED) { args ->
+                handleVehicleRegistered(args)
+            }
+            
+            // Vehicle updated
+            on(Events.VEHICLE_UPDATED) { args ->
+                handleFleetUpdated(args, "updated")
+            }
+            
+            // Vehicle deleted
+            on(Events.VEHICLE_DELETED) { args ->
+                handleFleetUpdated(args, "deleted")
+            }
+            
+            // Vehicle status changed
+            on(Events.VEHICLE_STATUS_CHANGED) { args ->
+                handleFleetUpdated(args, "status_changed")
+            }
+            
+            // General fleet update (catch-all for any fleet changes)
+            on(Events.FLEET_UPDATED) { args ->
+                handleFleetUpdated(args, "fleet_updated")
+            }
+        }
+    }
+    
+    /**
+     * Handle vehicle registered event
+     */
+    private fun handleVehicleRegistered(args: Array<Any>) {
+        try {
+            val data = args.firstOrNull() as? JSONObject ?: return
+            Log.i(TAG, "🚛 Vehicle registered: $data")
+            
+            val vehicle = data.optJSONObject("vehicle")
+            val fleetStats = data.optJSONObject("fleetStats")
+            
+            val notification = VehicleRegisteredNotification(
+                vehicleId = vehicle?.optString("id", "") ?: "",
+                vehicleNumber = vehicle?.optString("vehicleNumber", "") ?: "",
+                vehicleType = vehicle?.optString("vehicleType", "") ?: "",
+                vehicleSubtype = vehicle?.optString("vehicleSubtype", "") ?: "",
+                message = data.optString("message", "Vehicle registered successfully"),
+                totalVehicles = fleetStats?.optInt("total", 0) ?: 0,
+                availableCount = fleetStats?.optInt("available", 0) ?: 0
+            )
+            
+            CoroutineScope(Dispatchers.IO).launch {
+                _vehicleRegistered.emit(notification)
+                // Also emit fleet updated for general refresh
+                _fleetUpdated.emit(FleetUpdatedNotification(
+                    action = "added",
+                    vehicleId = notification.vehicleId,
+                    totalVehicles = notification.totalVehicles,
+                    availableCount = notification.availableCount,
+                    inTransitCount = fleetStats?.optInt("in_transit", 0) ?: 0,
+                    maintenanceCount = fleetStats?.optInt("maintenance", 0) ?: 0
+                ))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing vehicle registered: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Handle fleet updated events (update, delete, status change)
+     */
+    private fun handleFleetUpdated(args: Array<Any>, action: String) {
+        try {
+            val data = args.firstOrNull() as? JSONObject ?: return
+            Log.i(TAG, "🚛 Fleet updated ($action): $data")
+            
+            val fleetStats = data.optJSONObject("fleetStats")
+            
+            val notification = FleetUpdatedNotification(
+                action = data.optString("action", action),
+                vehicleId = data.optString("vehicleId", ""),
+                totalVehicles = fleetStats?.optInt("total", 0) ?: 0,
+                availableCount = fleetStats?.optInt("available", 0) ?: 0,
+                inTransitCount = fleetStats?.optInt("in_transit", 0) ?: 0,
+                maintenanceCount = fleetStats?.optInt("maintenance", 0) ?: 0
+            )
+            
+            CoroutineScope(Dispatchers.IO).launch {
+                _fleetUpdated.emit(notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing fleet update: ${e.message}", e)
         }
     }
     
     /**
      * Handle new broadcast event
+     * Shows full-screen overlay via BroadcastOverlayManager
      */
     private fun handleNewBroadcast(args: Array<Any>) {
         try {
             val data = args.firstOrNull() as? JSONObject ?: return
-            Log.i(TAG, "📢 New broadcast received: $data")
+            Log.i(TAG, "📢 NEW BROADCAST via WebSocket: $data")
             
             val notification = BroadcastNotification(
                 broadcastId = data.optString("broadcastId", data.optString("orderId", "")),
@@ -253,6 +362,16 @@ object SocketIOService {
                 expiresAt = data.optString("expiresAt", "")
             )
             
+            // Convert to BroadcastTrip for overlay manager
+            val broadcastTrip = notification.toBroadcastTrip()
+            
+            // Show full-screen overlay (Rapido style)
+            CoroutineScope(Dispatchers.Main).launch {
+                com.weelo.logistics.broadcast.BroadcastOverlayManager.showBroadcast(broadcastTrip)
+                Log.i(TAG, "🎯 Triggered BroadcastOverlayManager for broadcast: ${broadcastTrip.broadcastId}")
+            }
+            
+            // Also emit to flow for BroadcastListScreen history
             CoroutineScope(Dispatchers.IO).launch {
                 _newBroadcasts.emit(notification)
             }
@@ -550,7 +669,53 @@ data class BroadcastNotification(
     val goodsType: String,
     val isUrgent: Boolean,
     val expiresAt: String
-)
+) {
+    /**
+     * Convert BroadcastNotification to BroadcastTrip for UI display
+     * Used by BroadcastOverlayManager to show full-screen overlay
+     */
+    fun toBroadcastTrip(): com.weelo.logistics.data.model.BroadcastTrip {
+        return com.weelo.logistics.data.model.BroadcastTrip(
+            broadcastId = broadcastId,
+            customerId = customerId,
+            customerName = customerName,
+            customerMobile = "", // Not available from WebSocket
+            pickupLocation = com.weelo.logistics.data.model.Location(
+                address = pickupAddress.ifEmpty { pickupCity },
+                city = pickupCity,
+                latitude = 0.0,
+                longitude = 0.0
+            ),
+            dropLocation = com.weelo.logistics.data.model.Location(
+                address = dropAddress.ifEmpty { dropCity },
+                city = dropCity,
+                latitude = 0.0,
+                longitude = 0.0
+            ),
+            distance = distanceKm.toDouble(),
+            estimatedDuration = (distanceKm * 2).toLong(), // Rough estimate: 2 min per km
+            totalTrucksNeeded = trucksNeeded,
+            trucksFilledSoFar = trucksFilled,
+            vehicleType = com.weelo.logistics.data.model.TruckCategory(
+                id = vehicleType.lowercase(),
+                name = vehicleType.replaceFirstChar { it.uppercase() },
+                icon = "🚛",
+                description = vehicleSubtype.ifEmpty { "Standard" }
+            ),
+            goodsType = goodsType,
+            farePerTruck = farePerTruck.toDouble(),
+            totalFare = (farePerTruck * trucksNeeded).toDouble(),
+            status = com.weelo.logistics.data.model.BroadcastStatus.ACTIVE,
+            broadcastTime = System.currentTimeMillis(),
+            expiryTime = try {
+                java.time.Instant.parse(expiresAt).toEpochMilli()
+            } catch (e: Exception) {
+                System.currentTimeMillis() + (5 * 60 * 1000) // Default 5 min expiry
+            },
+            isUrgent = isUrgent
+        )
+    }
+}
 
 data class TruckAssignedNotification(
     val bookingId: String,
@@ -585,3 +750,33 @@ data class TrucksRemainingNotification(
 )
 
 data class SocketError(val message: String)
+
+// =============================================================================
+// FLEET/VEHICLE NOTIFICATION DATA CLASSES
+// =============================================================================
+
+/**
+ * Notification when a vehicle is registered
+ */
+data class VehicleRegisteredNotification(
+    val vehicleId: String,
+    val vehicleNumber: String,
+    val vehicleType: String,
+    val vehicleSubtype: String,
+    val message: String,
+    val totalVehicles: Int,
+    val availableCount: Int
+)
+
+/**
+ * Notification when fleet is updated (add, update, delete, status change)
+ * Used to trigger UI refresh in FleetListScreen
+ */
+data class FleetUpdatedNotification(
+    val action: String,           // "added", "updated", "deleted", "status_changed"
+    val vehicleId: String,
+    val totalVehicles: Int,
+    val availableCount: Int,
+    val inTransitCount: Int,
+    val maintenanceCount: Int
+)

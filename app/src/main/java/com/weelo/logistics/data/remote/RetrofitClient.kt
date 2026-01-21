@@ -8,6 +8,8 @@ import androidx.security.crypto.MasterKey
 import com.weelo.logistics.data.api.*
 import com.weelo.logistics.utils.Constants
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -126,9 +128,103 @@ object RetrofitClient {
      * Only logs HEADERS in production, BODY in debug
      */
     private val loggingInterceptor = HttpLoggingInterceptor { message ->
-        Log.d(TAG, message)
+        // Log ALL network traffic for debugging
+        Log.d(TAG, "🌐 $message")
+        // Extra logging for response body (to catch parsing issues)
+        if (message.startsWith("{") || message.startsWith("[") || message.startsWith("<") || message.startsWith("\"")) {
+            Log.w(TAG, "📦 RAW RESPONSE BODY: ${message.take(500)}")
+        }
     }.apply {
-        level = HttpLoggingInterceptor.Level.BODY
+        level = HttpLoggingInterceptor.Level.BODY  // Shows full request/response body
+    }
+    
+    /**
+     * Debug interceptor - logs raw response for debugging JSON parse errors
+     */
+    private val debugInterceptor = Interceptor { chain ->
+        val request = chain.request()
+        Log.d(TAG, "📤 REQUEST: ${request.method} ${request.url}")
+        
+        val response = chain.proceed(request)
+        
+        // Read response body for logging (need to buffer it)
+        val responseBody = response.body
+        val source = responseBody?.source()
+        source?.request(Long.MAX_VALUE)
+        val buffer = source?.buffer?.clone()
+        val responseString = buffer?.readString(Charsets.UTF_8) ?: "null"
+        
+        Log.d(TAG, "📥 RESPONSE [${response.code}]: ${responseString.take(500)}")
+        
+        response
+    }
+    
+    /**
+     * Response sanitizer interceptor - Ensures all responses are valid JSON
+     * 
+     * This interceptor handles cases where the server returns:
+     * - Plain text strings (like "success" or error messages)
+     * - HTML error pages
+     * - Empty responses
+     * 
+     * It wraps non-JSON responses in a proper JSON structure to prevent
+     * Gson parsing errors.
+     */
+    private val responseSanitizerInterceptor = Interceptor { chain ->
+        val request = chain.request()
+        val response = chain.proceed(request)
+        
+        // Only process responses with body
+        val responseBody = response.body ?: return@Interceptor response
+        
+        // Read the response body
+        val source = responseBody.source()
+        source.request(Long.MAX_VALUE)
+        val buffer = source.buffer.clone()
+        val responseString = buffer.readString(Charsets.UTF_8).trim()
+        
+        Log.d(TAG, "🔍 Response sanitizer - Code: ${response.code}, Body: ${responseString.take(200)}")
+        
+        // Check if response is valid JSON
+        val isValidJson = responseString.isNotEmpty() && 
+            (responseString.startsWith("{") || responseString.startsWith("["))
+        
+        if (isValidJson) {
+            // Valid JSON - return as-is
+            return@Interceptor response
+        }
+        
+        // Non-JSON response - wrap it in a proper error response
+        Log.w(TAG, "⚠️ Non-JSON response detected, wrapping in error structure")
+        
+        val errorMessage = when {
+            responseString.isEmpty() -> "Empty response from server"
+            responseString.startsWith("<!") || responseString.startsWith("<html") -> 
+                "Server returned HTML error page"
+            responseString.startsWith("\"") && responseString.endsWith("\"") ->
+                // Plain quoted string - extract the message
+                responseString.trim('"')
+            else -> responseString.take(200) // Use first 200 chars as error message
+        }
+        
+        // Create a proper JSON error response
+        val wrappedJson = """
+            {
+                "success": false,
+                "data": null,
+                "error": {
+                    "code": "INVALID_RESPONSE",
+                    "message": "${errorMessage.replace("\"", "\\\"").replace("\n", " ")}"
+                }
+            }
+        """.trimIndent()
+        
+        // Build new response with JSON body
+        val newBody = wrappedJson.toResponseBody("application/json".toMediaType())
+        
+        response.newBuilder()
+            .body(newBody)
+            .build()
     }
     
     /**
@@ -150,13 +246,22 @@ object RetrofitClient {
         
         val token = getAccessToken()
         
+        // Debug logging
+        Log.d(TAG, "🔐 Auth Interceptor - Path: $path")
+        Log.d(TAG, "🔐 Token present: ${token != null}, Token length: ${token?.length ?: 0}")
+        Log.d(TAG, "🔐 Is public endpoint: $isPublicEndpoint")
+        if (token == null && !isPublicEndpoint) {
+            Log.w(TAG, "⚠️ NO TOKEN for protected endpoint: $path")
+        }
+        
         val newRequest = originalRequest.newBuilder()
             .addHeader("Content-Type", "application/json")
             .addHeader("Accept", "application/json")
-            .addHeader("Accept-Encoding", "gzip")  // Enable compression
+            .addHeader("x-no-compression", "true")  // Disable server-side compression to avoid gzip issues
             .apply {
                 if (token != null && !isPublicEndpoint) {
                     addHeader("Authorization", "Bearer $token")
+                    Log.d(TAG, "✅ Added Authorization header")
                 }
             }
             .build()
@@ -414,15 +519,16 @@ object RetrofitClient {
             // Connection pool
             .connectionPool(connectionPool)
             
-            // Cache
-            .cache(cache)
+            // Cache - DISABLED FOR DEBUG (uncomment .cache(cache) when working)
+            // .cache(cache)
             
             // Interceptors (order matters!)
-            .addInterceptor(offlineCacheInterceptor)  // Handle offline first
+            // .addInterceptor(offlineCacheInterceptor)  // Handle offline first - DISABLED FOR DEBUG
             .addInterceptor(authInterceptor)          // Add auth header
-            .addInterceptor(retryInterceptor)         // Retry on failure
-            .addNetworkInterceptor(cacheInterceptor)  // Cache responses
-            .addInterceptor(loggingInterceptor)       // Log last
+            // .addInterceptor(retryInterceptor)         // Retry on failure - DISABLED FOR DEBUG
+            // .addNetworkInterceptor(cacheInterceptor)  // Cache responses - DISABLED FOR DEBUG
+            // .addNetworkInterceptor(responseSanitizerInterceptor) // DISABLED - causing gzip issues
+            .addInterceptor(loggingInterceptor)       // Log requests/responses
             
             // Timeouts
             .connectTimeout(CONNECT_TIMEOUT, TimeUnit.SECONDS)
@@ -468,13 +574,24 @@ object RetrofitClient {
     }
     
     /**
+     * Lenient Gson for parsing - handles some edge cases better
+     */
+    private val gson by lazy {
+        com.google.gson.GsonBuilder()
+            .setLenient()  // Allow lenient parsing
+            .serializeNulls()  // Include null values in JSON
+            .create()
+    }
+    
+    /**
      * Retrofit instance
      */
     private val retrofit: Retrofit by lazy {
+        Log.i(TAG, "🌐 BASE_URL: ${Constants.API.BASE_URL}")
         Retrofit.Builder()
             .baseUrl(Constants.API.BASE_URL)
             .client(okHttpClient)
-            .addConverterFactory(GsonConverterFactory.create())
+            .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
     }
     
@@ -510,6 +627,10 @@ object RetrofitClient {
     
     val tripApi: TripApiService by lazy {
         retrofit.create(TripApiService::class.java)
+    }
+    
+    val transporterApi: com.weelo.logistics.data.api.TransporterApiService by lazy {
+        retrofit.create(com.weelo.logistics.data.api.TransporterApiService::class.java)
     }
     
     // ============== Token Management ==============

@@ -2,6 +2,7 @@ package com.weelo.logistics.ui.auth
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.weelo.logistics.WeeloApp
 import com.weelo.logistics.data.api.SendOTPRequest
 import com.weelo.logistics.data.api.VerifyOTPRequest
 import com.weelo.logistics.data.remote.RetrofitClient
@@ -148,6 +149,9 @@ class AuthViewModel : ViewModel() {
                             RetrofitClient.saveUserInfo(user.id, user.role)
                         }
                         
+                        // Connect WebSocket for real-time broadcasts
+                        WeeloApp.getInstance()?.connectWebSocketIfLoggedIn()
+                        
                         _authState.value = AuthState.Authenticated(
                             userId = data?.user?.id ?: "",
                             userName = data?.user?.name ?: "",
@@ -201,6 +205,9 @@ class AuthViewModel : ViewModel() {
             } catch (e: Exception) {
                 // Ignore errors, still clear local data
             }
+            
+            // Disconnect WebSocket
+            WeeloApp.getInstance()?.disconnectWebSocket()
             
             // Clear stored tokens and user data
             RetrofitClient.clearAllData()

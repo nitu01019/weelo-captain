@@ -1,5 +1,8 @@
 package com.weelo.logistics.core.utils
 
+// Note: This file was renamed from RateLimiter.kt to DebounceThrottle.kt
+// to avoid confusion with utils/RateLimiter.kt which handles API rate limiting
+
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -19,7 +22,7 @@ import kotlinx.coroutines.launch
  * Scalable: Reduces API calls by 90%+ for search
  * Backend-friendly: Prevents rate limit abuse
  */
-object RateLimiter {
+object CoroutineDebouncer {
     
     /**
      * Debounce: Wait for user to stop typing before executing

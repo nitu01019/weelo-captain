@@ -327,15 +327,142 @@ interface BroadcastApiService {
 
 // ============== Request/Response Data Classes ==============
 
+/**
+ * Response for GET /broadcasts/active
+ * Matches backend response format from weelo-backend
+ * 
+ * BACKEND FIELD MAPPING:
+ * - broadcasts[] contains booking records with broadcast fields
+ * - Uses flexible BroadcastResponseData to handle both naming conventions
+ */
 data class BroadcastListResponse(
     val success: Boolean,
-    val broadcasts: List<BroadcastTrip>,
-    val count: Int
+    val broadcasts: List<BroadcastResponseData>? = null,
+    val count: Int? = null,
+    val error: ApiErrorInfo? = null
 )
 
 data class BroadcastResponse(
     val success: Boolean,
-    val broadcast: BroadcastTrip
+    val broadcast: BroadcastResponseData? = null,
+    val error: ApiErrorInfo? = null
+)
+
+/**
+ * Flexible broadcast data class that handles both naming conventions
+ * from backend (booking fields) and expected API format (broadcast fields)
+ * 
+ * SCALABILITY: Using nullable fields with defaults for forward compatibility
+ */
+data class BroadcastResponseData(
+    // ID fields - backend uses 'id', API uses 'broadcastId'
+    val broadcastId: String? = null,
+    val id: String? = null,
+    
+    // Customer info
+    val customerId: String? = null,
+    val customerName: String? = null,
+    val customerPhone: String? = null,
+    val customerMobile: String? = null,
+    
+    // Location - backend uses 'pickup/drop', API uses 'pickupLocation/dropLocation'
+    val pickupLocation: BroadcastLocationData? = null,
+    val pickup: BroadcastLocationData? = null,
+    val dropLocation: BroadcastLocationData? = null,
+    val drop: BroadcastLocationData? = null,
+    
+    // Distance - backend uses 'distanceKm', API uses 'distance'
+    val distance: Double? = null,
+    val distanceKm: Double? = null,
+    val estimatedDuration: Long? = null,
+    
+    // Truck requirements - backend uses 'trucksNeeded/trucksFilled'
+    val totalTrucksNeeded: Int? = null,
+    val trucksNeeded: Int? = null,
+    val trucksFilledSoFar: Int? = null,
+    val trucksFilled: Int? = null,
+    
+    // Vehicle info
+    val vehicleType: String? = null,
+    val vehicleSubtype: String? = null,
+    
+    // Cargo info
+    val goodsType: String? = null,
+    val weight: String? = null,
+    
+    // Pricing - backend uses 'pricePerTruck/totalAmount'
+    val farePerTruck: Double? = null,
+    val pricePerTruck: Double? = null,
+    val totalFare: Double? = null,
+    val totalAmount: Double? = null,
+    
+    // Status and timing
+    val status: String? = null,
+    val createdAt: String? = null,
+    val expiresAt: String? = null,
+    val broadcastTime: Long? = null,
+    val expiryTime: Long? = null,
+    
+    // Additional info
+    val notes: String? = null,
+    val isUrgent: Boolean? = null
+) {
+    /**
+     * Get effective broadcast ID (handles both naming conventions)
+     */
+    fun getEffectiveId(): String = broadcastId ?: id ?: ""
+    
+    /**
+     * Get effective pickup location
+     */
+    fun getEffectivePickup(): BroadcastLocationData? = pickupLocation ?: pickup
+    
+    /**
+     * Get effective drop location
+     */
+    fun getEffectiveDrop(): BroadcastLocationData? = dropLocation ?: drop
+    
+    /**
+     * Get effective distance in km
+     */
+    fun getEffectiveDistance(): Double = distance ?: distanceKm ?: 0.0
+    
+    /**
+     * Get effective trucks needed
+     */
+    fun getEffectiveTrucksNeeded(): Int = totalTrucksNeeded ?: trucksNeeded ?: 1
+    
+    /**
+     * Get effective trucks filled
+     */
+    fun getEffectiveTrucksFilled(): Int = trucksFilledSoFar ?: trucksFilled ?: 0
+    
+    /**
+     * Get effective fare per truck
+     */
+    fun getEffectiveFarePerTruck(): Double = farePerTruck ?: pricePerTruck ?: 0.0
+    
+    /**
+     * Get effective total fare
+     */
+    fun getEffectiveTotalFare(): Double = totalFare ?: totalAmount ?: 0.0
+    
+    /**
+     * Get effective customer mobile
+     */
+    fun getEffectiveCustomerMobile(): String = customerMobile ?: customerPhone ?: ""
+}
+
+/**
+ * Location data that handles both naming conventions
+ */
+data class BroadcastLocationData(
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val address: String? = null,
+    val city: String? = null,
+    val state: String? = null,
+    val pincode: String? = null
 )
 
 data class AcceptBroadcastRequest(

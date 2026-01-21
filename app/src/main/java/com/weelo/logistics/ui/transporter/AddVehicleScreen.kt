@@ -212,12 +212,8 @@ fun AddVehicleScreen(
                 category = selectedCategory!!,
                 intermediateType = intermediateSelection,
                 selectedSubtypes = selectedSubtypes,
-                onComplete = { vehicleEntries ->
-                    // vehicleEntries will be used for backend submission when API integration is complete
-                    // TODO: Save to backend
-                    @Suppress("UNUSED_VARIABLE")
-                    val unused = vehicleEntries
-                    // For now, just go to next step
+                onComplete = { _ ->
+                    // Vehicles saved to backend successfully
                     currentStep = 4
                 },
                 onBack = { currentStep = 2 }

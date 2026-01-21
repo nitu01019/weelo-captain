@@ -95,7 +95,10 @@ sealed class VehicleResult<out T> {
  */
 data class CachedVehicleList(
     val vehicles: List<VehicleData>,
-    val statusCounts: StatusCounts,
+    val total: Int = 0,
+    val available: Int = 0,
+    val inTransit: Int = 0,
+    val maintenance: Int = 0,
     val lastUpdated: Long,
     val isStale: Boolean = false
 )
@@ -156,13 +159,16 @@ class VehicleRepository private constructor(
             _isRefreshing.value = true
             
             try {
-                val response = vehicleApi.getVehicles(status = status)
+                val response = vehicleApi.getVehicles()
                 
                 if (response.isSuccessful && response.body()?.success == true) {
                     val data = response.body()?.data
                     val newCache = CachedVehicleList(
                         vehicles = data?.vehicles ?: emptyList(),
-                        statusCounts = data?.statusCounts ?: StatusCounts(),
+                        total = data?.total ?: 0,
+                        available = data?.available ?: 0,
+                        inTransit = data?.inTransit ?: 0,
+                        maintenance = data?.maintenance ?: 0,
                         lastUpdated = System.currentTimeMillis()
                     )
                     
@@ -174,11 +180,46 @@ class VehicleRepository private constructor(
                     _vehiclesState.value = VehicleResult.Success(newCache)
                     VehicleResult.Success(newCache)
                 } else {
-                    val error = response.body()?.error?.message ?: "Failed to fetch vehicles"
-                    VehicleResult.Error(error, response.code())
+                    // Handle HTTP errors properly
+                    val errorMsg = when (response.code()) {
+                        401 -> "Session expired. Please login again."
+                        403 -> "Access denied. Only transporters can view vehicles."
+                        404 -> "Vehicles endpoint not found"
+                        500 -> "Server error. Please try again later."
+                        else -> response.body()?.error?.message ?: "Failed to fetch vehicles (${response.code()})"
+                    }
+                    VehicleResult.Error(errorMsg, response.code())
                 }
+            } catch (e: com.google.gson.JsonSyntaxException) {
+                // JSON parsing error - server returned invalid/empty response
+                android.util.Log.e("VehicleRepository", "JSON parse error: ${e.message}")
+                val staleCache = cachedVehicles?.copy(isStale = true)
+                if (staleCache != null) {
+                    _vehiclesState.value = VehicleResult.Success(staleCache)
+                    return@withContext VehicleResult.Success(staleCache)
+                }
+                VehicleResult.Error("Server returned invalid response. Please check your connection.")
+            } catch (e: java.net.ConnectException) {
+                // Connection refused - server not running
+                android.util.Log.e("VehicleRepository", "Connection error: ${e.message}")
+                val staleCache = cachedVehicles?.copy(isStale = true)
+                if (staleCache != null) {
+                    _vehiclesState.value = VehicleResult.Success(staleCache)
+                    return@withContext VehicleResult.Success(staleCache)
+                }
+                VehicleResult.Error("Cannot connect to server. Is the backend running?")
+            } catch (e: java.net.SocketTimeoutException) {
+                // Timeout
+                android.util.Log.e("VehicleRepository", "Timeout error: ${e.message}")
+                val staleCache = cachedVehicles?.copy(isStale = true)
+                if (staleCache != null) {
+                    _vehiclesState.value = VehicleResult.Success(staleCache)
+                    return@withContext VehicleResult.Success(staleCache)
+                }
+                VehicleResult.Error("Connection timed out. Please try again.")
             } catch (e: Exception) {
                 // Return stale cache if available
+                android.util.Log.e("VehicleRepository", "Fetch error: ${e.message}", e)
                 val staleCache = cachedVehicles?.copy(isStale = true)
                 if (staleCache != null) {
                     _vehiclesState.value = VehicleResult.Success(staleCache)
@@ -235,12 +276,9 @@ class VehicleRepository private constructor(
                     vehicleNumber = entry.vehicleNumber.uppercase().trim(),
                     vehicleType = entry.category, // Use category as vehicle type for backend
                     vehicleSubtype = entry.subtypeName,
-                    make = entry.manufacturer,
-                    model = entry.model,
+                    model = entry.model ?: entry.manufacturer, // Use manufacturer as model fallback
                     year = entry.year,
-                    capacity = "${entry.capacityTons} MT",
-                    bodyType = entry.intermediateType,
-                    fuelType = "diesel" // Default
+                    capacity = "${entry.capacityTons} MT"
                 )
             }
             
@@ -255,14 +293,49 @@ class VehicleRepository private constructor(
                     if (response.isSuccessful && response.body()?.success == true) {
                         response.body()?.data?.vehicle?.let { registeredVehicles.add(it) }
                     } else {
+                        // Handle unsuccessful response
+                        val errorMsg = when {
+                            response.body()?.error?.message != null -> response.body()?.error?.message
+                            response.code() == 401 -> "Session expired. Please login again."
+                            response.code() == 403 -> "Access denied."
+                            response.code() == 409 -> "Vehicle already registered."
+                            response.code() >= 500 -> "Server error. Please try again."
+                            else -> "Registration failed (${response.code()})"
+                        }
                         failedVehicles.add(
                             FailedVehicle(
                                 vehicleNumber = request.vehicleNumber,
-                                reason = response.body()?.error?.message ?: "Registration failed"
+                                reason = errorMsg ?: "Registration failed"
                             )
                         )
                     }
+                } catch (e: com.google.gson.JsonSyntaxException) {
+                    // JSON parsing error - server returned unexpected response
+                    android.util.Log.e("VehicleRepository", "JSON parse error for ${request.vehicleNumber}: ${e.message}")
+                    failedVehicles.add(
+                        FailedVehicle(
+                            vehicleNumber = request.vehicleNumber,
+                            reason = "Server returned invalid response. Please try again."
+                        )
+                    )
+                } catch (e: java.net.ConnectException) {
+                    android.util.Log.e("VehicleRepository", "Connection error: ${e.message}")
+                    failedVehicles.add(
+                        FailedVehicle(
+                            vehicleNumber = request.vehicleNumber,
+                            reason = "Cannot connect to server."
+                        )
+                    )
+                } catch (e: java.net.SocketTimeoutException) {
+                    android.util.Log.e("VehicleRepository", "Timeout error: ${e.message}")
+                    failedVehicles.add(
+                        FailedVehicle(
+                            vehicleNumber = request.vehicleNumber,
+                            reason = "Connection timed out."
+                        )
+                    )
                 } catch (e: Exception) {
+                    android.util.Log.e("VehicleRepository", "Registration error: ${e.message}", e)
                     failedVehicles.add(
                         FailedVehicle(
                             vehicleNumber = request.vehicleNumber,
@@ -298,12 +371,9 @@ class VehicleRepository private constructor(
                 vehicleNumber = entry.vehicleNumber.uppercase().trim(),
                 vehicleType = entry.category,
                 vehicleSubtype = entry.subtypeName,
-                make = entry.manufacturer,
-                model = entry.model,
+                model = entry.model ?: entry.manufacturer, // Use manufacturer as model fallback
                 year = entry.year,
-                capacity = "${entry.capacityTons} MT",
-                bodyType = entry.intermediateType,
-                fuelType = "diesel"
+                capacity = "${entry.capacityTons} MT"
             )
             
             val response = vehicleApi.registerVehicle(request)
@@ -317,12 +387,29 @@ class VehicleRepository private constructor(
                     VehicleResult.Error("Invalid response from server")
                 }
             } else {
-                VehicleResult.Error(
-                    response.body()?.error?.message ?: "Failed to register vehicle",
-                    response.code()
-                )
+                // Handle error responses with specific messages
+                val errorMsg = when {
+                    response.body()?.error?.message != null -> response.body()?.error?.message
+                    response.code() == 401 -> "Session expired. Please login again."
+                    response.code() == 403 -> "Access denied. Only transporters can register vehicles."
+                    response.code() == 409 -> "Vehicle with this number already exists."
+                    response.code() >= 500 -> "Server error. Please try again later."
+                    else -> "Failed to register vehicle (${response.code()})"
+                }
+                VehicleResult.Error(errorMsg ?: "Registration failed", response.code())
             }
+        } catch (e: com.google.gson.JsonSyntaxException) {
+            // JSON parsing error - server returned unexpected response
+            android.util.Log.e("VehicleRepository", "JSON parse error: ${e.message}")
+            VehicleResult.Error("Server returned invalid response. Please try again.")
+        } catch (e: java.net.ConnectException) {
+            android.util.Log.e("VehicleRepository", "Connection error: ${e.message}")
+            VehicleResult.Error("Cannot connect to server. Please check your connection.")
+        } catch (e: java.net.SocketTimeoutException) {
+            android.util.Log.e("VehicleRepository", "Timeout error: ${e.message}")
+            VehicleResult.Error("Connection timed out. Please try again.")
         } catch (e: Exception) {
+            android.util.Log.e("VehicleRepository", "Registration error: ${e.message}", e)
             VehicleResult.Error(e.message ?: "Registration failed")
         }
     }

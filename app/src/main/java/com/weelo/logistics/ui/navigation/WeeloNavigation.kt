@@ -1,5 +1,6 @@
 package com.weelo.logistics.ui.navigation
 
+import androidx.compose.animation.*
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -33,12 +34,21 @@ fun WeeloNavigation(
     
     NavHost(
         navController = navController,
-        startDestination = startDestination
+        startDestination = startDestination,
+        // Default smooth animations for all screens
+        enterTransition = { NavAnimations.slideInFromRight },
+        exitTransition = { NavAnimations.slideOutToLeft },
+        popEnterTransition = { NavAnimations.slideInFromLeft },
+        popExitTransition = { NavAnimations.slideOutToRight }
     ) {
 
         // Onboarding screen removed - users go directly to role selection after splash
         
-        composable(Screen.RoleSelection.route) {
+        composable(
+            route = Screen.RoleSelection.route,
+            enterTransition = { NavAnimations.fadeInWithScale },
+            exitTransition = { NavAnimations.fadeOut }
+        ) {
             RoleSelectionScreen(
                 onRoleSelected = { role ->
                     // Navigate to login screen for selected role
@@ -140,6 +150,46 @@ fun WeeloNavigation(
             com.weelo.logistics.ui.transporter.TransporterProfileScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onProfileUpdated = { /* Refresh will happen automatically */ }
+            )
+        }
+        
+        // Broadcast List Screen - Shows customer booking requests
+        composable(Screen.BroadcastList.route) {
+            com.weelo.logistics.ui.transporter.BroadcastListScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToBroadcastDetails = { broadcastId ->
+                    navController.navigate(Screen.TruckSelection.createRoute(broadcastId))
+                }
+            )
+        }
+        
+        // Truck Selection Screen - Select trucks to assign to a broadcast
+        composable(Screen.TruckSelection.route) { backStackEntry ->
+            val broadcastId = backStackEntry.arguments?.getString("broadcastId") ?: ""
+            com.weelo.logistics.ui.transporter.TruckSelectionScreen(
+                broadcastId = broadcastId,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToDriverAssignment = { bId, vehicleIds ->
+                    // Encode vehicle IDs as comma-separated string
+                    val vehicleIdsParam = vehicleIds.joinToString(",")
+                    navController.navigate(Screen.DriverAssignment.createRoute(bId, vehicleIdsParam))
+                }
+            )
+        }
+        
+        // Driver Assignment Screen - Assign drivers to selected trucks
+        composable(Screen.DriverAssignment.route) { backStackEntry ->
+            val broadcastId = backStackEntry.arguments?.getString("broadcastId") ?: ""
+            val vehicleIdsParam = backStackEntry.arguments?.getString("vehicleIds") ?: ""
+            val vehicleIds = vehicleIdsParam.split(",").filter { it.isNotEmpty() }
+            com.weelo.logistics.ui.transporter.DriverAssignmentScreen(
+                broadcastId = broadcastId,
+                selectedVehicleIds = vehicleIds,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToTracking = {
+                    // Navigate back to dashboard after successful assignment
+                    navController.popBackStack(Screen.TransporterDashboard.route, inclusive = false)
+                }
             )
         }
         

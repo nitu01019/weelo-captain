@@ -1,5 +1,6 @@
 package com.weelo.logistics.ui.transporter
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -15,10 +16,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.model.*
-import com.weelo.logistics.data.repository.MockDataRepository
+import com.weelo.logistics.data.repository.BroadcastRepository
+import com.weelo.logistics.data.repository.BroadcastResult
+import com.weelo.logistics.data.repository.DriverRepository
+import com.weelo.logistics.data.repository.DriverResult
+import com.weelo.logistics.data.repository.VehicleRepository
+import com.weelo.logistics.data.repository.VehicleResult
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.launch
@@ -32,15 +39,14 @@ import kotlinx.coroutines.launch
  * 1. Shows list of selected trucks (e.g., 3 trucks)
  * 2. For each truck, transporter picks an available driver
  * 3. Shows driver details: name, rating, availability
- * 4. Confirms all assignments → Creates TripAssignment
- * 5. Sends notifications to all assigned drivers
+ * 4. Confirms all assignments → Calls acceptBroadcast API for each vehicle
+ * 5. Sends notifications to all assigned drivers (handled by backend)
  * 
- * FOR BACKEND DEVELOPER:
- * - Fetch transporter's available drivers (status = ACTIVE, not on trip)
- * - One driver per vehicle
- * - Create TripAssignment with DriverTruckAssignment for each
- * - Send push notification to each assigned driver
- * - Update driver status to ON_TRIP once assigned
+ * CONNECTED TO REAL BACKEND:
+ * - Fetches broadcast details via BroadcastRepository
+ * - Fetches vehicles via VehicleRepository
+ * - Fetches available drivers via DriverRepository
+ * - Calls acceptBroadcast API to assign each vehicle+driver
  */
 @Composable
 fun DriverAssignmentScreen(
@@ -49,9 +55,13 @@ fun DriverAssignmentScreen(
     onNavigateBack: () -> Unit,
     onNavigateToTracking: () -> Unit
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val repository = remember { MockDataRepository() }
-    // TODO: Connect to real repository from backend
+    
+    // Real repositories connected to backend
+    val broadcastRepository = remember { BroadcastRepository.getInstance(context) }
+    val vehicleRepository = remember { VehicleRepository.getInstance(context) }
+    val driverRepository = remember { DriverRepository.getInstance(context) }
     
     var broadcast by remember { mutableStateOf<BroadcastTrip?>(null) }
     var vehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
@@ -61,13 +71,57 @@ fun DriverAssignmentScreen(
     var isLoading by remember { mutableStateOf(true) }
     var isSubmitting by remember { mutableStateOf(false) }
     var showSuccessDialog by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var successCount by remember { mutableStateOf(0) }
     
-    // BACKEND: Fetch data
+    // Fetch data from real backend
     LaunchedEffect(broadcastId, selectedVehicleIds) {
         scope.launch {
-            broadcast = repository.getMockBroadcastById(broadcastId)
-            vehicles = repository.getMockVehiclesByIds(selectedVehicleIds)
-            availableDrivers = repository.getMockAvailableDrivers("t1")
+            isLoading = true
+            errorMessage = null
+            
+            // Fetch broadcast details
+            when (val broadcastResult = broadcastRepository.getBroadcastById(broadcastId)) {
+                is BroadcastResult.Success -> {
+                    broadcast = broadcastResult.data
+                }
+                is BroadcastResult.Error -> {
+                    errorMessage = broadcastResult.message
+                    Toast.makeText(context, broadcastResult.message, Toast.LENGTH_SHORT).show()
+                }
+                is BroadcastResult.Loading -> {}
+            }
+            
+            // Fetch selected vehicles
+            when (val vehicleResult = vehicleRepository.fetchVehicles(forceRefresh = false)) {
+                is VehicleResult.Success -> {
+                    vehicles = vehicleRepository.mapToUiModels(
+                        vehicleResult.data.vehicles.filter { it.id in selectedVehicleIds }
+                    )
+                }
+                is VehicleResult.Error -> {
+                    errorMessage = vehicleResult.message
+                }
+                is VehicleResult.Loading -> {}
+            }
+            
+            // Fetch available drivers
+            when (val driverResult = driverRepository.fetchDrivers(forceRefresh = true)) {
+                is DriverResult.Success -> {
+                    // Filter only available drivers (ACTIVE and not on trip)
+                    availableDrivers = driverResult.data.drivers.filter { 
+                        it.status == DriverStatus.ACTIVE && it.isAvailable
+                    }
+                    android.util.Log.i("DriverAssignmentScreen", 
+                        "✅ Found ${availableDrivers.size} available drivers out of ${driverResult.data.total}")
+                }
+                is DriverResult.Error -> {
+                    errorMessage = driverResult.message
+                    Toast.makeText(context, "Failed to load drivers: ${driverResult.message}", Toast.LENGTH_SHORT).show()
+                }
+                is DriverResult.Loading -> {}
+            }
+            
             isLoading = false
         }
     }
@@ -219,16 +273,51 @@ fun DriverAssignmentScreen(
                         Spacer(Modifier.height(12.dp))
                     }
                     
-                    // Confirm Button
+                    // Confirm Button - Calls acceptBroadcast API for each vehicle+driver pair
                     Button(
                         onClick = {
                             isSubmitting = true
-                            // BACKEND: Create TripAssignment and send notifications
+                            successCount = 0
+                            
                             scope.launch {
-                                // Mock delay
-                                kotlinx.coroutines.delay(1000)
+                                var hasError = false
+                                
+                                // Call acceptBroadcast for each vehicle+driver assignment
+                                for ((vehicleId, driverId) in driverAssignments) {
+                                    android.util.Log.i("DriverAssignmentScreen", 
+                                        "📤 Accepting broadcast: $broadcastId with vehicle: $vehicleId, driver: $driverId")
+                                    
+                                    when (val result = broadcastRepository.acceptBroadcast(
+                                        broadcastId = broadcastId,
+                                        vehicleId = vehicleId,
+                                        driverId = driverId
+                                    )) {
+                                        is BroadcastResult.Success -> {
+                                            successCount++
+                                            android.util.Log.i("DriverAssignmentScreen", 
+                                                "✅ Assignment successful: ${result.data.assignmentId}")
+                                        }
+                                        is BroadcastResult.Error -> {
+                                            hasError = true
+                                            android.util.Log.e("DriverAssignmentScreen", 
+                                                "❌ Assignment failed: ${result.message}")
+                                            Toast.makeText(context, 
+                                                "Failed to assign vehicle: ${result.message}", 
+                                                Toast.LENGTH_SHORT).show()
+                                        }
+                                        is BroadcastResult.Loading -> {}
+                                    }
+                                }
+                                
                                 isSubmitting = false
-                                showSuccessDialog = true
+                                
+                                if (successCount > 0) {
+                                    showSuccessDialog = true
+                                } else if (hasError) {
+                                    Toast.makeText(context, 
+                                        "Failed to assign vehicles. Please try again.", 
+                                        Toast.LENGTH_LONG).show()
+                                }
                             }
                         },
                         modifier = Modifier.fillMaxWidth().height(56.dp),
@@ -239,6 +328,11 @@ fun DriverAssignmentScreen(
                             CircularProgressIndicator(
                                 modifier = Modifier.size(24.dp),
                                 color = White
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "Assigning...",
+                                style = MaterialTheme.typography.titleMedium
                             )
                         } else {
                             Icon(Icons.Default.Send, null)

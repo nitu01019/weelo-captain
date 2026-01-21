@@ -1,44 +1,63 @@
 package com.weelo.logistics.utils
 
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Rate Limiter Utility
+ * =============================================================================
+ * RATE LIMITER UTILITY - Thread-safe, Non-blocking
+ * =============================================================================
  * 
  * Prevents abuse by limiting API calls per user/IP
- * Implements token bucket algorithm
+ * Implements sliding window rate limiting algorithm
  * 
  * SECURITY: Protects against DoS attacks and abuse
  * 
+ * SCALABILITY:
+ * - Thread-safe using ConcurrentHashMap
+ * - Non-blocking operations for UI thread compatibility
+ * - Efficient memory with automatic cleanup
+ * 
+ * FOR BACKEND DEVELOPERS:
+ * - Replace with Redis-based rate limiting for distributed systems
+ * - This is client-side protection; server should have its own limits
+ * 
  * Usage:
- * ```
+ * ```kotlin
  * val limiter = RateLimiter.forOTP()
  * if (limiter.tryAcquire(phoneNumber)) {
  *     // Proceed with OTP request
  * } else {
- *     // Show "Too many requests" error
+ *     val waitTime = limiter.getTimeUntilReset(phoneNumber)
+ *     // Show "Too many requests, retry in ${waitTime/1000} seconds"
  * }
  * ```
+ * =============================================================================
  */
 class RateLimiter(
     private val maxRequests: Int,
     private val windowMs: Long
 ) {
-    private val requestMap = mutableMapOf<String, RequestInfo>()
-    private val mutex = Mutex()
+    // Thread-safe map for tracking requests
+    private val requestMap = ConcurrentHashMap<String, RequestInfo>()
     
     data class RequestInfo(
-        var count: Int,
-        var windowStart: Long
+        @Volatile var count: Int,
+        @Volatile var windowStart: Long
     )
     
-    suspend fun tryAcquire(identifier: String): Boolean = mutex.withLock {
+    /**
+     * Try to acquire a permit for the given identifier
+     * 
+     * @param identifier Unique identifier (phone number, user ID, etc.)
+     * @return true if request is allowed, false if rate limited
+     */
+    @Synchronized
+    fun tryAcquire(identifier: String): Boolean {
         val now = System.currentTimeMillis()
         val info = requestMap[identifier]
         
         return if (info == null) {
-            // First request
+            // First request - allow
             requestMap[identifier] = RequestInfo(1, now)
             true
         } else {
@@ -49,7 +68,7 @@ class RateLimiter(
                 info.windowStart = now
                 true
             } else {
-                // Within window
+                // Within window - check count
                 if (info.count < maxRequests) {
                     info.count++
                     true
@@ -61,7 +80,10 @@ class RateLimiter(
         }
     }
     
-    suspend fun getRemainingRequests(identifier: String): Int = mutex.withLock {
+    /**
+     * Get remaining requests for identifier
+     */
+    fun getRemainingRequests(identifier: String): Int {
         val now = System.currentTimeMillis()
         val info = requestMap[identifier] ?: return maxRequests
         
@@ -72,7 +94,10 @@ class RateLimiter(
         }
     }
     
-    suspend fun getTimeUntilReset(identifier: String): Long = mutex.withLock {
+    /**
+     * Get time until rate limit resets (in milliseconds)
+     */
+    fun getTimeUntilReset(identifier: String): Long {
         val now = System.currentTimeMillis()
         val info = requestMap[identifier] ?: return 0L
         
@@ -84,48 +109,103 @@ class RateLimiter(
         }
     }
     
-    suspend fun reset(identifier: String) = mutex.withLock {
+    /**
+     * Reset rate limit for identifier
+     */
+    fun reset(identifier: String) {
         requestMap.remove(identifier)
     }
     
+    /**
+     * Clear all rate limits (for testing or logout)
+     */
+    fun clearAll() {
+        requestMap.clear()
+    }
+    
+    /**
+     * Cleanup expired entries (call periodically for memory efficiency)
+     */
+    fun cleanup() {
+        val now = System.currentTimeMillis()
+        requestMap.entries.removeIf { (_, info) ->
+            now - info.windowStart > windowMs
+        }
+    }
+    
     companion object {
-        // Predefined rate limiters for common use cases
+        // =================================================================
+        // PREDEFINED RATE LIMITERS
+        // =================================================================
         
-        // OTP: 3 requests per 5 minutes per phone number
+        /**
+         * OTP: 3 requests per 5 minutes per phone number
+         * Security: Prevents OTP spam
+         */
         fun forOTP() = RateLimiter(
             maxRequests = 3,
             windowMs = 5 * 60 * 1000 // 5 minutes
         )
         
-        // Login attempts: 5 attempts per 15 minutes per phone
+        /**
+         * Login attempts: 5 attempts per 15 minutes per phone
+         * Security: Prevents brute force attacks
+         */
         fun forLogin() = RateLimiter(
             maxRequests = 5,
             windowMs = 15 * 60 * 1000 // 15 minutes
         )
         
-        // API calls: 100 requests per minute per user
+        /**
+         * API calls: 100 requests per minute per user
+         * Scalability: Prevents API abuse
+         */
         fun forAPI() = RateLimiter(
             maxRequests = 100,
             windowMs = 60 * 1000 // 1 minute
         )
         
-        // Trip creation: 10 trips per hour per transporter
+        /**
+         * Trip creation: 10 trips per hour per transporter
+         * Business: Reasonable limit for normal usage
+         */
         fun forTripCreation() = RateLimiter(
             maxRequests = 10,
             windowMs = 60 * 60 * 1000 // 1 hour
         )
         
-        // Broadcast: 5 broadcasts per hour per transporter
+        /**
+         * Broadcast acceptance: 20 per hour per transporter
+         * Business: Allow active transporters to accept multiple broadcasts
+         */
         fun forBroadcast() = RateLimiter(
-            maxRequests = 5,
+            maxRequests = 20,
             windowMs = 60 * 60 * 1000 // 1 hour
+        )
+        
+        /**
+         * Vehicle registration: 10 per day per transporter
+         * Business: Reasonable fleet growth rate
+         */
+        fun forVehicleRegistration() = RateLimiter(
+            maxRequests = 10,
+            windowMs = 24 * 60 * 60 * 1000 // 24 hours
         )
     }
 }
 
 /**
- * Global rate limiter instances
- * BACKEND: Replace with Redis-based rate limiting for production
+ * =============================================================================
+ * GLOBAL RATE LIMITER INSTANCES
+ * =============================================================================
+ * 
+ * Singleton rate limiters for app-wide use.
+ * 
+ * FOR BACKEND DEVELOPERS:
+ * - These are client-side only
+ * - Server must implement its own rate limiting (Redis recommended)
+ * - Client limits are for UX (prevent accidental spam)
+ * - Server limits are for security (enforce hard limits)
  */
 object GlobalRateLimiters {
     val otp = RateLimiter.forOTP()
@@ -133,4 +213,17 @@ object GlobalRateLimiters {
     val api = RateLimiter.forAPI()
     val tripCreation = RateLimiter.forTripCreation()
     val broadcast = RateLimiter.forBroadcast()
+    val vehicleRegistration = RateLimiter.forVehicleRegistration()
+    
+    /**
+     * Clear all rate limits (useful on logout)
+     */
+    fun clearAll() {
+        otp.clearAll()
+        login.clearAll()
+        api.clearAll()
+        tripCreation.clearAll()
+        broadcast.clearAll()
+        vehicleRegistration.clearAll()
+    }
 }

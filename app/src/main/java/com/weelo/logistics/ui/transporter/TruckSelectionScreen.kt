@@ -1,5 +1,6 @@
 package com.weelo.logistics.ui.transporter
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -12,10 +13,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.model.*
-import com.weelo.logistics.data.repository.MockDataRepository
+import com.weelo.logistics.data.repository.BroadcastRepository
+import com.weelo.logistics.data.repository.BroadcastResult
+import com.weelo.logistics.data.repository.VehicleRepository
+import com.weelo.logistics.data.repository.VehicleResult
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.launch
@@ -27,15 +32,15 @@ import kotlinx.coroutines.launch
  * 
  * FLOW:
  * 1. Show broadcast details (customer needs 10 trucks)
- * 2. Show transporter's available vehicles
+ * 2. Show transporter's available vehicles (filtered by matching type)
  * 3. Transporter selects vehicles (e.g., picks 3 trucks)
  * 4. Confirms selection → Goes to driver assignment screen
  * 
- * FOR BACKEND DEVELOPER:
- * - Fetch transporter's available vehicles (status = AVAILABLE, not on trip)
- * - Filter by vehicle type matching broadcast requirement
- * - Allow selection up to (totalTrucksNeeded - trucksFilledSoFar)
- * - Create TripAssignment when confirmed
+ * CONNECTED TO REAL BACKEND:
+ * - Fetches broadcast details via BroadcastRepository
+ * - Fetches transporter's vehicles via VehicleRepository
+ * - Filters vehicles by type matching broadcast requirement
+ * - Only shows AVAILABLE vehicles (not in_transit or maintenance)
  */
 @Composable
 fun TruckSelectionScreen(
@@ -43,24 +48,63 @@ fun TruckSelectionScreen(
     onNavigateBack: () -> Unit,
     onNavigateToDriverAssignment: (String, List<String>) -> Unit  // broadcastId, selectedVehicleIds
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val repository = remember { MockDataRepository() }
-    // TODO: Connect to real repository from backend
+    
+    // Real repositories connected to backend
+    val broadcastRepository = remember { BroadcastRepository.getInstance(context) }
+    val vehicleRepository = remember { VehicleRepository.getInstance(context) }
     
     var broadcast by remember { mutableStateOf<BroadcastTrip?>(null) }
     var availableVehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
     var selectedVehicleIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
     var showConfirmDialog by remember { mutableStateOf(false) }
     
-    // BACKEND: Fetch broadcast details and available vehicles
+    // Fetch broadcast details and available vehicles from real backend
     LaunchedEffect(broadcastId) {
         scope.launch {
-            // Mock - Replace with: repository.getBroadcastById(broadcastId)
-            broadcast = repository.getMockBroadcastById(broadcastId)
+            isLoading = true
+            errorMessage = null
             
-            // Mock - Replace with: repository.getAvailableVehicles(transporterId, vehicleType)
-            availableVehicles = repository.getMockAvailableVehicles("t1")
+            // Fetch broadcast details
+            when (val broadcastResult = broadcastRepository.getBroadcastById(broadcastId)) {
+                is BroadcastResult.Success -> {
+                    broadcast = broadcastResult.data
+                    
+                    // Fetch transporter's vehicles
+                    when (val vehicleResult = vehicleRepository.fetchVehicles(forceRefresh = true)) {
+                        is VehicleResult.Success -> {
+                            // Filter vehicles by:
+                            // 1. Status = AVAILABLE (not in_transit or maintenance)
+                            // 2. Vehicle type matches broadcast requirement
+                            val requiredType = broadcastResult.data.vehicleType.id.lowercase()
+                            
+                            availableVehicles = vehicleRepository.mapToUiModels(
+                                vehicleResult.data.vehicles.filter { vehicle ->
+                                    vehicle.status.lowercase() == "available" &&
+                                    vehicle.vehicleType.lowercase() == requiredType
+                                }
+                            )
+                            
+                            android.util.Log.i("TruckSelectionScreen", 
+                                "✅ Found ${availableVehicles.size} available ${requiredType} vehicles")
+                        }
+                        is VehicleResult.Error -> {
+                            errorMessage = vehicleResult.message
+                            Toast.makeText(context, vehicleResult.message, Toast.LENGTH_SHORT).show()
+                        }
+                        is VehicleResult.Loading -> {}
+                    }
+                }
+                is BroadcastResult.Error -> {
+                    errorMessage = broadcastResult.message
+                    Toast.makeText(context, broadcastResult.message, Toast.LENGTH_SHORT).show()
+                }
+                is BroadcastResult.Loading -> {}
+            }
+            
             isLoading = false
         }
     }
