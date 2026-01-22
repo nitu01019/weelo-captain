@@ -49,7 +49,7 @@ object BroadcastOverlayManager {
     
     // Configuration
     private const val MAX_QUEUE_SIZE = 10 // Max broadcasts in queue
-    private const val BROADCAST_TIMEOUT_MS = 5 * 60 * 1000L // 5 minutes
+    private const val BROADCAST_TIMEOUT_MS = 60 * 1000L // 1 minute (60 seconds)
     
     // Coroutine scope for background operations
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
