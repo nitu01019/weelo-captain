@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.weelo.logistics.core.notification.BroadcastSoundService
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.data.remote.SocketIOService
@@ -65,12 +66,14 @@ private const val HOLD_DURATION_SECONDS = 15
 @Composable
 fun BroadcastListScreen(
     onNavigateBack: () -> Unit,
-    onNavigateToBroadcastDetails: (String) -> Unit
+    onNavigateToBroadcastDetails: (String) -> Unit,
+    onNavigateToSoundSettings: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
     val repository = remember { BroadcastRepository.getInstance(context) }
+    val soundService = remember { BroadcastSoundService.getInstance(context) }
     
     var broadcasts by remember { mutableStateOf<List<BroadcastTrip>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -126,10 +129,17 @@ fun BroadcastListScreen(
         }
     }
     
-    // Listen for new broadcasts
+    // Listen for new broadcasts - PLAY SOUND
     LaunchedEffect(Unit) {
         SocketIOService.newBroadcasts.collect { notification ->
-            Toast.makeText(context, "New request: ${notification.pickupCity} → ${notification.dropCity}", Toast.LENGTH_SHORT).show()
+            // Play notification sound for new broadcast
+            if (notification.isUrgent == true) {
+                soundService.playUrgentSound()
+            } else {
+                soundService.playBroadcastSound()
+            }
+            
+            Toast.makeText(context, "🔔 New request: ${notification.pickupCity} → ${notification.dropCity}", Toast.LENGTH_SHORT).show()
             fetchBroadcasts(forceRefresh = true)
         }
     }
@@ -201,6 +211,11 @@ fun BroadcastListScreen(
                                 color = White.copy(alpha = 0.9f)
                             )
                         }
+                    }
+                    
+                    // Sound settings
+                    IconButton(onClick = onNavigateToSoundSettings) {
+                        Icon(Icons.Default.NotificationsActive, "Sound Settings", tint = White)
                     }
                     
                     IconButton(

@@ -170,7 +170,17 @@ fun WeeloNavigation(
                         // Fallback to old flow
                         navController.navigate(Screen.TruckSelection.createRoute(params))
                     }
+                },
+                onNavigateToSoundSettings = {
+                    navController.navigate(Screen.BroadcastSoundSettings.route)
                 }
+            )
+        }
+        
+        // Broadcast Sound Settings
+        composable(Screen.BroadcastSoundSettings.route) {
+            com.weelo.logistics.ui.transporter.BroadcastSoundSettingsScreen(
+                onNavigateBack = { navController.popBackStack() }
             )
         }
         
