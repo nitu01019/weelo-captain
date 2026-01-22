@@ -405,7 +405,10 @@ data class BroadcastResponseData(
     
     // Additional info
     val notes: String? = null,
-    val isUrgent: Boolean? = null
+    val isUrgent: Boolean? = null,
+    
+    // Multi-truck support - array of requested vehicles
+    val requestedVehicles: List<RequestedVehicleData>? = null
 ) {
     /**
      * Get effective broadcast ID (handles both naming conventions)
@@ -456,6 +459,18 @@ data class BroadcastResponseData(
 /**
  * Location data that handles both naming conventions
  */
+/**
+ * Requested Vehicle Data - For multi-truck broadcasts
+ */
+data class RequestedVehicleData(
+    val vehicleType: String? = null,
+    val vehicleSubtype: String? = null,
+    val count: Int? = null,
+    val filledCount: Int? = null,
+    val farePerTruck: Double? = null,
+    val capacityTons: Double? = null
+)
+
 data class BroadcastLocationData(
     val latitude: Double? = null,
     val longitude: Double? = null,

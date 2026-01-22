@@ -456,6 +456,7 @@ private fun BroadcastOverlayContent(
 
 /**
  * TRUCK TYPE CARD - Individual truck type with quantity selector
+ * Responsive design for all screen sizes
  */
 @Composable
 private fun TruckTypeCard(
@@ -464,6 +465,7 @@ private fun TruckTypeCard(
     onReject: () -> Unit
 ) {
     var selectedQuantity by remember { mutableStateOf(1) }
+    val showQuantitySelector = vehicle.remainingCount > 1
     
     LaunchedEffect(vehicle.remainingCount) {
         if (selectedQuantity > vehicle.remainingCount) {
@@ -473,60 +475,62 @@ private fun TruckTypeCard(
     
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = White),
         elevation = CardDefaults.cardElevation(2.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            // Header: Truck type + Available
+        Column(modifier = Modifier.padding(12.dp)) {
+            // Row 1: Truck Icon + Type + Count Badge
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .background(Primary.copy(alpha = 0.1f), RoundedCornerShape(12.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Default.LocalShipping, null, tint = Primary, modifier = Modifier.size(28.dp))
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Column {
+                // Truck Icon
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(Primary.copy(alpha = 0.1f), RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.LocalShipping, null, tint = Primary, modifier = Modifier.size(24.dp))
+                }
+                
+                Spacer(Modifier.width(10.dp))
+                
+                // Type & Subtype
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        vehicle.vehicleType.uppercase(),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    if (vehicle.vehicleSubtype.isNotBlank()) {
                         Text(
-                            vehicle.vehicleType.uppercase(),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
+                            vehicle.vehicleSubtype,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                            maxLines = 1
                         )
-                        if (vehicle.vehicleSubtype.isNotBlank()) {
-                            Text(
-                                vehicle.vehicleSubtype,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextSecondary
-                            )
-                        }
                     }
                 }
                 
+                // Count + Fare
                 Column(horizontalAlignment = Alignment.End) {
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Success.copy(alpha = 0.1f)
+                        shape = RoundedCornerShape(6.dp),
+                        color = Success.copy(alpha = 0.15f)
                     ) {
                         Text(
-                            "${vehicle.remainingCount} available",
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.labelMedium,
+                            "${vehicle.remainingCount}x",
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
                             color = Success
                         )
                     }
-                    Spacer(Modifier.height(4.dp))
                     Text(
-                        "₹${String.format("%,.0f", vehicle.farePerTruck)}/truck",
+                        "₹${String.format("%,.0f", vehicle.farePerTruck)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = Primary,
                         fontWeight = FontWeight.Medium
@@ -534,78 +538,103 @@ private fun TruckTypeCard(
                 }
             }
             
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(10.dp))
             
-            // Quantity Selector + Actions
+            // Row 2: Quantity (if > 1 available) + Actions
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Quantity Selector
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .background(Surface, RoundedCornerShape(8.dp))
-                        .border(1.dp, Divider, RoundedCornerShape(8.dp))
-                        .padding(4.dp)
-                ) {
-                    IconButton(
-                        onClick = { if (selectedQuantity > 1) selectedQuantity-- },
-                        modifier = Modifier.size(36.dp),
-                        enabled = selectedQuantity > 1
+                // Quantity Selector - Only show if more than 1 available
+                if (showQuantitySelector) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .background(Surface, RoundedCornerShape(6.dp))
+                            .border(1.dp, Divider, RoundedCornerShape(6.dp))
+                            .padding(2.dp)
                     ) {
-                        Icon(Icons.Default.Remove, "Decrease", tint = if (selectedQuantity > 1) Primary else TextDisabled)
+                        IconButton(
+                            onClick = { if (selectedQuantity > 1) selectedQuantity-- },
+                            modifier = Modifier.size(28.dp),
+                            enabled = selectedQuantity > 1
+                        ) {
+                            Icon(
+                                Icons.Default.Remove, 
+                                "Decrease", 
+                                tint = if (selectedQuantity > 1) Primary else TextDisabled,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        
+                        Text(
+                            selectedQuantity.toString(),
+                            modifier = Modifier.widthIn(min = 28.dp),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        
+                        IconButton(
+                            onClick = { if (selectedQuantity < vehicle.remainingCount) selectedQuantity++ },
+                            modifier = Modifier.size(28.dp),
+                            enabled = selectedQuantity < vehicle.remainingCount
+                        ) {
+                            Icon(
+                                Icons.Default.Add, 
+                                "Increase", 
+                                tint = if (selectedQuantity < vehicle.remainingCount) Primary else TextDisabled,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
-                    
+                } else {
+                    // Just show "1 truck" text when only 1 available
                     Text(
-                        selectedQuantity.toString(),
-                        modifier = Modifier.widthIn(min = 40.dp),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center
+                        "1 truck",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
                     )
-                    
-                    IconButton(
-                        onClick = { if (selectedQuantity < vehicle.remainingCount) selectedQuantity++ },
-                        modifier = Modifier.size(36.dp),
-                        enabled = selectedQuantity < vehicle.remainingCount
-                    ) {
-                        Icon(Icons.Default.Add, "Increase", tint = if (selectedQuantity < vehicle.remainingCount) Primary else TextDisabled)
-                    }
                 }
                 
-                // Actions
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Action Buttons
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     OutlinedButton(
                         onClick = onReject,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(6.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
                         border = androidx.compose.foundation.BorderStroke(1.dp, Error.copy(alpha = 0.5f)),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(36.dp)
                     ) {
-                        Text("REJECT", fontWeight = FontWeight.Bold)
+                        Text("REJECT", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                     }
                     
                     Button(
                         onClick = { onAccept(selectedQuantity) },
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(6.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Success),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(36.dp)
                     ) {
-                        Text("ACCEPT $selectedQuantity", fontWeight = FontWeight.Bold)
+                        Text(
+                            if (showQuantitySelector) "ACCEPT $selectedQuantity" else "ACCEPT",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }
             
-            // Total if multiple
+            // Total earnings if multiple selected
             if (selectedQuantity > 1) {
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
                 Text(
                     "Total: ₹${String.format("%,.0f", vehicle.farePerTruck * selectedQuantity)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = Success,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.End
                 )

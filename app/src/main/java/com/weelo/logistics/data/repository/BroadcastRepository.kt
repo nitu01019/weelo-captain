@@ -4,6 +4,7 @@ import android.content.Context
 import com.weelo.logistics.data.api.AcceptBroadcastRequest
 import com.weelo.logistics.data.api.AcceptBroadcastResponse
 import com.weelo.logistics.data.api.BroadcastResponseData
+import com.weelo.logistics.data.model.RequestedVehicle
 import com.weelo.logistics.data.api.DeclineBroadcastRequest
 import com.weelo.logistics.data.api.DeclineBroadcastResponse
 import com.weelo.logistics.data.model.BroadcastStatus
@@ -538,8 +539,27 @@ class BroadcastRepository private constructor(
             broadcastTime = parseTimestamp(data.createdAt),
             expiryTime = parseTimestamp(data.expiresAt),
             notes = data.notes,
-            isUrgent = data.isUrgent ?: false
+            isUrgent = data.isUrgent ?: false,
+            requestedVehicles = mapRequestedVehicles(data.requestedVehicles)
         )
+    }
+    
+    /**
+     * Map requested vehicles from API response
+     */
+    private fun mapRequestedVehicles(vehicles: List<com.weelo.logistics.data.api.RequestedVehicleData>?): List<RequestedVehicle> {
+        if (vehicles.isNullOrEmpty()) return emptyList()
+        
+        return vehicles.map { v ->
+            RequestedVehicle(
+                vehicleType = v.vehicleType ?: "",
+                vehicleSubtype = v.vehicleSubtype ?: "",
+                count = v.count ?: 0,
+                filledCount = v.filledCount ?: 0,
+                farePerTruck = v.farePerTruck ?: 0.0,
+                capacityTons = v.capacityTons ?: 0.0
+            )
+        }.filter { it.count > 0 }  // Only include valid entries
     }
     
     private fun parseVehicleType(type: String?): TruckCategory {
