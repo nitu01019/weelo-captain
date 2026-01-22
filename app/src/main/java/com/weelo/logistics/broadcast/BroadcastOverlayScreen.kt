@@ -249,13 +249,13 @@ private fun BroadcastOverlayContent(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text(
-                                    text = broadcast.vehicleType.name.uppercase(),
+                                    text = broadcast.vehicleTypesDisplay.uppercase(),
                                     color = textPrimary,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 18.sp
                                 )
                                 Text(
-                                    text = broadcast.vehicleType.description,
+                                    text = broadcast.vehicleType?.description ?: "${broadcast.totalTrucksNeeded} trucks needed",
                                     color = textSecondary,
                                     fontSize = 14.sp
                                 )

@@ -79,17 +79,27 @@ fun TruckSelectionScreen(
                             // Filter vehicles by:
                             // 1. Status = AVAILABLE (not in_transit or maintenance)
                             // 2. Vehicle type matches broadcast requirement
-                            val requiredType = broadcastResult.data.vehicleType.id.lowercase()
+                            val requiredType = broadcastResult.data.vehicleType?.id?.lowercase() ?: ""
+                            val requestedTypes = broadcastResult.data.requestedVehicles.map { it.vehicleType.lowercase() }
                             
                             availableVehicles = vehicleRepository.mapToUiModels(
                                 vehicleResult.data.vehicles.filter { vehicle ->
-                                    vehicle.status.lowercase() == "available" &&
-                                    vehicle.vehicleType.lowercase() == requiredType
+                                    val vehicleTypeLower = vehicle.vehicleType.lowercase()
+                                    val isAvailable = vehicle.status.lowercase() == "available"
+                                    
+                                    // Match either legacy single type OR any of the requested types
+                                    val matchesType = if (requestedTypes.isNotEmpty()) {
+                                        requestedTypes.contains(vehicleTypeLower)
+                                    } else {
+                                        vehicleTypeLower == requiredType
+                                    }
+                                    
+                                    isAvailable && matchesType
                                 }
                             )
                             
                             android.util.Log.i("TruckSelectionScreen", 
-                                "✅ Found ${availableVehicles.size} available ${requiredType} vehicles")
+                                "✅ Found ${availableVehicles.size} available vehicles for types: ${requestedTypes.ifEmpty { listOf(requiredType) }}")
                         }
                         is VehicleResult.Error -> {
                             errorMessage = vehicleResult.message

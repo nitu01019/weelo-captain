@@ -39,6 +39,10 @@ sealed class Screen(val route: String) {
     
     // Broadcast System - NEW
     object BroadcastList : Screen("broadcast_list")
+    object TruckHoldConfirm : Screen("truck_hold_confirm/{orderId}/{vehicleType}/{vehicleSubtype}/{quantity}") {
+        fun createRoute(orderId: String, vehicleType: String, vehicleSubtype: String, quantity: Int) = 
+            "truck_hold_confirm/$orderId/$vehicleType/${vehicleSubtype.ifBlank { "_" }}/$quantity"
+    }
     object TruckSelection : Screen("truck_selection/{broadcastId}") {
         fun createRoute(broadcastId: String) = "truck_selection/$broadcastId"
     }

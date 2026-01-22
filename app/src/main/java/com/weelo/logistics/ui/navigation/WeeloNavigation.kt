@@ -157,8 +157,43 @@ fun WeeloNavigation(
         composable(Screen.BroadcastList.route) {
             com.weelo.logistics.ui.transporter.BroadcastListScreen(
                 onNavigateBack = { navController.popBackStack() },
-                onNavigateToBroadcastDetails = { broadcastId ->
-                    navController.navigate(Screen.TruckSelection.createRoute(broadcastId))
+                onNavigateToBroadcastDetails = { params ->
+                    // params format: "orderId|vehicleType|vehicleSubtype|quantity"
+                    val parts = params.split("|")
+                    if (parts.size >= 4) {
+                        val orderId = parts[0]
+                        val vehicleType = parts[1]
+                        val vehicleSubtype = parts[2]
+                        val quantity = parts[3].toIntOrNull() ?: 1
+                        navController.navigate(Screen.TruckHoldConfirm.createRoute(orderId, vehicleType, vehicleSubtype, quantity))
+                    } else {
+                        // Fallback to old flow
+                        navController.navigate(Screen.TruckSelection.createRoute(params))
+                    }
+                }
+            )
+        }
+        
+        // Truck Hold Confirmation Screen (15 second countdown)
+        composable(Screen.TruckHoldConfirm.route) { backStackEntry ->
+            val orderId = backStackEntry.arguments?.getString("orderId") ?: ""
+            val vehicleType = backStackEntry.arguments?.getString("vehicleType") ?: ""
+            val vehicleSubtype = backStackEntry.arguments?.getString("vehicleSubtype")?.let { if (it == "_") "" else it } ?: ""
+            val quantity = backStackEntry.arguments?.getString("quantity")?.toIntOrNull() ?: 1
+            
+            com.weelo.logistics.ui.transporter.TruckHoldConfirmScreen(
+                orderId = orderId,
+                vehicleType = vehicleType,
+                vehicleSubtype = vehicleSubtype,
+                quantity = quantity,
+                onConfirmed = { holdId, truckIds ->
+                    // Navigate to driver assignment
+                    navController.navigate(Screen.DriverAssignment.createRoute(orderId, truckIds.joinToString(","))) {
+                        popUpTo(Screen.BroadcastList.route)
+                    }
+                },
+                onCancelled = {
+                    navController.popBackStack()
                 }
             )
         }

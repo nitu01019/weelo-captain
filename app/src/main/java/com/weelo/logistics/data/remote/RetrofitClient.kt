@@ -605,6 +605,13 @@ object RetrofitClient {
         retrofit.create(VehicleApiService::class.java)
     }
     
+    /**
+     * Truck Hold API - BookMyShow-style truck holding
+     */
+    val truckHoldApi: com.weelo.logistics.data.api.TruckHoldApiService by lazy {
+        retrofit.create(com.weelo.logistics.data.api.TruckHoldApiService::class.java)
+    }
+    
     val driverApi: DriverApiService by lazy {
         retrofit.create(DriverApiService::class.java)
     }

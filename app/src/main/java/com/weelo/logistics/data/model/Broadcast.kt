@@ -17,8 +17,29 @@ package com.weelo.logistics.data.model
  */
 
 /**
+ * RequestedVehicle - A single vehicle type request with count and pricing
+ * Used for multi-truck broadcast requests
+ */
+data class RequestedVehicle(
+    val vehicleType: String,                    // e.g., "open", "container", "tipper"
+    val vehicleSubtype: String,                 // e.g., "20 Feet", "32 Feet Multi"
+    val count: Int,                             // Number of this truck type needed
+    val filledCount: Int = 0,                   // How many of this type already filled
+    val farePerTruck: Double,                   // Fare per truck for this type
+    val capacityTons: Double = 0.0              // Capacity in tons
+) {
+    val remainingCount: Int get() = count - filledCount
+    val totalFare: Double get() = farePerTruck * count
+}
+
+/**
  * BroadcastTrip - Customer broadcast message to transporters
  * This is what transporters receive when a customer needs trucks
+ * 
+ * SUPPORTS MULTIPLE TRUCK TYPES:
+ * - Customer can request 2x Open Trucks + 3x Containers + 1x Tipper
+ * - Each type has its own count and pricing
+ * - Transporter only sees trucks they have registered
  * 
  * BACKEND: Send this via push notification/websocket to all nearby transporters
  */
@@ -34,15 +55,20 @@ data class BroadcastTrip(
     val distance: Double,                       // Distance in km
     val estimatedDuration: Long,                // Estimated duration in minutes
     
-    // Requirements
-    val totalTrucksNeeded: Int,                 // Total number of trucks needed (e.g., 10)
-    val trucksFilledSoFar: Int = 0,            // How many already filled by other transporters
-    val vehicleType: TruckCategory,             // Type of vehicle required
+    // === MULTI-TRUCK REQUIREMENTS ===
+    val requestedVehicles: List<RequestedVehicle> = emptyList(),  // Multiple truck types with counts
+    val totalTrucksNeeded: Int,                 // Total trucks across all types
+    val trucksFilledSoFar: Int = 0,            // Total filled across all types
+    
+    // Legacy single vehicle type (for backward compatibility)
+    @Deprecated("Use requestedVehicles instead")
+    val vehicleType: TruckCategory? = null,     // Type of vehicle required (DEPRECATED)
+    
     val goodsType: String,                      // Type of goods to transport
     val weight: String? = null,                 // Weight of goods
     
     // Pricing (Algorithm-based)
-    val farePerTruck: Double,                   // Fare for each truck (set by your algorithm)
+    val farePerTruck: Double,                   // Average fare per truck (for display)
     val totalFare: Double,                      // Total fare for all trucks
     
     // Broadcast Status
@@ -53,7 +79,35 @@ data class BroadcastTrip(
     // Additional Info
     val notes: String? = null,                  // Special instructions
     val isUrgent: Boolean = false               // Priority flag
-)
+) {
+    /**
+     * Get remaining trucks needed across all types
+     */
+    val totalRemainingTrucks: Int 
+        get() = if (requestedVehicles.isNotEmpty()) {
+            requestedVehicles.sumOf { it.remainingCount }
+        } else {
+            totalTrucksNeeded - trucksFilledSoFar
+        }
+    
+    /**
+     * Check if this broadcast has multiple truck types
+     */
+    val hasMultipleTruckTypes: Boolean 
+        get() = requestedVehicles.size > 1
+    
+    /**
+     * Get vehicle types as display string
+     */
+    val vehicleTypesDisplay: String
+        get() = if (requestedVehicles.isNotEmpty()) {
+            requestedVehicles.joinToString(", ") { 
+                "${it.count}x ${it.vehicleType.replaceFirstChar { c -> c.uppercase() }}"
+            }
+        } else {
+            vehicleType?.name ?: "Truck"
+        }
+}
 
 /**
  * TripAssignment - When transporter assigns drivers to selected trucks
