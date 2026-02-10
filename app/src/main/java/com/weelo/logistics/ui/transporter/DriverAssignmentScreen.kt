@@ -112,7 +112,7 @@ fun DriverAssignmentScreen(
                     availableDrivers = driverResult.data.drivers.filter { 
                         it.status == DriverStatus.ACTIVE && it.isAvailable
                     }
-                    android.util.Log.i("DriverAssignmentScreen", 
+                    timber.log.Timber.i(
                         "✅ Found ${availableDrivers.size} available drivers out of ${driverResult.data.total}")
                 }
                 is DriverResult.Error -> {
@@ -284,7 +284,7 @@ fun DriverAssignmentScreen(
                                 
                                 // Call acceptBroadcast for each vehicle+driver assignment
                                 for ((vehicleId, driverId) in driverAssignments) {
-                                    android.util.Log.i("DriverAssignmentScreen", 
+                                    timber.log.Timber.i(
                                         "📤 Accepting broadcast: $broadcastId with vehicle: $vehicleId, driver: $driverId")
                                     
                                     when (val result = broadcastRepository.acceptBroadcast(
@@ -294,12 +294,12 @@ fun DriverAssignmentScreen(
                                     )) {
                                         is BroadcastResult.Success -> {
                                             successCount++
-                                            android.util.Log.i("DriverAssignmentScreen", 
+                                            timber.log.Timber.i(
                                                 "✅ Assignment successful: ${result.data.assignmentId}")
                                         }
                                         is BroadcastResult.Error -> {
                                             hasError = true
-                                            android.util.Log.e("DriverAssignmentScreen", 
+                                            timber.log.Timber.e(
                                                 "❌ Assignment failed: ${result.message}")
                                             Toast.makeText(context, 
                                                 "Failed to assign vehicle: ${result.message}", 

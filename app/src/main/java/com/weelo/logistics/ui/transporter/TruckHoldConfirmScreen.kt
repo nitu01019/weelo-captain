@@ -1,6 +1,5 @@
 package com.weelo.logistics.ui.transporter
 
-import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -81,7 +80,7 @@ fun TruckHoldConfirmScreen(
     
     // Hold trucks on screen load
     LaunchedEffect(Unit) {
-        Log.d(TAG, "Holding $quantity $vehicleType $vehicleSubtype for order $orderId")
+        timber.log.Timber.d("Holding $quantity $vehicleType $vehicleSubtype for order $orderId")
         
         try {
             val response = withContext(Dispatchers.IO) {
@@ -98,14 +97,14 @@ fun TruckHoldConfirmScreen(
             if (response.isSuccessful && response.body()?.success == true) {
                 holdId = response.body()?.data?.holdId
                 holdSuccess = true
-                Log.d(TAG, "Hold success: $holdId")
+                timber.log.Timber.d("Hold success: $holdId")
             } else {
                 val msg = response.body()?.error?.message ?: response.body()?.message ?: "Failed to hold trucks"
                 errorMessage = msg
-                Log.e(TAG, "Hold failed: $msg")
+                timber.log.Timber.e("Hold failed: $msg")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Hold exception", e)
+            timber.log.Timber.e(e, "Hold exception")
             errorMessage = e.localizedMessage ?: "Network error"
         } finally {
             isLoading = false
@@ -122,7 +121,7 @@ fun TruckHoldConfirmScreen(
             
             // Timeout - release hold
             if (remainingSeconds <= 0 && holdId != null) {
-                Log.d(TAG, "Hold timeout, releasing")
+                timber.log.Timber.d("Hold timeout, releasing")
                 try {
                     withContext(Dispatchers.IO) {
                         RetrofitClient.truckHoldApi.releaseHold(
@@ -130,7 +129,7 @@ fun TruckHoldConfirmScreen(
                         )
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Release failed", e)
+                    timber.log.Timber.e(e, "Release failed")
                 }
                 Toast.makeText(context, "Time expired. Trucks released.", Toast.LENGTH_SHORT).show()
                 onCancelled()
@@ -154,7 +153,7 @@ fun TruckHoldConfirmScreen(
                 
                 if (response.isSuccessful && response.body()?.success == true) {
                     val truckIds = response.body()?.data?.assignedTrucks ?: emptyList()
-                    Log.d(TAG, "Confirmed! Assigned trucks: $truckIds")
+                    timber.log.Timber.d("Confirmed! Assigned trucks: $truckIds")
                     Toast.makeText(context, "Trucks assigned! Now assign drivers.", Toast.LENGTH_SHORT).show()
                     onConfirmed(holdId!!, truckIds)
                 } else {
@@ -162,7 +161,7 @@ fun TruckHoldConfirmScreen(
                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Confirm failed", e)
+                timber.log.Timber.e(e, "Confirm failed")
                 Toast.makeText(context, "Error: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
             } finally {
                 isConfirming = false
@@ -184,9 +183,9 @@ fun TruckHoldConfirmScreen(
                         ReleaseHoldRequest(holdId!!)
                     )
                 }
-                Log.d(TAG, "Hold released")
+                timber.log.Timber.d("Hold released")
             } catch (e: Exception) {
-                Log.e(TAG, "Release failed", e)
+                timber.log.Timber.e(e, "Release failed")
             }
             onCancelled()
         }

@@ -29,6 +29,7 @@ import coil.request.ImageRequest
 /**
  * Optimized AsyncImage for loading images from URLs with caching
  */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun OptimizedNetworkImage(
     imageUrl: String?,

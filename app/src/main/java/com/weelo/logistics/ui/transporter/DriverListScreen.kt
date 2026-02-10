@@ -1,18 +1,27 @@
 package com.weelo.logistics.ui.transporter
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.weelo.logistics.data.api.DriverData
+import com.weelo.logistics.data.cache.AppCache
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
@@ -22,11 +31,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private const val TAG = "DriverListScreen"
+
 /**
  * DriverListScreen - Shows all drivers from backend database
  * 
- * Fetches real data from: GET /api/v1/driver/list
- * No mock data - only real drivers saved in database
+ * RAPIDO-STYLE INSTANT NAVIGATION:
+ * - Observes AppCache (shows cached data instantly)
+ * - Background refresh (no blocking on navigation)
+ * - Populates cache for DriverDetailsScreen
  */
 @Composable
 fun DriverListScreen(
@@ -35,15 +48,18 @@ fun DriverListScreen(
     onNavigateToDriverDetails: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
-    var drivers by remember { mutableStateOf<List<DriverData>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    
+    // =========================================================================
+    // RAPIDO-STYLE: Observe cached data (instant display)
+    // =========================================================================
+    val drivers by AppCache.drivers.collectAsState()
+    val isLoading by AppCache.driversLoading.collectAsState()
+    val errorMessage by AppCache.driversError.collectAsState()
+    
+    // Local UI state
     var searchQuery by remember { mutableStateOf("") }
     var debouncedSearchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("All") }
-    var totalDrivers by remember { mutableStateOf(0) }
-    var availableDrivers by remember { mutableStateOf(0) }
-    var onTripDrivers by remember { mutableStateOf(0) }
     
     val searchDebouncer = remember {
         SearchDebouncer<String>(500L, scope) { query ->
@@ -51,32 +67,56 @@ fun DriverListScreen(
         }
     }
     
-    // Fetch drivers from backend
-    LaunchedEffect(Unit) {
+    // Computed stats from cache
+    val totalDrivers = remember(drivers) { drivers.size }
+    @Suppress("UNUSED_VARIABLE")
+    val availableDrivers = remember(drivers) { drivers.count { it.isOnline && !it.isOnTrip } }
+    @Suppress("UNUSED_VARIABLE")
+    val onTripDrivers = remember(drivers) { drivers.count { it.isOnTrip } }
+    
+    // Background refresh function
+    fun refreshDrivers(forceRefresh: Boolean = false) {
+        if (!forceRefresh && AppCache.hasDriverData() && !AppCache.shouldRefreshDrivers()) {
+            timber.log.Timber.d("📦 Using cached drivers (fresh)")
+            return
+        }
+        
         scope.launch {
-            isLoading = true
-            errorMessage = null
+            AppCache.setDriversLoading(true)
             
             try {
+                timber.log.Timber.d("🔄 Refreshing drivers in background...")
+                
                 val response = withContext(Dispatchers.IO) {
                     RetrofitClient.driverApi.getDriverList()
                 }
                 
                 if (response.isSuccessful && response.body()?.success == true) {
                     val data = response.body()?.data
-                    drivers = data?.drivers ?: emptyList()
-                    totalDrivers = data?.total ?: 0
-                    availableDrivers = data?.online ?: 0
-                    // onTrip count will be calculated from drivers list
-                    onTripDrivers = drivers.count { it.isOnTrip }
+                    AppCache.setDrivers(data?.drivers ?: emptyList())
+                    timber.log.Timber.d("✅ Cached ${data?.drivers?.size ?: 0} drivers")
                 } else {
-                    errorMessage = response.body()?.error?.message ?: "Failed to load drivers"
+                    if (!AppCache.hasDriverData()) {
+                        AppCache.setDriversError(response.body()?.error?.message ?: "Failed to load")
+                    }
                 }
             } catch (e: Exception) {
-                errorMessage = "Network error: ${e.message}"
+                timber.log.Timber.e(e, "❌ Refresh failed")
+                if (!AppCache.hasDriverData()) {
+                    AppCache.setDriversError("Network error: ${e.message}")
+                }
             } finally {
-                isLoading = false
+                AppCache.setDriversLoading(false)
             }
+        }
+    }
+    
+    // =========================================================================
+    // RAPIDO-STYLE: Only refresh if stale or empty
+    // =========================================================================
+    LaunchedEffect(Unit) {
+        if (AppCache.shouldRefreshDrivers()) {
+            refreshDrivers()
         }
     }
     
@@ -143,8 +183,9 @@ fun DriverListScreen(
                 }
             }
             
-            if (isLoading) {
-                // OPTIMIZATION: Skeleton loading for better perceived performance
+            // RAPIDO-STYLE: Only show loading skeleton if loading AND no cached data
+            if (isLoading && drivers.isEmpty()) {
+                // First load - show skeleton for better perceived performance
                 Column(
                     Modifier
                         .fillMaxSize()
@@ -153,7 +194,7 @@ fun DriverListScreen(
                 ) {
                     SkeletonList(itemCount = 5)
                 }
-            } else if (errorMessage != null) {
+            } else if (errorMessage != null && drivers.isEmpty()) {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
                         Icon(Icons.Default.CloudOff, null, Modifier.size(64.dp), tint = TextDisabled)
@@ -183,14 +224,30 @@ fun DriverListScreen(
                     }
                 }
             } else {
+                // OPTIMIZED LazyColumn for smooth scrolling
+                val listState = rememberLazyListState()
+                
                 LazyColumn(
-                    Modifier.fillMaxSize(),
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    userScrollEnabled = true
                 ) {
-                    items(filteredDrivers, key = { it.id }) { driver ->
-                        DriverCardFromApi(driver) { onNavigateToDriverDetails(driver.id) }
+                    items(
+                        items = filteredDrivers, 
+                        key = { it.id },
+                        // Content type optimization for better recycling
+                        contentType = { "driver_card" }
+                    ) { driver ->
+                        // Stable key wrapper prevents unnecessary recomposition
+                        key(driver.id) {
+                            DriverCardFromApi(driver) { onNavigateToDriverDetails(driver.id) }
+                        }
                     }
+                    
+                    // Bottom spacing for FAB
+                    item(key = "bottom_spacer") { Spacer(Modifier.height(72.dp)) }
                 }
             }
         }
@@ -206,82 +263,126 @@ fun DriverListScreen(
 }
 
 /**
- * DriverCard for API data - displays driver from backend
+ * DriverCard for API data - OPTIMIZED for smooth scrolling
+ * Uses remember for computed values to prevent recomposition
  */
 @Composable
 fun DriverCardFromApi(driver: DriverData, onClick: () -> Unit) {
+    // Pre-compute values to avoid recalculation during scroll
+    val initial = remember(driver.name, driver.phone) {
+        (driver.name?.firstOrNull() ?: driver.phone.lastOrNull() ?: 'D').uppercase().toString()
+    }
+    
+    val displayName = remember(driver.name) { driver.name ?: "Driver" }
+    val phoneDisplay = remember(driver.phone) { "+91 ${driver.phone}" }
+    val ratingDisplay = remember(driver.rating) { "⭐ ${String.format("%.1f", driver.rating ?: 0f)}" }
+    val tripsDisplay = remember(driver.totalTrips) { "${driver.totalTrips} trips" }
+    
+    val (statusText, chipStatus) = remember(driver.isOnTrip, driver.isOnline) {
+        when {
+            driver.isOnTrip -> "On Trip" to ChipStatus.IN_PROGRESS
+            driver.isOnline -> "Available" to ChipStatus.AVAILABLE
+            else -> "Offline" to ChipStatus.COMPLETED
+        }
+    }
+    
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                // Hardware acceleration for smoother rendering
+                clip = true
+            },
         onClick = onClick,
-        elevation = CardDefaults.cardElevation(2.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp, pressedElevation = 4.dp),
         shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(White)
     ) {
-        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            // Driver Avatar
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(16.dp), 
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Driver Avatar - show profile photo or initials fallback
             Box(
-                Modifier.size(56.dp).background(Surface, androidx.compose.foundation.shape.CircleShape),
+                Modifier
+                    .size(56.dp),
                 Alignment.Center
             ) {
-                val initial = (driver.name?.firstOrNull() ?: driver.phone.lastOrNull() ?: 'D').uppercase()
-                Text(
-                    text = initial.toString(),
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = Primary
-                )
+                if (!driver.profilePhotoUrl.isNullOrBlank()) {
+                    // Show profile photo using Coil
+                    AsyncImage(
+                        model = driver.profilePhotoUrl,
+                        contentDescription = "Driver profile photo",
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(Surface)
+                    )
+                } else {
+                    // Fallback to initials if no photo
+                    Box(
+                        Modifier
+                            .size(56.dp)
+                            .background(Surface, androidx.compose.foundation.shape.CircleShape),
+                        Alignment.Center
+                    ) {
+                        Text(
+                            text = initial,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = Primary
+                        )
+                    }
+                }
             }
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = driver.name ?: "Driver",
+                    text = displayName,
                     style = MaterialTheme.typography.titleMedium, 
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "+91 ${driver.phone}",
+                    text = phoneDisplay,
                     style = MaterialTheme.typography.bodyMedium, 
-                    color = TextSecondary
+                    color = TextSecondary,
+                    maxLines = 1
                 )
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Show rating if available, else show 0
                     Text(
-                        text = "⭐ ${String.format("%.1f", driver.rating ?: 0f)}",
-                        style = MaterialTheme.typography.bodySmall
+                        text = ratingDisplay,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1
                     )
                     Spacer(Modifier.width(8.dp))
-                    // Show total trips (0 for new drivers)
                     Text(
-                        text = "${driver.totalTrips} trips",
+                        text = tripsDisplay,
                         style = MaterialTheme.typography.bodySmall, 
-                        color = TextSecondary
+                        color = TextSecondary,
+                        maxLines = 1
                     )
                 }
-                // Show license number if available
-                driver.licenseNumber?.let { license ->
+                // Show license number if available - only render if present
+                if (driver.licenseNumber != null) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "License: $license",
+                        text = "License: ${driver.licenseNumber}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
+                        color = TextSecondary,
+                        maxLines = 1
                     )
                 }
             }
             Spacer(Modifier.width(12.dp))
-            // Status chip based on online/trip status
+            // Status chip - pre-computed values
             StatusChip(
-                text = when {
-                    driver.isOnTrip -> "On Trip"
-                    driver.isOnline -> "Available"
-                    else -> "Offline"
-                },
-                status = when {
-                    driver.isOnTrip -> ChipStatus.IN_PROGRESS
-                    driver.isOnline -> ChipStatus.AVAILABLE
-                    else -> ChipStatus.COMPLETED
-                }
+                text = statusText,
+                status = chipStatus
             )
         }
     }

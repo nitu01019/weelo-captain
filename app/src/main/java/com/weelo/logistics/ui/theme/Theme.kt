@@ -12,71 +12,116 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
+// =============================================================================
+// WEELO CAPTAIN - PREMIUM RAPIDO-STYLE THEME
+// =============================================================================
+// A professional, premium theme with Saffron Yellow as the primary color
+// Designed for a clean, modern logistics app experience
+// =============================================================================
+
 private val LightColorScheme = lightColorScheme(
+    // Primary - Saffron Yellow
     primary = Primary,
-    onPrimary = White,
+    onPrimary = OnPrimary,  // Black text on yellow
     primaryContainer = PrimaryLight,
-    onPrimaryContainer = PrimaryDark,
+    onPrimaryContainer = Secondary,
     
+    // Secondary - Dark/Professional
     secondary = Secondary,
     onSecondary = White,
     secondaryContainer = SecondaryLight,
-    onSecondaryContainer = SecondaryDark,
+    onSecondaryContainer = White,
     
-    tertiary = Info,
-    onTertiary = White,
+    // Tertiary - Amber accent
+    tertiary = Tertiary,
+    onTertiary = Black,
+    tertiaryContainer = TertiaryLight,
+    onTertiaryContainer = Secondary,
     
+    // Error
     error = Error,
     onError = White,
-    errorContainer = Color(0xFFFFDAD6),
-    onErrorContainer = Color(0xFF410002),
+    errorContainer = ErrorLight,
+    onErrorContainer = ErrorDark,
     
+    // Background - Slightly off-white for premium feel
     background = Background,
     onBackground = TextPrimary,
     
-    surface = White,
+    // Surface - Pure white
+    surface = Surface,
     onSurface = TextPrimary,
-    surfaceVariant = Surface,
+    surfaceVariant = SurfaceVariant,
     onSurfaceVariant = TextSecondary,
     
-    outline = Divider,
-    outlineVariant = Color(0xFFE0E0E0),
+    // Outline
+    outline = Border,
+    outlineVariant = Divider,
     
-    scrim = Black.copy(alpha = 0.5f)
+    // Inverse (for snackbars etc.)
+    inverseSurface = Secondary,
+    inverseOnSurface = White,
+    inversePrimary = PrimaryVariant,
+    
+    // Scrim
+    scrim = Scrim
 )
 
 private val DarkColorScheme = darkColorScheme(
+    // Primary - Saffron Yellow (same in dark mode for brand consistency)
     primary = Primary,
-    onPrimary = White,
+    onPrimary = OnPrimary,
     primaryContainer = PrimaryDark,
     onPrimaryContainer = PrimaryLight,
     
-    secondary = Secondary,
-    onSecondary = White,
-    secondaryContainer = SecondaryDark,
-    onSecondaryContainer = SecondaryLight,
+    // Secondary
+    secondary = PrimaryVariant,
+    onSecondary = Black,
+    secondaryContainer = SecondaryLight,
+    onSecondaryContainer = White,
     
-    tertiary = Info,
-    onTertiary = White,
+    // Tertiary
+    tertiary = Tertiary,
+    onTertiary = Black,
     
+    // Error
     error = Error,
     onError = White,
+    errorContainer = ErrorDark,
+    onErrorContainer = ErrorLight,
     
-    background = Color(0xFF121212),
-    onBackground = Color(0xFFE0E0E0),
+    // Background - Near black
+    background = Secondary,
+    onBackground = White,
     
-    surface = Color(0xFF1E1E1E),
-    onSurface = Color(0xFFE0E0E0),
-    surfaceVariant = Color(0xFF2C2C2C),
-    onSurfaceVariant = TextSecondary,
+    // Surface - Dark gray
+    surface = SecondaryLight,
+    onSurface = White,
+    surfaceVariant = CardBackgroundDark,
+    onSurfaceVariant = TextTertiary,
     
+    // Outline
     outline = Color(0xFF424242),
-    outlineVariant = Color(0xFF616161)
+    outlineVariant = Color(0xFF616161),
+    
+    // Inverse
+    inverseSurface = White,
+    inverseOnSurface = Secondary,
+    inversePrimary = PrimaryDark,
+    
+    // Scrim
+    scrim = Scrim
 )
 
+/**
+ * Weelo Theme - Premium Rapido-style theme
+ * 
+ * @param darkTheme Whether to use dark theme (default: false for light theme)
+ * @param content The content to be themed
+ */
 @Composable
 fun WeeloTheme(
-    darkTheme: Boolean = false, // Force light theme
+    darkTheme: Boolean = false, // Default to light theme for premium feel
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) {
@@ -89,7 +134,8 @@ fun WeeloTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.background.toArgb()
+            // Use white/light status bar for premium look
+            window.statusBarColor = if (darkTheme) Secondary.toArgb() else White.toArgb()
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
         }
     }
@@ -99,4 +145,38 @@ fun WeeloTheme(
         typography = Typography,
         content = content
     )
+}
+
+/**
+ * Extended color accessors for convenience
+ */
+object WeeloColors {
+    val primary = Primary
+    val primaryDark = PrimaryDark
+    val primaryLight = PrimaryLight
+    val onPrimary = OnPrimary
+    
+    val secondary = Secondary
+    val secondaryLight = SecondaryLight
+    
+    val success = Success
+    val successLight = SuccessLight
+    val warning = Warning
+    val warningLight = WarningLight
+    val error = Error
+    val errorLight = ErrorLight
+    val info = Info
+    val infoLight = InfoLight
+    
+    val textPrimary = TextPrimary
+    val textSecondary = TextSecondary
+    val textTertiary = TextTertiary
+    val textDisabled = TextDisabled
+    
+    val background = Background
+    val surface = Surface
+    val divider = Divider
+    
+    val white = White
+    val black = Black
 }

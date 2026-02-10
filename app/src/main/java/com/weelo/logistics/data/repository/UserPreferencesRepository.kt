@@ -26,6 +26,7 @@ class UserPreferencesRepository(private val context: Context) {
         val HAS_DRIVER_ROLE = booleanPreferencesKey("has_driver_role")
         val IS_LOGGED_IN = booleanPreferencesKey("is_logged_in")
         val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
+        val PREFERRED_LANGUAGE = stringPreferencesKey("preferred_language")
     }
     
     /**
@@ -103,6 +104,33 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { preferences ->
             preferences[PreferenceKeys.ONBOARDING_COMPLETED] = completed
         }
+    }
+    
+    /**
+     * Get preferred language
+     */
+    val preferredLanguage: Flow<String?> = context.dataStore.data.map { preferences ->
+        preferences[PreferenceKeys.PREFERRED_LANGUAGE]
+    }
+    
+    /**
+     * Save preferred language
+     * 
+     * IMPORTANT: Also saves to SharedPreferences for synchronous read
+     * during app startup (attachBaseContext cannot use coroutines)
+     */
+    suspend fun savePreferredLanguage(languageCode: String) {
+        // Save to DataStore (for coroutine-based access)
+        context.dataStore.edit { preferences ->
+            preferences[PreferenceKeys.PREFERRED_LANGUAGE] = languageCode
+        }
+        
+        // Also save to SharedPreferences for synchronous startup access
+        // This enables fast, non-blocking language loading in attachBaseContext()
+        context.getSharedPreferences("weelo_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putString("preferred_language", languageCode)
+            .apply()
     }
     
     /**

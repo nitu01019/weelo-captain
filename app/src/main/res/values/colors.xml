@@ -1,34 +1,64 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Primary Colors (Orange - Transporter) -->
-    <color name="primary">#FF6B35</color>
-    <color name="primaryDark">#E85D2F</color>
-    <color name="primaryLight">#FFE5DC</color>
+    <!-- =================================================================== -->
+    <!-- WEELO CAPTAIN - PREMIUM RAPIDO-STYLE COLOR PALETTE                  -->
+    <!-- Brand: Saffron Yellow (#F9C935), White (#FFFFFF), Black (#000000)   -->
+    <!-- =================================================================== -->
     
-    <!-- Splash Screen Colors (Like Rapido) -->
-    <color name="splashBackground">#4A2C00</color>
-    <color name="splashCircle">#FFD54F</color>
+    <!-- Primary Colors (Saffron Yellow - Rapido Style) -->
+    <color name="primary">#F9C935</color>
+    <color name="primaryDark">#E5B82E</color>
+    <color name="primaryLight">#FFF8E1</color>
+    <color name="primaryVariant">#FFD54F</color>
+    <color name="onPrimary">#000000</color>
     
-    <!-- Secondary Colors (Blue - Driver) -->
-    <color name="secondary">#2196F3</color>
-    <color name="secondaryDark">#1976D2</color>
-    <color name="secondaryLight">#E3F2FD</color>
+    <!-- Secondary Colors (Dark/Professional) -->
+    <color name="secondary">#1A1A1A</color>
+    <color name="secondaryDark">#000000</color>
+    <color name="secondaryLight">#2D2D2D</color>
     
-    <!-- Status Colors -->
-    <color name="success">#4CAF50</color>
-    <color name="warning">#FFC107</color>
-    <color name="error">#F44336</color>
+    <!-- Status Colors (Vibrant) -->
+    <color name="success">#00C853</color>
+    <color name="successLight">#E8F5E9</color>
+    <color name="warning">#FF9800</color>
+    <color name="warningLight">#FFF3E0</color>
+    <color name="error">#E53935</color>
+    <color name="errorLight">#FFEBEE</color>
     <color name="info">#2196F3</color>
+    <color name="infoLight">#E3F2FD</color>
     
-    <!-- Neutral Colors -->
-    <color name="textPrimary">#212121</color>
-    <color name="textSecondary">#757575</color>
+    <!-- Neutral Colors (Professional) -->
+    <color name="textPrimary">#1A1A1A</color>
+    <color name="textSecondary">#666666</color>
+    <color name="textTertiary">#999999</color>
     <color name="textDisabled">#BDBDBD</color>
-    <color name="background">#FFFFFF</color>
-    <color name="surface">#F5F5F5</color>
-    <color name="divider">#E0E0E0</color>
+    <color name="textOnDark">#FFFFFF</color>
     
-    <!-- Material Design Colors -->
+    <!-- Background Colors -->
+    <color name="background">#FAFAFA</color>
+    <color name="backgroundElevated">#FFFFFF</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surfaceVariant">#F5F5F5</color>
+    
+    <!-- Dividers and Borders -->
+    <color name="divider">#EEEEEE</color>
+    <color name="dividerDark">#E0E0E0</color>
+    <color name="border">#E0E0E0</color>
+    
+    <!-- Card Colors -->
+    <color name="cardBackground">#FFFFFF</color>
+    <color name="cardBackgroundDark">#1A1A1A</color>
+    
+    <!-- Skeleton Loading -->
+    <color name="skeletonBase">#E0E0E0</color>
+    <color name="skeletonHighlight">#F5F5F5</color>
+    
+    <!-- Common -->
     <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
+    <color name="transparent">#00000000</color>
+    
+    <!-- Overlay -->
+    <color name="overlay">#80000000</color>
+    <color name="scrim">#52000000</color>
 </resources>

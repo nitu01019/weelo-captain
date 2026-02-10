@@ -96,14 +96,14 @@ class DriverRepository private constructor(
             // Check cache validity
             val cache = cachedDrivers
             if (!forceRefresh && cache != null && !isCacheStale(cache)) {
-                android.util.Log.d(TAG, "✅ Returning cached drivers (${cache.drivers.size} items)")
+                timber.log.Timber.d("✅ Returning cached drivers (${cache.drivers.size} items)")
                 return@withContext DriverResult.Success(cache)
             }
             
             _isRefreshing.value = true
             
             try {
-                android.util.Log.d(TAG, "📡 Fetching drivers from backend...")
+                timber.log.Timber.d("📡 Fetching drivers from backend...")
                 val response = driverApi.getDriverList()
                 
                 if (response.isSuccessful && response.body()?.success == true) {
@@ -121,7 +121,7 @@ class DriverRepository private constructor(
                     cachedDrivers = newCache
                     _driversState.value = DriverResult.Success(newCache)
                     
-                    android.util.Log.i(TAG, "✅ Fetched ${drivers.size} drivers (${data?.online ?: 0} online)")
+                    timber.log.Timber.i("✅ Fetched ${drivers.size} drivers (${data?.online ?: 0} online)")
                     
                     DriverResult.Success(newCache)
                 } else {
@@ -133,11 +133,11 @@ class DriverRepository private constructor(
                         else -> response.body()?.error?.message ?: "Failed to fetch drivers (${response.code()})"
                     }
                     
-                    android.util.Log.e(TAG, "❌ Fetch drivers failed: $errorMsg")
+                    timber.log.Timber.e("❌ Fetch drivers failed: $errorMsg")
                     DriverResult.Error(errorMsg, response.code())
                 }
             } catch (e: java.net.ConnectException) {
-                android.util.Log.e(TAG, "❌ Connection error: ${e.message}")
+                timber.log.Timber.e("❌ Connection error: ${e.message}")
                 val staleCache = cachedDrivers?.copy(isStale = true)
                 if (staleCache != null) {
                     _driversState.value = DriverResult.Success(staleCache)
@@ -145,7 +145,7 @@ class DriverRepository private constructor(
                 }
                 DriverResult.Error("Cannot connect to server. Is the backend running?")
             } catch (e: Exception) {
-                android.util.Log.e(TAG, "❌ Fetch error: ${e.message}", e)
+                timber.log.Timber.e(e, "❌ Fetch error: ${e.message}")
                 val staleCache = cachedDrivers?.copy(isStale = true)
                 if (staleCache != null) {
                     _driversState.value = DriverResult.Success(staleCache)
@@ -184,13 +184,13 @@ class DriverRepository private constructor(
     
     fun invalidateCache() {
         cachedDrivers = cachedDrivers?.copy(isStale = true, lastUpdated = 0)
-        android.util.Log.d(TAG, "🔄 Cache invalidated")
+        timber.log.Timber.d("🔄 Cache invalidated")
     }
     
     fun clearCache() {
         cachedDrivers = null
         _driversState.value = DriverResult.Loading
-        android.util.Log.d(TAG, "🗑️ Cache cleared")
+        timber.log.Timber.d("🗑️ Cache cleared")
     }
     
     // =========================================================================

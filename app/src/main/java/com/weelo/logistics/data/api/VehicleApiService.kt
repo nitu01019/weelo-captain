@@ -21,13 +21,48 @@ interface VehicleApiService {
     suspend fun getVehicles(): Response<VehicleListResponse>
     
     /**
+     * Check if vehicle number is available for registration
+     * GET /api/v1/vehicles/check/{vehicleNumber}
+     * 
+     * Response: { success, data: { available, exists, ownedByYou, vehicleId?, message } }
+     * 
+     * USE THIS BEFORE REGISTERING to check:
+     * - If vehicle can be registered (available=true)
+     * - If you already own it (ownedByYou=true) - use upsert instead
+     * - If someone else owns it (exists=true, ownedByYou=false) - cannot register
+     */
+    @GET("vehicles/check/{vehicleNumber}")
+    suspend fun checkVehicleAvailability(
+        @Path("vehicleNumber") vehicleNumber: String
+    ): Response<CheckVehicleResponse>
+    
+    /**
      * Register a new vehicle
      * POST /api/v1/vehicles
+     * 
+     * NOTE: Returns 409 error if vehicle already exists.
+     * Use upsertVehicle() for create-or-update behavior.
      */
     @POST("vehicles")
     suspend fun registerVehicle(
         @Body request: RegisterVehicleRequest
     ): Response<RegisterVehicleResponse>
+    
+    /**
+     * Register or Update vehicle (UPSERT)
+     * PUT /api/v1/vehicles/upsert
+     * 
+     * RECOMMENDED for "Save" operations:
+     * - If vehicle doesn't exist: creates new (returns 201)
+     * - If vehicle exists and you own it: updates it (returns 200)
+     * - If vehicle exists and someone else owns it: returns 409 error
+     * 
+     * Response includes `isNew` flag to indicate if created or updated.
+     */
+    @PUT("vehicles/upsert")
+    suspend fun upsertVehicle(
+        @Body request: RegisterVehicleRequest
+    ): Response<UpsertVehicleResponse>
     
     /**
      * Get vehicle by ID
@@ -39,7 +74,7 @@ interface VehicleApiService {
     ): Response<VehicleDetailResponse>
     
     /**
-     * Update vehicle
+     * Update vehicle by ID
      * PUT /api/v1/vehicles/{vehicleId}
      */
     @PUT("vehicles/{vehicleId}")
@@ -171,7 +206,26 @@ data class VehicleData(
 )
 
 /**
+ * Check Vehicle Availability Response
+ * GET /api/v1/vehicles/check/{vehicleNumber}
+ */
+data class CheckVehicleResponse(
+    val success: Boolean,
+    val data: CheckVehicleData? = null,
+    val error: ApiError? = null
+)
+
+data class CheckVehicleData(
+    val available: Boolean = false,      // true if can be registered as new
+    val exists: Boolean = false,         // true if vehicle exists in system
+    val ownedByYou: Boolean = false,     // true if you already own this vehicle
+    val vehicleId: String? = null,       // ID of existing vehicle (if owned by you)
+    val message: String = ""             // Human-readable message
+)
+
+/**
  * Register Vehicle Response
+ * POST /api/v1/vehicles
  */
 data class RegisterVehicleResponse(
     val success: Boolean,
@@ -182,6 +236,22 @@ data class RegisterVehicleResponse(
 
 data class RegisterVehicleData(
     val vehicle: VehicleData
+)
+
+/**
+ * Upsert Vehicle Response
+ * PUT /api/v1/vehicles/upsert
+ */
+data class UpsertVehicleResponse(
+    val success: Boolean,
+    val data: UpsertVehicleData? = null,
+    val message: String? = null,
+    val error: ApiError? = null
+)
+
+data class UpsertVehicleData(
+    val vehicle: VehicleData,
+    val isNew: Boolean = true  // true if created, false if updated
 )
 
 /**

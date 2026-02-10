@@ -79,6 +79,7 @@ fun TruckSelectionScreen(
                             // Filter vehicles by:
                             // 1. Status = AVAILABLE (not in_transit or maintenance)
                             // 2. Vehicle type matches broadcast requirement
+                            @Suppress("DEPRECATION")
                             val requiredType = broadcastResult.data.vehicleType?.id?.lowercase() ?: ""
                             val requestedTypes = broadcastResult.data.requestedVehicles.map { it.vehicleType.lowercase() }
                             
@@ -98,7 +99,7 @@ fun TruckSelectionScreen(
                                 }
                             )
                             
-                            android.util.Log.i("TruckSelectionScreen", 
+                            timber.log.Timber.i(
                                 "✅ Found ${availableVehicles.size} available vehicles for types: ${requestedTypes.ifEmpty { listOf(requiredType) }}")
                         }
                         is VehicleResult.Error -> {

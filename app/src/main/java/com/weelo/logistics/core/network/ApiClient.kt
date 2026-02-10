@@ -33,18 +33,18 @@ object ApiClient {
      * - The CURRENT URL is determined by BuildConfig.DEBUG flag
      */
     object BaseUrls {
-        // Production - Use when deploying to Play Store
-        const val PRODUCTION = "https://api.weelo.in/v1/"
+        // Production - AWS Load Balancer (deployed backend)
+        const val PRODUCTION = "http://weelo-alb-380596483.ap-south-1.elb.amazonaws.com/api/v1/"
         
         // Staging - For testing before production
-        const val STAGING = "https://staging-api.weelo.in/v1/"
+        const val STAGING = "http://weelo-alb-380596483.ap-south-1.elb.amazonaws.com/api/v1/"
         
         // Development - Android Emulator connects to host via 10.0.2.2
-        const val EMULATOR = "http://10.0.2.2:3000/api/v1/"
+        const val EMULATOR = "http://weelo-alb-380596483.ap-south-1.elb.amazonaws.com/api/v1/"
         
         // Development - Physical device (replace with your Mac's IP)
         // Run: ipconfig getifaddr en0 to get your IP
-        const val DEVICE = "http://192.168.1.100:3000/api/v1/"
+        const val DEVICE = "http://weelo-alb-380596483.ap-south-1.elb.amazonaws.com/api/v1/"
         
         /**
          * Current active URL - Automatically selected based on build type

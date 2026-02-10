@@ -133,7 +133,8 @@ data class VerifyOTPResponse(
 data class VerifyOTPData(
     val user: AuthUser,
     val tokens: TokenData,
-    val isNewUser: Boolean
+    val isNewUser: Boolean,
+    val preferredLanguage: String? = null
 )
 
 data class AuthUser(

@@ -25,6 +25,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -32,6 +34,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.ui.components.rememberScreenConfig
 import com.weelo.logistics.utils.ClickDebouncer
 import com.weelo.logistics.utils.GlobalRateLimiters
 import com.weelo.logistics.utils.InputValidator
@@ -41,7 +44,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.util.Log
 
 /**
  * Modern Login Screen - Redesigned for speed and clarity
@@ -74,6 +76,43 @@ fun LoginScreen(
     val scope = rememberCoroutineScope()
     val clickDebouncer = remember { ClickDebouncer(500L) }
     val keyboardController = LocalSoftwareKeyboardController.current
+
+    // Use AuthViewModel so DRIVER uses /driver-auth/* and TRANSPORTER uses /auth/*
+    val authViewModel: AuthViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val authState = authViewModel.authState.collectAsState().value
+
+    // Reflect backend state instantly in UI
+    LaunchedEffect(authState) {
+        when (authState) {
+            is AuthState.Idle -> {
+                isLoading = false
+            }
+            is AuthState.Loading -> {
+                isLoading = true
+                errorMessage = ""
+            }
+            is AuthState.RateLimited -> {
+                isLoading = false
+                val retryAfter = authState.retryAfterSeconds
+                errorMessage = "Too many attempts. Try again in ${retryAfter}s"
+            }
+            is AuthState.Error -> {
+                isLoading = false
+                errorMessage = authState.message
+            }
+            is AuthState.OTPSent -> {
+                isLoading = false
+                // For driver, show message from backend that OTP is sent to transporter
+                successMessage = authState.message
+            }
+            is AuthState.Authenticated -> {
+                isLoading = false
+            }
+            is AuthState.LoggedOut -> {
+                isLoading = false
+            }
+        }
+    }
     
     // Navigate after success - instant for speed ⚡
     LaunchedEffect(successMessage) {
@@ -86,26 +125,33 @@ fun LoginScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFFFAFAFA),
-                        Color.White
-                    )
-                )
-            )
+            .background(Background)
     ) {
-        // Minimal background decoration
+        // Premium background decoration with yellow accents
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .alpha(0.05f)
+                .alpha(0.08f)
         ) {
+            // Top-right yellow circle
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .offset(x = 100.dp, y = (-50).dp)
+                    .offset(x = 80.dp, y = (-40).dp)
                     .size(200.dp)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(Primary, Color.Transparent)
+                        ),
+                        shape = RoundedCornerShape(50)
+                    )
+            )
+            // Bottom-left yellow circle
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(x = (-60).dp, y = 60.dp)
+                    .size(160.dp)
                     .background(
                         Brush.radialGradient(
                             colors = listOf(Primary, Color.Transparent)
@@ -115,20 +161,25 @@ fun LoginScreen(
             )
         }
         
+        // Responsive layout support
+        val screenConfig = rememberScreenConfig()
+        
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = if (screenConfig.isLandscape) 48.dp else 24.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(40.dp))
+            // Reduced top spacing in landscape
+            Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 16.dp else 40.dp))
             
             // Header Section
             LoginHeader(role = role, onNavigateBack = onNavigateBack)
             
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 24.dp else 48.dp))
             
-            // Phone Input Section
+            // Phone Input Section - constrained width in landscape
             PhoneInputCard(
                 phoneNumber = phoneNumber,
                 onPhoneChange = {
@@ -171,36 +222,19 @@ fun LoginScreen(
                             return@launch
                         }
                         
-                        // Make actual API call
+                        // Use AuthViewModel so driver route is correct
                         try {
-                            // Backend expects 10-digit phone number without country code
-                            val roleForApi = role.lowercase() // Backend expects lowercase: "driver" or "transporter"
-                            
-                            Log.d("LoginScreen", "Sending OTP to: $phoneNumber, role: $roleForApi")
-                            
-                            val response = withContext(Dispatchers.IO) {
-                                RetrofitClient.authApi.sendOTP(
-                                    SendOTPRequest(
-                                        phone = phoneNumber,
-                                        role = roleForApi
-                                    )
-                                )
-                            }
-                            
-                            isLoading = false
-                            
-                            if (response.isSuccessful && response.body()?.success == true) {
-                                // OTP sent successfully
-                                Log.d("LoginScreen", "OTP sent successfully")
-                                successMessage = "OTP sent to your phone"
+                            timber.log.Timber.d("Requesting OTP for role=$role, phone=$phoneNumber")
+
+                            if (role == "DRIVER") {
+                                // IMPORTANT: sends OTP to transporter (server decides destination)
+                                authViewModel.sendDriverOTP(phoneNumber)
                             } else {
-                                val errorBody = response.errorBody()?.string()
-                                Log.e("LoginScreen", "OTP failed: ${response.code()} - $errorBody")
-                                errorMessage = response.body()?.error?.message ?: "Failed to send OTP"
+                                authViewModel.sendTransporterOTP(phoneNumber)
                             }
                         } catch (e: Exception) {
                             isLoading = false
-                            Log.e("LoginScreen", "Send OTP error: ${e.message}", e)
+                            timber.log.Timber.e(e, "Send OTP error: ${e.message}")
                             errorMessage = "Network error. Please try again."
                         }
                     }
@@ -236,6 +270,7 @@ fun LoginScreen(
 // HEADER COMPONENT
 // =============================================================================
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 private fun LoginHeader(
     role: String,
@@ -245,25 +280,25 @@ private fun LoginHeader(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.fillMaxWidth()
     ) {
-        // Logo/Icon
+        // Premium Logo/Icon with yellow background
         Surface(
-            modifier = Modifier.size(72.dp),
-            shape = RoundedCornerShape(20.dp),
-            color = Primary.copy(alpha = 0.1f)
+            modifier = Modifier.size(80.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = Primary
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = if (role == "DRIVER") Icons.Default.DirectionsCar else Icons.Default.LocalShipping,
                     contentDescription = null,
-                    tint = Primary,
-                    modifier = Modifier.size(36.dp)
+                    tint = Color.Black,
+                    modifier = Modifier.size(40.dp)
                 )
             }
         }
         
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(28.dp))
         
-        // Title
+        // Title with premium styling
         Text(
             text = if (role == "DRIVER") "Driver Login" else "Transporter Login",
             style = MaterialTheme.typography.headlineMedium,
@@ -425,13 +460,15 @@ private fun ModernButton(
         onClick = onClick,
         enabled = enabled && !isLoading,
         modifier = modifier.height(56.dp),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = Primary,
-            disabledContainerColor = Primary.copy(alpha = 0.5f)
+            contentColor = Color.Black,
+            disabledContainerColor = Primary.copy(alpha = 0.4f),
+            disabledContentColor = Color.Black.copy(alpha = 0.5f)
         ),
         elevation = ButtonDefaults.buttonElevation(
-            defaultElevation = 2.dp,
+            defaultElevation = 4.dp,
             pressedElevation = 8.dp,
             disabledElevation = 0.dp
         )
@@ -439,8 +476,8 @@ private fun ModernButton(
         if (isLoading) {
             CircularProgressIndicator(
                 modifier = Modifier.size(24.dp),
-                color = White,
-                strokeWidth = 2.dp
+                color = Color.Black,
+                strokeWidth = 2.5.dp
             )
             Spacer(modifier = Modifier.width(12.dp))
         }
@@ -448,8 +485,9 @@ private fun ModernButton(
         Text(
             text = text,
             style = MaterialTheme.typography.bodyLarge,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 16.sp
+            fontWeight = FontWeight.Bold,
+            fontSize = 16.sp,
+            letterSpacing = 0.5.sp
         )
     }
 }
@@ -526,7 +564,7 @@ private fun LoginFooter(
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        // Signup Link
+        // Signup Link with premium styling
         Row(
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -541,7 +579,7 @@ private fun LoginFooter(
                     text = "Sign Up",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
-                    color = Primary
+                    color = Color.Black  // Black for premium Rapido look
                 )
             }
         }

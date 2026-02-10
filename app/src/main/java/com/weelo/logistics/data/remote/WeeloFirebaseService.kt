@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.media.RingtoneManager
 import android.os.Build
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -90,7 +89,7 @@ class WeeloFirebaseService : FirebaseMessagingService() {
      */
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        Log.i(TAG, "🔑 New FCM token generated")
+        timber.log.Timber.i("🔑 New FCM token generated")
         _fcmToken = token
         
         // Notify the app to register token with backend
@@ -106,7 +105,7 @@ class WeeloFirebaseService : FirebaseMessagingService() {
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         super.onMessageReceived(remoteMessage)
         
-        Log.i(TAG, "📩 FCM message received from: ${remoteMessage.from}")
+        timber.log.Timber.i("📩 FCM message received from: ${remoteMessage.from}")
         
         // Get notification data
         val data = remoteMessage.data
@@ -116,8 +115,8 @@ class WeeloFirebaseService : FirebaseMessagingService() {
         val title = notification?.title ?: data["title"] ?: "Weelo"
         val body = notification?.body ?: data["body"] ?: ""
         
-        Log.d(TAG, "Type: $type, Title: $title, Body: $body")
-        Log.d(TAG, "Data: $data")
+        timber.log.Timber.d("Type: $type, Title: $title, Body: $body")
+        timber.log.Timber.d("Data: $data")
         
         // Create FCM notification object
         val fcmNotification = FCMNotification(
@@ -190,7 +189,7 @@ class WeeloFirebaseService : FirebaseMessagingService() {
                 listOf(broadcastsChannel, tripsChannel, paymentsChannel, generalChannel)
             )
             
-            Log.d(TAG, "Notification channels created")
+            timber.log.Timber.d("Notification channels created")
         }
     }
     
@@ -270,7 +269,7 @@ class WeeloFirebaseService : FirebaseMessagingService() {
         
         notificationManager.notify(notificationId, notificationBuilder.build())
         
-        Log.d(TAG, "📬 Notification shown: ${notification.title}")
+        timber.log.Timber.d("📬 Notification shown: ${notification.title}")
     }
     
 }

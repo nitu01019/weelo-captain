@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationServices
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.ui.components.rememberScreenConfig
 import com.weelo.logistics.utils.ClickDebouncer
 import com.weelo.logistics.utils.InputValidator
 import com.weelo.logistics.utils.DataSanitizer
@@ -107,6 +108,9 @@ fun SignupScreen(
         visible = true
     }
     
+    // Responsive layout support
+    val screenConfig = rememberScreenConfig()
+    
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -141,9 +145,13 @@ fun SignupScreen(
                     )
             )
             
+            // Adjust second orb position for landscape
             Box(
                 modifier = Modifier
-                    .offset(x = 200.dp, y = 500.dp)
+                    .offset(
+                        x = if (screenConfig.isLandscape) 400.dp else 200.dp, 
+                        y = if (screenConfig.isLandscape) 100.dp else 500.dp
+                    )
                     .size(250.dp)
                     .background(
                         Brush.radialGradient(
@@ -162,10 +170,14 @@ fun SignupScreen(
                 .fillMaxSize()
                 .alpha(alpha)
                 .verticalScroll(rememberScrollState())
-                .padding(24.dp),
+                .padding(
+                    horizontal = if (screenConfig.isLandscape) 48.dp else 24.dp,
+                    vertical = 24.dp
+                ),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(40.dp))
+            // Reduced top spacing in landscape
+            Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 16.dp else 40.dp))
             
             // Back button
             Row(
@@ -328,6 +340,7 @@ fun SignupScreen(
     }
 }
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun PhoneNumberStep(
     phoneNumber: String,

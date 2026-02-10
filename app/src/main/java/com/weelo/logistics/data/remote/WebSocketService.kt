@@ -1,6 +1,5 @@
 package com.weelo.logistics.data.remote
 
-import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -82,7 +81,7 @@ object WebSocketService {
      */
     fun connect(serverUrl: String, token: String) {
         if (isConnected || isConnecting) {
-            Log.d(TAG, "Already connected/connecting")
+            timber.log.Timber.d("Already connected/connecting")
             return
         }
         
@@ -92,7 +91,7 @@ object WebSocketService {
         reconnectAttempts.set(0)
         
         _connectionState.value = ConnectionState.Connecting
-        Log.i(TAG, "🔌 Connecting to real-time service")
+        timber.log.Timber.i("🔌 Connecting to real-time service")
         
         // Mark as connected (polling mode)
         isConnected = true
@@ -100,7 +99,7 @@ object WebSocketService {
         _connectionState.value = ConnectionState.Connected
         _connectionQuality.value = ConnectionQuality.GOOD
         
-        Log.i(TAG, "✅ Real-time service connected (polling mode)")
+        timber.log.Timber.i("✅ Real-time service connected (polling mode)")
     }
     
     /**
@@ -110,7 +109,7 @@ object WebSocketService {
         if (pollingJob?.isActive == true) return
         
         pollingJob = scope.launch {
-            Log.i(TAG, "📡 Starting broadcast polling")
+            timber.log.Timber.i("📡 Starting broadcast polling")
             while (isActive && isConnected) {
                 try {
                     // Poll for new broadcasts
@@ -118,7 +117,7 @@ object WebSocketService {
                     _connectionQuality.value = ConnectionQuality.GOOD
                     delay(POLL_INTERVAL_ACTIVE_MS)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Polling error: ${e.message}")
+                    timber.log.Timber.w("Polling error: ${e.message}")
                     _connectionQuality.value = ConnectionQuality.POOR
                     delay(POLL_INTERVAL_IDLE_MS)
                 }
@@ -132,7 +131,7 @@ object WebSocketService {
     fun stopPolling() {
         pollingJob?.cancel()
         pollingJob = null
-        Log.i(TAG, "📡 Stopped broadcast polling")
+        timber.log.Timber.i("📡 Stopped broadcast polling")
     }
     
     /**
@@ -141,7 +140,7 @@ object WebSocketService {
     private suspend fun pollForBroadcasts() {
         // This would call the API to get active broadcasts
         // For now, it's a placeholder - the BroadcastListScreen fetches via API
-        Log.v(TAG, "Polling for broadcasts...")
+        timber.log.Timber.v("Polling for broadcasts...")
     }
     
     /**
@@ -149,7 +148,7 @@ object WebSocketService {
      */
     suspend fun emitNewBroadcast(event: NewBroadcastEvent) {
         _newBroadcasts.emit(event)
-        Log.i(TAG, "📢 New broadcast emitted: ${event.orderId}")
+        timber.log.Timber.i("📢 New broadcast emitted: ${event.orderId}")
     }
     
     /**
@@ -157,7 +156,7 @@ object WebSocketService {
      */
     suspend fun emitAcceptConfirmation(event: AcceptConfirmationEvent) {
         _acceptConfirmations.emit(event)
-        Log.i(TAG, "✅ Accept confirmation emitted: ${event.requestId}")
+        timber.log.Timber.i("✅ Accept confirmation emitted: ${event.requestId}")
     }
     
     /**
@@ -165,7 +164,7 @@ object WebSocketService {
      */
     suspend fun emitTrucksRemainingUpdate(event: TrucksRemainingEvent) {
         _trucksRemainingUpdates.emit(event)
-        Log.i(TAG, "📊 Trucks remaining update: ${event.trucksRemaining}")
+        timber.log.Timber.i("📊 Trucks remaining update: ${event.trucksRemaining}")
     }
     
     /**
@@ -173,7 +172,7 @@ object WebSocketService {
      */
     suspend fun emitRequestTaken(event: RequestTakenEvent) {
         _requestTakenEvents.emit(event)
-        Log.w(TAG, "⚠️ Request taken: ${event.requestId}")
+        timber.log.Timber.w("⚠️ Request taken: ${event.requestId}")
     }
     
     /**
@@ -181,14 +180,14 @@ object WebSocketService {
      */
     suspend fun emitOrderStatus(event: OrderStatusEvent) {
         _orderStatusUpdates.emit(event)
-        Log.i(TAG, "📋 Order status: ${event.status}")
+        timber.log.Timber.i("📋 Order status: ${event.status}")
     }
     
     /**
      * Force reconnect
      */
     fun forceReconnect() {
-        Log.i(TAG, "🔄 Force reconnect")
+        timber.log.Timber.i("🔄 Force reconnect")
         disconnect()
         val url = serverUrl
         val token = authToken
@@ -201,13 +200,13 @@ object WebSocketService {
      * Disconnect
      */
     fun disconnect() {
-        Log.i(TAG, "🔌 Disconnecting...")
+        timber.log.Timber.i("🔌 Disconnecting...")
         stopPolling()
         isConnected = false
         isConnecting = false
         _connectionState.value = ConnectionState.Disconnected
         _connectionQuality.value = ConnectionQuality.UNKNOWN
-        Log.i(TAG, "✅ Disconnected")
+        timber.log.Timber.i("✅ Disconnected")
     }
     
     /**

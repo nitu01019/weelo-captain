@@ -9,7 +9,6 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -187,7 +186,7 @@ class BroadcastSoundService private constructor(private val context: Context) {
      */
     fun playBroadcastSound() {
         if (!_soundEnabled.value) {
-            Log.d(TAG, "Sound disabled, skipping")
+            timber.log.Timber.d("Sound disabled, skipping")
             return
         }
         
@@ -196,7 +195,7 @@ class BroadcastSoundService private constructor(private val context: Context) {
             stopSound()
             
             val soundOption = _selectedSound.value
-            Log.d(TAG, "Playing sound: ${soundOption.displayName}")
+            timber.log.Timber.d("Playing sound: ${soundOption.displayName}")
             
             val uri = getSoundUri(soundOption)
             
@@ -226,7 +225,7 @@ class BroadcastSoundService private constructor(private val context: Context) {
             }
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error playing sound", e)
+            timber.log.Timber.e(e, "Error playing sound")
             // Fallback to system notification
             playFallbackSound()
         }
@@ -265,7 +264,7 @@ class BroadcastSoundService private constructor(private val context: Context) {
             }
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error playing urgent sound", e)
+            timber.log.Timber.e(e, "Error playing urgent sound")
         }
     }
     
@@ -282,7 +281,7 @@ class BroadcastSoundService private constructor(private val context: Context) {
             }
             mediaPlayer = null
         } catch (e: Exception) {
-            Log.e(TAG, "Error stopping sound", e)
+            timber.log.Timber.e(e, "Error stopping sound")
         }
     }
     
@@ -310,7 +309,7 @@ class BroadcastSoundService private constructor(private val context: Context) {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error previewing sound", e)
+            timber.log.Timber.e(e, "Error previewing sound")
         }
     }
     
@@ -336,7 +335,7 @@ class BroadcastSoundService private constructor(private val context: Context) {
                 vibrator.vibrate(pattern.pattern, -1)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error vibrating", e)
+            timber.log.Timber.e(e, "Error vibrating")
         }
     }
     
@@ -350,7 +349,7 @@ class BroadcastSoundService private constructor(private val context: Context) {
     fun setSelectedSound(option: SoundOption) {
         _selectedSound.value = option
         prefs.edit().putString(KEY_SELECTED_SOUND, option.id).apply()
-        Log.d(TAG, "Sound set to: ${option.displayName}")
+        timber.log.Timber.d("Sound set to: ${option.displayName}")
     }
     
     /**
@@ -409,7 +408,7 @@ class BroadcastSoundService private constructor(private val context: Context) {
             val ringtone = RingtoneManager.getRingtone(context, uri)
             ringtone?.play()
         } catch (e: Exception) {
-            Log.e(TAG, "Fallback sound also failed", e)
+            timber.log.Timber.e(e, "Fallback sound also failed")
         }
     }
     

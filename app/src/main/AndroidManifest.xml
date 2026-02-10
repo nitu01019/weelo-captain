@@ -14,6 +14,11 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     
+    <!-- Camera permission for profile photo capture -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    
     <!-- SMS Auto-Read for OTP (Google Play Services SMS Retriever API) -->
     <!-- No runtime permission needed - works automatically with SMS Retriever API -->
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
@@ -33,23 +38,17 @@
         android:theme="@style/Theme.WeeloLogistics"
         tools:targetApi="31">
         
-        <!-- Splash Activity - LAUNCHER (shows instantly like Rapido) -->
+        <!-- Main Activity - LAUNCHER -->
         <activity
-            android:name=".SplashActivity"
+            android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.WeeloLogistics.Splash">
+            android:theme="@style/Theme.WeeloLogistics"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        
-        <!-- Main Activity -->
-        <activity
-            android:name=".MainActivity"
-            android:exported="false"
-            android:theme="@style/Theme.WeeloLogistics"
-            android:windowSoftInputMode="adjustResize" />
         
         <!-- GPS Tracking Service - Real-time location for trips -->
         <service
@@ -72,6 +71,15 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="broadcasts" />
+        
+        <!-- ================================================================== -->
+        <!-- GOOGLE MAPS API KEY                                                -->
+        <!-- Required for: Maps SDK, Geocoding API, Places API                  -->
+        <!-- Used by: Driver location tracking, route display, address search   -->
+        <!-- ================================================================== -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyBfeysh6WtoFQAdagvLSt8iXA7GdNbb4dw" />
             
     </application>
 

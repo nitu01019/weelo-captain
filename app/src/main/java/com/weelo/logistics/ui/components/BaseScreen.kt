@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.ui.theme.Primary
@@ -23,7 +24,7 @@ import com.weelo.logistics.ui.theme.TextSecondary
 
 /**
  * =============================================================================
- * BASE SCREEN - Consistent Screen Layout
+ * BASE SCREEN - Consistent Screen Layout with Offline Support
  * =============================================================================
  * 
  * Provides a consistent base layout for all screens with:
@@ -31,6 +32,8 @@ import com.weelo.logistics.ui.theme.TextSecondary
  * - Loading states
  * - Error handling
  * - Smooth animations
+ * - OFFLINE BANNER SUPPORT
+ * - Responsive layout support
  * =============================================================================
  */
 
@@ -60,6 +63,9 @@ fun BaseScreen(
     onRetry: (() -> Unit)? = null,
     floatingActionButton: @Composable () -> Unit = {},
     snackbarHost: @Composable () -> Unit = {},
+    showOfflineBanner: Boolean = true,
+    isOffline: Boolean = false,
+    onOfflineRetry: (() -> Unit)? = null,
     content: @Composable (PaddingValues) -> Unit
 ) {
     Scaffold(
@@ -97,48 +103,60 @@ fun BaseScreen(
         snackbarHost = snackbarHost,
         containerColor = Surface
     ) { paddingValues ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // Main content with animation
-            AnimatedVisibility(
-                visible = !isLoading && error == null,
-                enter = fadeIn(animationSpec = tween(300)),
-                exit = fadeOut(animationSpec = tween(200))
-            ) {
-                content(PaddingValues(0.dp))
+            // Offline Banner at the top
+            if (showOfflineBanner) {
+                OfflineBanner(
+                    isOffline = isOffline,
+                    onRetryClick = onOfflineRetry
+                )
             }
             
-            // Loading state
-            AnimatedVisibility(
-                visible = isLoading,
-                enter = fadeIn(),
-                exit = fadeOut()
+            Box(
+                modifier = Modifier.fillMaxSize()
             ) {
-                FullScreenLoading()
-            }
-            
-            // Error state
-            AnimatedVisibility(
-                visible = error != null && !isLoading,
-                enter = fadeIn(),
-                exit = fadeOut()
-            ) {
-                error?.let { errorMessage ->
-                    ErrorState(
-                        message = errorMessage,
-                        onRetry = onRetry ?: {}
-                    )
+                // Main content with animation
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = !isLoading && error == null,
+                    enter = fadeIn(animationSpec = tween(300)),
+                    exit = fadeOut(animationSpec = tween(200))
+                ) {
+                    content(PaddingValues(0.dp))
                 }
+                
+                // Loading state
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = isLoading,
+                    enter = fadeIn(),
+                    exit = fadeOut()
+                ) {
+                    FullScreenLoading()
+                }
+                
+                // Error state
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = error != null && !isLoading,
+                    enter = fadeIn(),
+                    exit = fadeOut()
+                ) {
+                    error?.let { errorMessage ->
+                        ErrorState(
+                            message = errorMessage,
+                            onRetry = onRetry ?: {}
+                        )
+                    }
+                }
+                
+                // Top loading bar for refresh
+                TopLoadingBar(
+                    isLoading = isLoading,
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
             }
-            
-            // Top loading bar for refresh
-            TopLoadingBar(
-                isLoading = isLoading,
-                modifier = Modifier.align(Alignment.TopCenter)
-            )
         }
     }
 }

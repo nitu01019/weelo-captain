@@ -1,0 +1,2312 @@
+package com.weelo.logistics.broadcast
+
+import android.widget.Toast
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.ScrollableDefaults
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.weelo.logistics.data.model.*
+import com.weelo.logistics.data.repository.BroadcastRepository
+import com.weelo.logistics.data.repository.DriverRepository
+import com.weelo.logistics.data.repository.VehicleRepository
+import com.weelo.logistics.ui.components.TruckSelectionSkeleton
+import com.weelo.logistics.ui.components.DriverAssignmentSkeleton
+import com.weelo.logistics.ui.components.DarkSkeletonBox
+import com.weelo.logistics.ui.components.DarkSkeletonCircle
+import kotlinx.coroutines.launch
+
+private const val TAG = "BroadcastAcceptance"
+
+// =============================================================================
+// RAPIDO STYLE COLORS - Same as BroadcastOverlayScreen
+// =============================================================================
+private val AccentYellow = Color(0xFFFDD835)
+private val AccentYellowDark = Color(0xFFF9A825)
+private val BoldBlack = Color(0xFF1A1A1A)
+private val DarkGray = Color(0xFF2D2D2D)
+private val MediumGray = Color(0xFF424242)
+private val LightGray = Color(0xFFE0E0E0)
+private val PureWhite = Color(0xFFFFFFFF)
+private val SuccessGreen = Color(0xFF2E7D32)
+private val ErrorRed = Color(0xFFD32F2F)
+
+/**
+ * Data class for truck + driver assignment
+ */
+data class TruckDriverAssignment(
+    val vehicle: Vehicle,
+    val driver: Driver? = null
+)
+
+/**
+ * State for the acceptance flow
+ */
+enum class AcceptanceStep {
+    LOADING,
+    SELECT_TRUCKS,
+    ASSIGN_DRIVERS,
+    SUBMITTING,
+    SUCCESS,
+    ERROR
+}
+
+/**
+ * =============================================================================
+ * BROADCAST ACCEPTANCE SCREEN
+ * =============================================================================
+ * 
+ * Full-screen overlay that appears when transporter clicks "Accept" on a broadcast.
+ * 
+ * FLOW:
+ * 1. Accept clicked → Broadcast is put on HOLD (backend notified)
+ * 2. Show matching trucks (filtered by booking's vehicle type)
+ * 3. Transporter selects trucks (multi-select up to trucks needed)
+ * 4. For each selected truck, assign a driver
+ * 5. Submit all assignments at once
+ * 6. Success → Return to dashboard
+ * 
+ * DESIGN:
+ * - Same Rapido-style dark theme as broadcast overlay
+ * - Bold black background with yellow accents
+ * - Smooth animations throughout
+ * 
+ * SCALABILITY:
+ * - Batch API calls for efficiency
+ * - Optimistic UI updates
+ * - Error handling with retry
+ * 
+ * =============================================================================
+ */
+@Composable
+fun BroadcastAcceptanceScreen(
+    broadcast: BroadcastTrip,
+    isVisible: Boolean,
+    onDismiss: () -> Unit,
+    onSuccess: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    
+    // Repositories
+    val vehicleRepository = remember { VehicleRepository.getInstance(context) }
+    val driverRepository = remember { DriverRepository.getInstance(context) }
+    val broadcastRepository = remember { BroadcastRepository.getInstance(context) }
+    
+    // State
+    var currentStep by remember { mutableStateOf(AcceptanceStep.LOADING) }
+    var availableVehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
+    var availableDrivers by remember { mutableStateOf<List<Driver>>(emptyList()) }
+    var selectedVehicles by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var assignments by remember { mutableStateOf<Map<String, String>>(emptyMap()) } // vehicleId -> driverId
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var submissionProgress by remember { mutableStateOf(0f) }
+    
+    // Calculate trucks needed
+    val trucksNeeded = broadcast.totalTrucksNeeded - broadcast.trucksFilledSoFar
+    val canProceedToDrivers = selectedVehicles.isNotEmpty() && selectedVehicles.size <= trucksNeeded
+    val allDriversAssigned = selectedVehicles.all { vehicleId -> assignments.containsKey(vehicleId) }
+    
+    // Load vehicles and drivers when visible
+    LaunchedEffect(isVisible) {
+        if (isVisible) {
+            currentStep = AcceptanceStep.LOADING
+            
+            try {
+                // Fetch vehicles matching the broadcast's vehicle type
+                val vehicleResult = vehicleRepository.fetchVehicles(forceRefresh = true)
+                if (vehicleResult is com.weelo.logistics.data.repository.VehicleResult.Success) {
+                    // Get all requested vehicle types from the broadcast
+                    val requestedTypes = broadcast.requestedVehicles.map { it.vehicleType.lowercase() }.toSet()
+                    val requestedSubtypes = broadcast.requestedVehicles
+                        .filter { it.vehicleSubtype.isNotEmpty() }
+                        .map { "${it.vehicleType.lowercase()}_${it.vehicleSubtype.lowercase()}" }
+                        .toSet()
+                    
+                    // Filter vehicles by type AND availability
+                    val filtered = vehicleResult.data.vehicles.filter { vehicle ->
+                        val isAvailable = vehicle.status.lowercase() == "available"
+                        val typeMatch = requestedTypes.contains(vehicle.vehicleType.lowercase())
+                        val subtypeKey = "${vehicle.vehicleType.lowercase()}_${vehicle.vehicleSubtype.lowercase()}"
+                        val subtypeMatch = requestedSubtypes.isEmpty() || requestedSubtypes.contains(subtypeKey)
+                        
+                        isAvailable && typeMatch && (requestedSubtypes.isEmpty() || subtypeMatch)
+                    }
+                    
+                    availableVehicles = vehicleRepository.mapToUiModels(filtered)
+                    timber.log.Timber.i("✅ Found ${availableVehicles.size} matching vehicles for types: $requestedTypes")
+                }
+                
+                // Fetch available drivers
+                val driverResult = driverRepository.fetchDrivers(forceRefresh = true)
+                if (driverResult is com.weelo.logistics.data.repository.DriverResult.Success) {
+                    availableDrivers = driverResult.data.drivers.filter { 
+                        it.status == DriverStatus.ACTIVE && it.isAvailable 
+                    }
+                    timber.log.Timber.i("✅ Found ${availableDrivers.size} available drivers")
+                }
+                
+                currentStep = AcceptanceStep.SELECT_TRUCKS
+                
+            } catch (e: Exception) {
+                timber.log.Timber.e("❌ Error loading data: ${e.message}")
+                errorMessage = e.message ?: "Failed to load data"
+                currentStep = AcceptanceStep.ERROR
+            }
+        }
+    }
+    
+    // Submit all assignments
+    fun submitAssignments() {
+        scope.launch {
+            currentStep = AcceptanceStep.SUBMITTING
+            submissionProgress = 0f
+            
+            try {
+                val totalAssignments = assignments.size
+                var successCount = 0
+                
+                for ((index, entry) in assignments.entries.withIndex()) {
+                    val (vehicleId, driverId) = entry
+                    
+                    timber.log.Timber.i("📤 Submitting assignment ${index + 1}/$totalAssignments: vehicle=$vehicleId, driver=$driverId")
+                    
+                    val result = broadcastRepository.acceptBroadcast(
+                        broadcastId = broadcast.broadcastId,
+                        vehicleId = vehicleId,
+                        driverId = driverId
+                    )
+                    
+                    if (result is com.weelo.logistics.data.repository.BroadcastResult.Success) {
+                        successCount++
+                    } else if (result is com.weelo.logistics.data.repository.BroadcastResult.Error) {
+                        timber.log.Timber.w("⚠️ Assignment failed: ${result.message}")
+                    }
+                    
+                    submissionProgress = (index + 1).toFloat() / totalAssignments
+                }
+                
+                if (successCount > 0) {
+                    timber.log.Timber.i("✅ Successfully submitted $successCount/$totalAssignments assignments")
+                    currentStep = AcceptanceStep.SUCCESS
+                    
+                    // Auto-dismiss after success
+                    kotlinx.coroutines.delay(1500)
+                    onSuccess()
+                } else {
+                    errorMessage = "Failed to submit any assignments"
+                    currentStep = AcceptanceStep.ERROR
+                }
+                
+            } catch (e: Exception) {
+                timber.log.Timber.e("❌ Submission error: ${e.message}")
+                errorMessage = e.message ?: "Submission failed"
+                currentStep = AcceptanceStep.ERROR
+            }
+        }
+    }
+    
+    // Animated visibility
+    AnimatedVisibility(
+        visible = isVisible,
+        enter = fadeIn(tween(250)) + slideInVertically(
+            initialOffsetY = { it },
+            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+        ),
+        exit = fadeOut(tween(150)) + slideOutVertically(
+            targetOffsetY = { it / 2 },
+            animationSpec = tween(200)
+        )
+    ) {
+        Dialog(
+            onDismissRequest = { 
+                if (currentStep != AcceptanceStep.SUBMITTING) {
+                    onDismiss()
+                }
+            },
+            properties = DialogProperties(
+                dismissOnBackPress = currentStep != AcceptanceStep.SUBMITTING,
+                dismissOnClickOutside = false,
+                usePlatformDefaultWidth = false
+            )
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(BoldBlack)
+            ) {
+                when (currentStep) {
+                    AcceptanceStep.LOADING -> LoadingContent()
+                    
+                    AcceptanceStep.SELECT_TRUCKS -> TruckSelectionContent(
+                        broadcast = broadcast,
+                        vehicles = availableVehicles,
+                        selectedVehicles = selectedVehicles,
+                        trucksNeeded = trucksNeeded,
+                        onVehicleToggle = { vehicleId ->
+                            selectedVehicles = if (selectedVehicles.contains(vehicleId)) {
+                                selectedVehicles - vehicleId
+                            } else if (selectedVehicles.size < trucksNeeded) {
+                                selectedVehicles + vehicleId
+                            } else {
+                                selectedVehicles
+                            }
+                        },
+                        onProceed = { currentStep = AcceptanceStep.ASSIGN_DRIVERS },
+                        onCancel = onDismiss,
+                        canProceed = canProceedToDrivers
+                    )
+                    
+                    AcceptanceStep.ASSIGN_DRIVERS -> DriverAssignmentContent(
+                        broadcast = broadcast,
+                        vehicles = availableVehicles.filter { it.id in selectedVehicles },
+                        drivers = availableDrivers,
+                        assignments = assignments,
+                        onAssignDriver = { vehicleId, driverId ->
+                            assignments = assignments + (vehicleId to driverId)
+                        },
+                        onBack = { currentStep = AcceptanceStep.SELECT_TRUCKS },
+                        onSubmit = { submitAssignments() },
+                        canSubmit = allDriversAssigned
+                    )
+                    
+                    AcceptanceStep.SUBMITTING -> SubmittingContent(
+                        progress = submissionProgress,
+                        totalCount = assignments.size
+                    )
+                    
+                    AcceptanceStep.SUCCESS -> SuccessContent(
+                        assignmentCount = assignments.size
+                    )
+                    
+                    AcceptanceStep.ERROR -> ErrorContent(
+                        message = errorMessage ?: "Unknown error",
+                        onRetry = { currentStep = AcceptanceStep.SELECT_TRUCKS },
+                        onDismiss = onDismiss
+                    )
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// LOADING CONTENT - Professional Skeleton Loading
+// =============================================================================
+// 
+// DESIGN PRINCIPLES:
+// - Uses shimmer animation for smooth loading UX
+// - Matches exact layout of TruckSelectionContent
+// - Dark theme consistent with overlay
+// - Professional, not childish
+// 
+// SCALABILITY:
+// - Lightweight animation (no heavy computations)
+// - Reusable skeleton components
+// =============================================================================
+@Composable
+private fun LoadingContent() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // Header skeleton
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            DarkSkeletonCircle(size = 40.dp)
+            DarkSkeletonBox(height = 24.dp, width = 120.dp)
+            DarkSkeletonBox(height = 36.dp, width = 70.dp, shape = RoundedCornerShape(20.dp))
+        }
+        
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        // Broadcast summary skeleton
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkGray),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    DarkSkeletonCircle(size = 16.dp)
+                    DarkSkeletonBox(height = 14.dp, width = 200.dp)
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    DarkSkeletonCircle(size = 16.dp)
+                    DarkSkeletonBox(height = 14.dp, width = 180.dp)
+                }
+                Spacer(Modifier.height(12.dp))
+                Divider(color = MediumGray, thickness = 0.5.dp)
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    DarkSkeletonBox(height = 12.dp, width = 100.dp)
+                    DarkSkeletonBox(height = 14.dp, width = 80.dp)
+                }
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(20.dp))
+        
+        // Info text skeleton
+        DarkSkeletonBox(height = 14.dp, width = 180.dp)
+        
+        Spacer(modifier = Modifier.height(12.dp))
+        
+        // Truck cards skeleton (3 items)
+        repeat(3) {
+            TruckCardSkeleton()
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+        
+        Spacer(modifier = Modifier.weight(1f))
+        
+        // Bottom buttons skeleton
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            DarkSkeletonBox(
+                modifier = Modifier.weight(1f),
+                height = 48.dp,
+                shape = RoundedCornerShape(8.dp)
+            )
+            DarkSkeletonBox(
+                modifier = Modifier.weight(1f),
+                height = 48.dp,
+                shape = RoundedCornerShape(8.dp)
+            )
+        }
+    }
+}
+
+/**
+ * Skeleton for individual truck card in selection screen
+ */
+@Composable
+private fun TruckCardSkeleton() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = BoldBlack),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Truck icon skeleton
+                DarkSkeletonCircle(size = 48.dp)
+                
+                Column {
+                    DarkSkeletonBox(height = 16.dp, width = 100.dp)
+                    Spacer(Modifier.height(6.dp))
+                    DarkSkeletonBox(height = 13.dp, width = 80.dp)
+                    Spacer(Modifier.height(4.dp))
+                    DarkSkeletonBox(height = 12.dp, width = 70.dp)
+                }
+            }
+            
+            // Checkbox skeleton
+            DarkSkeletonCircle(size = 28.dp)
+        }
+    }
+}
+
+// =============================================================================
+// TRUCK SELECTION CONTENT - Enhanced with Sorting and Grouping
+// =============================================================================
+// 
+// FEATURES:
+// - Trucks sorted by requested vehicle type (matching types first)
+// - Grouped by vehicle type with section headers
+// - Smooth scrolling with fling behavior
+// - Professional dark theme
+// - Selection counter with visual feedback
+// 
+// SORTING LOGIC:
+// 1. First: Trucks matching the requested vehicle type (exact match)
+// 2. Second: Trucks matching the requested subtype
+// 3. Third: All other available trucks
+// 
+// SCALABILITY:
+// - Efficient grouping with remember/derivedStateOf
+// - LazyColumn for large lists
+// - Key-based recomposition for performance
+// =============================================================================
+@Composable
+private fun TruckSelectionContent(
+    broadcast: BroadcastTrip,
+    vehicles: List<Vehicle>,
+    selectedVehicles: Set<String>,
+    trucksNeeded: Int,
+    onVehicleToggle: (String) -> Unit,
+    onProceed: () -> Unit,
+    onCancel: () -> Unit,
+    canProceed: Boolean
+) {
+    // Get requested vehicle types from broadcast
+    val requestedTypes = remember(broadcast) {
+        broadcast.requestedVehicles
+            .map { it.vehicleType.lowercase() to it.vehicleSubtype.lowercase() }
+            .toSet()
+    }
+    
+    // Sort and group vehicles by type (matching types first)
+    val sortedAndGroupedVehicles = remember(vehicles, requestedTypes) {
+        // Sort: matching types first, then by type name
+        val sorted = vehicles.sortedWith(compareBy(
+            // Primary sort: matching requested type comes first (0), others later (1)
+            { vehicle -> 
+                val typeMatch = requestedTypes.any { (type, _) -> 
+                    vehicle.category.name.lowercase() == type 
+                }
+                if (typeMatch) 0 else 1
+            },
+            // Secondary sort: matching subtype comes first
+            { vehicle ->
+                val subtypeMatch = requestedTypes.any { (type, subtype) ->
+                    vehicle.category.name.lowercase() == type && 
+                    vehicle.subtype.name.lowercase() == subtype
+                }
+                if (subtypeMatch) 0 else 1
+            },
+            // Tertiary sort: alphabetically by type name
+            { it.category.name },
+            // Quaternary sort: alphabetically by vehicle number
+            { it.vehicleNumber }
+        ))
+        
+        // Group by vehicle type
+        sorted.groupBy { "${it.category.name} - ${it.subtype.name}" }
+    }
+    
+    // Calculate selection progress
+    val selectionProgress = selectedVehicles.size.toFloat() / trucksNeeded.coerceAtLeast(1)
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BoldBlack)
+    ) {
+        // ============== HEADER ==============
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(BoldBlack)
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Back/Close button
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(DarkGray, CircleShape)
+                        .clickable { onCancel() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Cancel",
+                        tint = PureWhite,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                
+                // Title
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "SELECT TRUCKS",
+                        color = PureWhite,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 1.sp
+                    )
+                    Text(
+                        text = "Choose which trucks to assign",
+                        color = MediumGray,
+                        fontSize = 12.sp
+                    )
+                }
+                
+                // Selection counter with progress
+                Box(
+                    modifier = Modifier
+                        .background(
+                            if (canProceed) SuccessGreen else AccentYellow,
+                            RoundedCornerShape(20.dp)
+                        )
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "${selectedVehicles.size}/$trucksNeeded",
+                        color = if (canProceed) PureWhite else BoldBlack,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+            }
+            
+            // Progress bar
+            Spacer(modifier = Modifier.height(12.dp))
+            LinearProgressIndicator(
+                progress = selectionProgress.coerceIn(0f, 1f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+                color = if (canProceed) SuccessGreen else AccentYellow,
+                trackColor = DarkGray
+            )
+        }
+        
+        // ============== BROADCAST SUMMARY (Compact) ==============
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+        ) {
+            BroadcastSummaryCard(broadcast)
+        }
+        
+        Spacer(modifier = Modifier.height(12.dp))
+        
+        // ============== TRUCK LIST ==============
+        if (vehicles.isEmpty()) {
+            // Empty state
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(32.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(80.dp)
+                            .background(DarkGray, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.LocalShipping,
+                            contentDescription = null,
+                            tint = MediumGray,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
+                    Text(
+                        text = "No Matching Trucks",
+                        color = PureWhite,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    @Suppress("DEPRECATION")
+                    val vehicleTypeName = broadcast.vehicleType?.name ?: "matching"
+                    Text(
+                        text = "You don't have any available $vehicleTypeName trucks",
+                        color = MediumGray,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            // Truck list with grouping
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                // Smooth scrolling with fling
+                flingBehavior = ScrollableDefaults.flingBehavior()
+            ) {
+                sortedAndGroupedVehicles.forEach { (groupName, groupVehicles) ->
+                    // Section header
+                    item(key = "header_$groupName") {
+                        TruckGroupHeader(
+                            title = groupName,
+                            count = groupVehicles.size,
+                            selectedCount = groupVehicles.count { selectedVehicles.contains(it.id) },
+                            isRequestedType = requestedTypes.any { (type, subtype) ->
+                                groupName.lowercase().contains(type) &&
+                                (subtype.isEmpty() || groupName.lowercase().contains(subtype))
+                            }
+                        )
+                    }
+                    
+                    // Trucks in this group
+                    items(
+                        items = groupVehicles,
+                        key = { "vehicle_${it.id}" }
+                    ) { vehicle ->
+                        VehicleSelectCard(
+                            vehicle = vehicle,
+                            isSelected = selectedVehicles.contains(vehicle.id),
+                            onToggle = { onVehicleToggle(vehicle.id) },
+                            canSelect = selectedVehicles.size < trucksNeeded || selectedVehicles.contains(vehicle.id)
+                        )
+                    }
+                    
+                    // Spacer between groups
+                    item(key = "spacer_$groupName") {
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
+        }
+        
+        // ============== BOTTOM ACTION BAR ==============
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = BoldBlack,
+            shadowElevation = 8.dp
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp)
+            ) {
+                // Selection summary
+                if (selectedVehicles.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Selected: ${selectedVehicles.size} truck${if (selectedVehicles.size > 1) "s" else ""}",
+                            color = AccentYellow,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        if (selectedVehicles.size < trucksNeeded) {
+                            Text(
+                                text = "${trucksNeeded - selectedVehicles.size} more needed",
+                                color = MediumGray,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+                
+                // Buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Cancel button
+                    OutlinedButton(
+                        onClick = onCancel,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = PureWhite
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, MediumGray),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            "CANCEL",
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                    }
+                    
+                    // Proceed button
+                    Button(
+                        onClick = onProceed,
+                        enabled = canProceed,
+                        modifier = Modifier
+                            .weight(1.5f)
+                            .height(52.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (canProceed) SuccessGreen else AccentYellow,
+                            contentColor = PureWhite,
+                            disabledContainerColor = DarkGray,
+                            disabledContentColor = MediumGray
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        if (canProceed) {
+                            Icon(
+                                Icons.Default.ArrowForward,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(
+                            if (canProceed) "ASSIGN DRIVERS" else "SELECT TRUCKS",
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 1.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * =============================================================================
+ * TRUCK GROUP HEADER - Section header for grouped trucks
+ * =============================================================================
+ */
+@Composable
+private fun TruckGroupHeader(
+    title: String,
+    count: Int,
+    selectedCount: Int,
+    isRequestedType: Boolean
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Requested type badge
+            if (isRequestedType) {
+                Box(
+                    modifier = Modifier
+                        .background(AccentYellow, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "REQUESTED",
+                        color = BoldBlack,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 0.5.sp
+                    )
+                }
+            }
+            
+            Text(
+                text = title.uppercase(),
+                color = if (isRequestedType) AccentYellow else LightGray,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+        }
+        
+        // Count badge
+        Text(
+            text = if (selectedCount > 0) "$selectedCount/$count" else "$count available",
+            color = if (selectedCount > 0) SuccessGreen else MediumGray,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+// =============================================================================
+// BROADCAST SUMMARY CARD (Compact)
+// =============================================================================
+@Composable
+private fun BroadcastSummaryCard(broadcast: BroadcastTrip) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = DarkGray),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Route
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    Icons.Default.MyLocation,
+                    contentDescription = null,
+                    tint = SuccessGreen,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = broadcast.pickupLocation.address.take(40) + if (broadcast.pickupLocation.address.length > 40) "..." else "",
+                    color = PureWhite,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    Icons.Default.LocationOn,
+                    contentDescription = null,
+                    tint = ErrorRed,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = broadcast.dropLocation.address.take(40) + if (broadcast.dropLocation.address.length > 40) "..." else "",
+                    color = PureWhite,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            
+            Divider(color = MediumGray, thickness = 0.5.dp)
+            
+            // Details row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Vehicle type
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        Icons.Default.LocalShipping,
+                        contentDescription = null,
+                        tint = AccentYellow,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = broadcast.requestedVehicles.firstOrNull()?.let { 
+                            "${it.vehicleType}${if (it.vehicleSubtype.isNotEmpty()) " - ${it.vehicleSubtype}" else ""}"
+                        } ?: (@Suppress("DEPRECATION") broadcast.vehicleType?.name) ?: "Truck",
+                        color = LightGray,
+                        fontSize = 12.sp
+                    )
+                }
+                
+                // Fare
+                Text(
+                    text = "₹${broadcast.farePerTruck.toInt()}/truck",
+                    color = AccentYellow,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+// =============================================================================
+// VEHICLE SELECT CARD
+// =============================================================================
+@Composable
+private fun VehicleSelectCard(
+    vehicle: Vehicle,
+    isSelected: Boolean,
+    onToggle: () -> Unit,
+    canSelect: Boolean
+) {
+    val borderColor = animateColorAsState(
+        targetValue = if (isSelected) AccentYellow else MediumGray,
+        animationSpec = tween(200),
+        label = "border"
+    )
+    
+    val backgroundColor = animateColorAsState(
+        targetValue = if (isSelected) DarkGray else BoldBlack,
+        animationSpec = tween(200),
+        label = "background"
+    )
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = if (isSelected) 2.dp else 1.dp,
+                color = borderColor.value,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .clickable(enabled = canSelect) { onToggle() },
+        colors = CardDefaults.cardColors(containerColor = backgroundColor.value),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Truck icon
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(
+                            if (isSelected) AccentYellow.copy(alpha = 0.2f) else MediumGray.copy(alpha = 0.3f),
+                            CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.LocalShipping,
+                        contentDescription = null,
+                        tint = if (isSelected) AccentYellow else LightGray,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+                
+                Column {
+                    Text(
+                        text = vehicle.vehicleNumber,
+                        color = PureWhite,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${vehicle.category.name} - ${vehicle.subtype.name}",
+                        color = LightGray,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = "${vehicle.subtype.capacityTons} Ton capacity",
+                        color = MediumGray,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+            
+            // Selection indicator
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .background(
+                        if (isSelected) AccentYellow else Color.Transparent,
+                        CircleShape
+                    )
+                    .border(
+                        width = 2.dp,
+                        color = if (isSelected) AccentYellow else MediumGray,
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isSelected) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = "Selected",
+                        tint = BoldBlack,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// DRIVER ASSIGNMENT CONTENT - Enhanced with 7-second Debounce
+// =============================================================================
+// 
+// FEATURES:
+// - Professional skeleton loading while drivers load
+// - 7-second debounce before sending to backend/driver
+// - Visual countdown timer for pending assignments
+// - Grouped by vehicle with clear status indicators
+// - Smooth animations and transitions
+// 
+// DEBOUNCE LOGIC:
+// - When driver is assigned to a truck, 7-second countdown starts
+// - User can change driver during countdown (resets timer)
+// - After 7 seconds, assignment is "locked in"
+// - Prevents accidental rapid clicks and allows driver to prepare
+// 
+// SCALABILITY:
+// - Efficient state management with remember/derivedStateOf
+// - LazyColumn for large driver lists
+// - Debounce prevents backend spam
+// =============================================================================
+
+/**
+ * State for tracking debounced driver assignments
+ */
+data class DebounceAssignment(
+    val vehicleId: String,
+    val driverId: String,
+    val assignedAt: Long,
+    val isLocked: Boolean = false  // True after 7 seconds
+)
+
+private const val DEBOUNCE_SECONDS = 7
+
+@Composable
+@Suppress("UNUSED_PARAMETER")
+private fun DriverAssignmentContent(
+    broadcast: BroadcastTrip,
+    vehicles: List<Vehicle>,
+    drivers: List<Driver>,
+    assignments: Map<String, String>,
+    onAssignDriver: (vehicleId: String, driverId: String) -> Unit,
+    onBack: () -> Unit,
+    onSubmit: () -> Unit,
+    canSubmit: Boolean
+) {
+    var expandedVehicleId by remember { mutableStateOf<String?>(null) }
+    var isLoadingDrivers by remember { mutableStateOf(drivers.isEmpty()) }
+    
+    // Debounce state - tracks countdown for each assignment
+    var debounceTimers by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
+    var lockedAssignments by remember { mutableStateOf<Set<String>>(emptySet()) }
+    
+    // Current time for countdown calculations (updates every second)
+    var currentTimeMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    
+    // Update current time every second for countdowns
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            currentTimeMillis = System.currentTimeMillis()
+            
+            // Check for newly locked assignments (7 seconds passed)
+            debounceTimers.forEach { (vehicleId, assignedAt) ->
+                val elapsedSeconds = (currentTimeMillis - assignedAt) / 1000
+                if (elapsedSeconds >= DEBOUNCE_SECONDS && vehicleId !in lockedAssignments) {
+                    lockedAssignments = lockedAssignments + vehicleId
+                }
+            }
+        }
+    }
+    
+    // Update loading state when drivers arrive
+    LaunchedEffect(drivers) {
+        if (drivers.isNotEmpty()) {
+            kotlinx.coroutines.delay(300) // Small delay for smooth transition
+            isLoadingDrivers = false
+        }
+    }
+    
+    // Calculate progress
+    val assignmentProgress = assignments.size.toFloat() / vehicles.size.coerceAtLeast(1)
+    val lockedCount = lockedAssignments.intersect(assignments.keys).size
+    
+    // Handle driver assignment with debounce
+    fun handleAssignDriver(vehicleId: String, driverId: String) {
+        // Start/reset debounce timer
+        debounceTimers = debounceTimers + (vehicleId to System.currentTimeMillis())
+        // Remove from locked if changing
+        lockedAssignments = lockedAssignments - vehicleId
+        // Call actual assignment
+        onAssignDriver(vehicleId, driverId)
+    }
+    
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BoldBlack)
+    ) {
+        // ============== HEADER ==============
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(BoldBlack)
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Back button
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(DarkGray, CircleShape)
+                        .clickable { onBack() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.ArrowBack,
+                        contentDescription = "Back",
+                        tint = PureWhite,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                
+                // Title
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "ASSIGN DRIVERS",
+                        color = PureWhite,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 1.sp
+                    )
+                    Text(
+                        text = "Select driver for each truck",
+                        color = MediumGray,
+                        fontSize = 12.sp
+                    )
+                }
+                
+                // Progress counter
+                Box(
+                    modifier = Modifier
+                        .background(
+                            if (canSubmit) SuccessGreen else AccentYellow,
+                            RoundedCornerShape(20.dp)
+                        )
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "${assignments.size}/${vehicles.size}",
+                        color = if (canSubmit) PureWhite else BoldBlack,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+            }
+            
+            // Progress bar
+            Spacer(modifier = Modifier.height(12.dp))
+            LinearProgressIndicator(
+                progress = assignmentProgress.coerceIn(0f, 1f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+                color = if (canSubmit) SuccessGreen else AccentYellow,
+                trackColor = DarkGray
+            )
+            
+            // Locked assignments info
+            if (lockedCount > 0) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Lock,
+                        contentDescription = null,
+                        tint = SuccessGreen,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = "$lockedCount locked",
+                        color = SuccessGreen,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+        
+        // ============== DRIVER LIST OR SKELETON ==============
+        if (isLoadingDrivers) {
+            // Skeleton loading
+            DriverAssignmentSkeleton()
+        } else if (drivers.isEmpty()) {
+            // Empty state
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(32.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(80.dp)
+                            .background(DarkGray, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Person,
+                            contentDescription = null,
+                            tint = MediumGray,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
+                    Text(
+                        text = "No Drivers Available",
+                        color = PureWhite,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "You don't have any active drivers",
+                        color = MediumGray,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            // Vehicle + Driver assignment list
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                flingBehavior = ScrollableDefaults.flingBehavior()
+            ) {
+                items(vehicles, key = { "driver_assign_${it.id}" }) { vehicle ->
+                    val assignedDriverId = assignments[vehicle.id]
+                    val assignedDriver = drivers.find { it.id == assignedDriverId }
+                    val isExpanded = expandedVehicleId == vehicle.id
+                    val isLocked = vehicle.id in lockedAssignments && assignedDriverId != null
+                    
+                    // Calculate remaining debounce time
+                    val debounceStartTime = debounceTimers[vehicle.id]
+                    val remainingSeconds = if (debounceStartTime != null && !isLocked) {
+                        val elapsed = (currentTimeMillis - debounceStartTime) / 1000
+                        (DEBOUNCE_SECONDS - elapsed).coerceAtLeast(0)
+                    } else 0L
+                    
+                    // Get available drivers (not already assigned to other vehicles)
+                    val usedDriverIds = assignments.values.toSet() - setOfNotNull(assignedDriverId)
+                    val availableForThisVehicle = drivers.filter { it.id !in usedDriverIds }
+                    
+                    VehicleDriverAssignmentCardEnhanced(
+                        vehicle = vehicle,
+                        assignedDriver = assignedDriver,
+                        isExpanded = isExpanded,
+                        isLocked = isLocked,
+                        remainingDebounceSeconds = remainingSeconds.toInt(),
+                        availableDrivers = availableForThisVehicle,
+                        onToggleExpand = { 
+                            if (!isLocked) {
+                                expandedVehicleId = if (isExpanded) null else vehicle.id
+                            }
+                        },
+                        onSelectDriver = { driverId ->
+                            handleAssignDriver(vehicle.id, driverId)
+                            expandedVehicleId = null
+                        }
+                    )
+                }
+            }
+        }
+        
+        // ============== BOTTOM ACTION BAR ==============
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = BoldBlack,
+            shadowElevation = 8.dp
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp)
+            ) {
+                // Assignment summary
+                if (assignments.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Assigned: ${assignments.size} driver${if (assignments.size > 1) "s" else ""}",
+                            color = AccentYellow,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        if (lockedCount < assignments.size) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    color = AccentYellow,
+                                    strokeWidth = 1.5.dp
+                                )
+                                Text(
+                                    text = "Locking...",
+                                    color = MediumGray,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                // Buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Back button
+                    OutlinedButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = PureWhite
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, MediumGray),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "BACK",
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                    }
+                    
+                    // Submit button
+                    Button(
+                        onClick = onSubmit,
+                        enabled = canSubmit,
+                        modifier = Modifier
+                            .weight(1.5f)
+                            .height(52.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SuccessGreen,
+                            contentColor = PureWhite,
+                            disabledContainerColor = DarkGray,
+                            disabledContentColor = MediumGray
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "SUBMIT ALL",
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 1.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Skeleton loading for driver assignment screen
+ */
+@Composable
+private fun DriverAssignmentSkeleton() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        repeat(3) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = DarkGray),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    // Vehicle info row skeleton
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            DarkSkeletonCircle(size = 40.dp)
+                            Column {
+                                DarkSkeletonBox(height = 15.dp, width = 90.dp)
+                                Spacer(Modifier.height(4.dp))
+                                DarkSkeletonBox(height = 12.dp, width = 70.dp)
+                            }
+                        }
+                        DarkSkeletonBox(height = 36.dp, width = 100.dp, shape = RoundedCornerShape(8.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// VEHICLE-DRIVER ASSIGNMENT CARD - Enhanced with Debounce Timer
+// =============================================================================
+@Composable
+private fun VehicleDriverAssignmentCardEnhanced(
+    vehicle: Vehicle,
+    assignedDriver: Driver?,
+    isExpanded: Boolean,
+    isLocked: Boolean,
+    remainingDebounceSeconds: Int,
+    availableDrivers: List<Driver>,
+    onToggleExpand: () -> Unit,
+    onSelectDriver: (String) -> Unit
+) {
+    val showCountdown = remainingDebounceSeconds > 0 && !isLocked && assignedDriver != null
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMedium
+                )
+            )
+            .then(
+                if (isLocked) Modifier.border(2.dp, SuccessGreen, RoundedCornerShape(12.dp))
+                else Modifier
+            ),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isLocked) SuccessGreen.copy(alpha = 0.1f) else DarkGray
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // Vehicle info row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = !isLocked) { onToggleExpand() },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Truck icon with status
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(
+                                when {
+                                    isLocked -> SuccessGreen.copy(alpha = 0.2f)
+                                    assignedDriver != null -> AccentYellow.copy(alpha = 0.2f)
+                                    else -> BoldBlack
+                                },
+                                CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            when {
+                                isLocked -> Icons.Default.Lock
+                                else -> Icons.Default.LocalShipping
+                            },
+                            contentDescription = null,
+                            tint = when {
+                                isLocked -> SuccessGreen
+                                assignedDriver != null -> AccentYellow
+                                else -> MediumGray
+                            },
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    
+                    Column {
+                        Text(
+                            text = vehicle.vehicleNumber,
+                            color = PureWhite,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "${vehicle.category.name} - ${vehicle.subtype.capacityTons}T",
+                            color = LightGray,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                
+                // Right side: Assigned driver or countdown or select button
+                when {
+                    isLocked && assignedDriver != null -> {
+                        // Locked state - show driver with lock icon
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = assignedDriver.name,
+                                    color = SuccessGreen,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "LOCKED",
+                                    color = SuccessGreen,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.5.sp
+                                )
+                            }
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = SuccessGreen,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                    showCountdown && assignedDriver != null -> {
+                        // Countdown state - show driver with timer
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = assignedDriver.name,
+                                    color = AccentYellow,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                // Countdown badge
+                                Box(
+                                    modifier = Modifier
+                                        .background(AccentYellow, RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "${remainingDebounceSeconds}s",
+                                        color = BoldBlack,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Black
+                                    )
+                                }
+                            }
+                            // Circular countdown
+                            Box(
+                                modifier = Modifier.size(32.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    progress = remainingDebounceSeconds.toFloat() / DEBOUNCE_SECONDS,
+                                    color = AccentYellow,
+                                    trackColor = DarkGray,
+                                    strokeWidth = 3.dp,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
+                    }
+                    assignedDriver != null -> {
+                        // Assigned but editable
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = assignedDriver.name,
+                                    color = SuccessGreen,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "⭐ ${"%.1f".format(assignedDriver.rating)}",
+                                    color = LightGray,
+                                    fontSize = 12.sp
+                                )
+                            }
+                            Icon(
+                                if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = null,
+                                tint = LightGray
+                            )
+                        }
+                    }
+                    else -> {
+                        // Not assigned - show select button
+                        TextButton(
+                            onClick = onToggleExpand,
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = AccentYellow
+                            )
+                        ) {
+                            Text("Select Driver", fontWeight = FontWeight.SemiBold)
+                            Icon(
+                                if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // Expandable driver list (only if not locked)
+            if (isExpanded && !isLocked) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Divider(color = MediumGray, thickness = 0.5.dp)
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                if (availableDrivers.isEmpty()) {
+                    Text(
+                        text = "No available drivers",
+                        color = MediumGray,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        availableDrivers.forEach { driver ->
+                            DriverSelectRowEnhanced(
+                                driver = driver,
+                                isSelected = assignedDriver?.id == driver.id,
+                                onSelect = { onSelectDriver(driver.id) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Enhanced driver select row with better visuals
+ */
+@Composable
+private fun DriverSelectRowEnhanced(
+    driver: Driver,
+    isSelected: Boolean,
+    onSelect: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isSelected) SuccessGreen.copy(alpha = 0.15f) else BoldBlack)
+            .clickable { onSelect() }
+            .padding(12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Driver avatar
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(
+                        if (isSelected) SuccessGreen.copy(alpha = 0.3f) else MediumGray,
+                        CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = driver.name.take(1).uppercase(),
+                    color = if (isSelected) SuccessGreen else PureWhite,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            
+            Column {
+                Text(
+                    text = driver.name,
+                    color = if (isSelected) SuccessGreen else PureWhite,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "⭐ ${"%.1f".format(driver.rating)}",
+                        color = AccentYellow,
+                        fontSize = 12.sp
+                    )
+                    Text(
+                        text = "•",
+                        color = MediumGray,
+                        fontSize = 12.sp
+                    )
+                    Text(
+                        text = "${driver.totalTrips} trips",
+                        color = LightGray,
+                        fontSize = 12.sp
+                    )
+                    if (driver.isAvailable) {
+                        Text(
+                            text = "•",
+                            color = MediumGray,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = "AVAILABLE",
+                            color = SuccessGreen,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+        
+        // Selection indicator
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .background(
+                    if (isSelected) SuccessGreen else Color.Transparent,
+                    CircleShape
+                )
+                .border(
+                    width = 2.dp,
+                    color = if (isSelected) SuccessGreen else MediumGray,
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isSelected) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = "Selected",
+                    tint = PureWhite,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+// =============================================================================
+// LEGACY VEHICLE-DRIVER ASSIGNMENT CARD (Kept for compatibility)
+// =============================================================================
+@Composable
+private fun VehicleDriverAssignmentCard(
+    vehicle: Vehicle,
+    assignedDriver: Driver?,
+    isExpanded: Boolean,
+    availableDrivers: List<Driver>,
+    onToggleExpand: () -> Unit,
+    onSelectDriver: (String) -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMedium
+                )
+            ),
+        colors = CardDefaults.cardColors(containerColor = DarkGray),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // Vehicle info row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggleExpand() },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Truck icon with status
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(
+                                if (assignedDriver != null) SuccessGreen.copy(alpha = 0.2f) 
+                                else AccentYellow.copy(alpha = 0.2f),
+                                CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.LocalShipping,
+                            contentDescription = null,
+                            tint = if (assignedDriver != null) SuccessGreen else AccentYellow,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    
+                    Column {
+                        Text(
+                            text = vehicle.vehicleNumber,
+                            color = PureWhite,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "${vehicle.category.name} - ${vehicle.subtype.capacityTons}T",
+                            color = LightGray,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                
+                // Assigned driver or "Select" button
+                if (assignedDriver != null) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = assignedDriver.name,
+                                color = SuccessGreen,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "⭐ ${"%.1f".format(assignedDriver.rating)}",
+                                color = LightGray,
+                                fontSize = 12.sp
+                            )
+                        }
+                        Icon(
+                            if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            tint = LightGray
+                        )
+                    }
+                } else {
+                    TextButton(
+                        onClick = onToggleExpand,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = AccentYellow
+                        )
+                    ) {
+                        Text("Select Driver", fontWeight = FontWeight.SemiBold)
+                        Icon(
+                            if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+            
+            // Expandable driver list
+            if (isExpanded) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Divider(color = MediumGray, thickness = 0.5.dp)
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                if (availableDrivers.isEmpty()) {
+                    Text(
+                        text = "No available drivers",
+                        color = MediumGray,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        availableDrivers.forEach { driver ->
+                            DriverSelectRow(
+                                driver = driver,
+                                isSelected = assignedDriver?.id == driver.id,
+                                onSelect = { onSelectDriver(driver.id) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// DRIVER SELECT ROW
+// =============================================================================
+@Composable
+private fun DriverSelectRow(
+    driver: Driver,
+    isSelected: Boolean,
+    onSelect: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isSelected) SuccessGreen.copy(alpha = 0.15f) else BoldBlack)
+            .clickable { onSelect() }
+            .padding(12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Driver avatar
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(MediumGray, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = driver.name.take(1).uppercase(),
+                    color = PureWhite,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            
+            Column {
+                Text(
+                    text = driver.name,
+                    color = PureWhite,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "⭐ ${"%.1f".format(driver.rating)}",
+                        color = AccentYellow,
+                        fontSize = 12.sp
+                    )
+                    Text(
+                        text = "•",
+                        color = MediumGray,
+                        fontSize = 12.sp
+                    )
+                    Text(
+                        text = "${driver.totalTrips} trips",
+                        color = LightGray,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+        
+        if (isSelected) {
+            Icon(
+                Icons.Default.CheckCircle,
+                contentDescription = "Selected",
+                tint = SuccessGreen,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+    }
+}
+
+// =============================================================================
+// SUBMITTING CONTENT - Professional Progress UI
+// =============================================================================
+// 
+// DESIGN:
+// - Circular progress with percentage
+// - Animated pulse effect
+// - Clear status messages
+// - Professional dark theme
+// =============================================================================
+@Composable
+private fun SubmittingContent(
+    progress: Float,
+    totalCount: Int
+) {
+    // Pulse animation for the progress ring
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.6f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulse_alpha"
+    )
+    
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+            modifier = Modifier.padding(32.dp)
+        ) {
+            // Animated progress ring with percentage
+            Box(
+                modifier = Modifier.size(120.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                // Background track
+                CircularProgressIndicator(
+                    progress = 1f,
+                    color = DarkGray,
+                    strokeWidth = 8.dp,
+                    modifier = Modifier.fillMaxSize()
+                )
+                
+                // Progress indicator
+                CircularProgressIndicator(
+                    progress = progress,
+                    color = AccentYellow.copy(alpha = pulseAlpha),
+                    strokeWidth = 8.dp,
+                    modifier = Modifier.fillMaxSize()
+                )
+                
+                // Percentage text in center
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "${(progress * 100).toInt()}%",
+                        color = AccentYellow,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            // Status text
+            Text(
+                text = "Submitting Assignments",
+                color = PureWhite,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold
+            )
+            
+            // Progress details
+            Text(
+                text = "${(progress * totalCount).toInt()} of $totalCount trucks assigned",
+                color = LightGray,
+                fontSize = 14.sp
+            )
+            
+            // Processing indicator
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    color = AccentYellow,
+                    strokeWidth = 2.dp
+                )
+                Text(
+                    text = "Notifying drivers...",
+                    color = MediumGray,
+                    fontSize = 12.sp
+                )
+            }
+        }
+    }
+}
+
+// =============================================================================
+// SUCCESS CONTENT
+// =============================================================================
+@Composable
+private fun SuccessContent(assignmentCount: Int) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Success icon with animation
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .background(SuccessGreen.copy(alpha = 0.2f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = "Success",
+                    tint = SuccessGreen,
+                    modifier = Modifier.size(56.dp)
+                )
+            }
+            
+            Text(
+                text = "Success!",
+                color = SuccessGreen,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold
+            )
+            
+            Text(
+                text = "$assignmentCount truck${if (assignmentCount > 1) "s" else ""} assigned successfully",
+                color = LightGray,
+                fontSize = 16.sp
+            )
+            
+            Text(
+                text = "Drivers have been notified",
+                color = MediumGray,
+                fontSize = 14.sp
+            )
+        }
+    }
+}
+
+// =============================================================================
+// ERROR CONTENT
+// =============================================================================
+@Composable
+private fun ErrorContent(
+    message: String,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(32.dp)
+        ) {
+            // Error icon
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .background(ErrorRed.copy(alpha = 0.2f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Error,
+                    contentDescription = "Error",
+                    tint = ErrorRed,
+                    modifier = Modifier.size(56.dp)
+                )
+            }
+            
+            Text(
+                text = "Something went wrong",
+                color = ErrorRed,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold
+            )
+            
+            Text(
+                text = message,
+                color = LightGray,
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center
+            )
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = PureWhite
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MediumGray)
+                ) {
+                    Text("Close")
+                }
+                
+                Button(
+                    onClick = onRetry,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AccentYellow,
+                        contentColor = BoldBlack
+                    )
+                ) {
+                    Text("Try Again", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+

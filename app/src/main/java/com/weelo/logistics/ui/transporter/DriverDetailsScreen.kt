@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.api.DriverData
+import com.weelo.logistics.data.cache.AppCache
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
@@ -21,11 +22,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private const val TAG = "DriverDetailsScreen"
+
 /**
- * DriverDetailsScreen - Shows driver details from backend database
+ * DriverDetailsScreen - Shows driver details
  * 
- * Fetches real data from: GET /api/v1/driver/list (filters by driverId)
- * Performance/Earnings show 0 - will be connected to backend later
+ * RAPIDO-STYLE INSTANT NAVIGATION:
+ * - First checks AppCache for instant display (0ms)
+ * - Background refresh only if not in cache
+ * - Back button shows cached data immediately
  */
 @Composable
 fun DriverDetailsScreen(
@@ -35,16 +40,33 @@ fun DriverDetailsScreen(
     onNavigateToEarnings: (String) -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
+    
+    // =========================================================================
+    // RAPIDO-STYLE: Check cache FIRST for instant display
+    // =========================================================================
     var driver by remember { mutableStateOf<DriverData?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
+    var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     
-    // Fetch driver from backend
+    // Try cache first (INSTANT)
     LaunchedEffect(driverId) {
-        scope.launch {
+        // Step 1: Check cache immediately (0ms)
+        val cachedDriver = AppCache.getDriver(driverId)
+        if (cachedDriver != null) {
+            timber.log.Timber.d("📦 Showing cached driver: ${cachedDriver.name}")
+            driver = cachedDriver
+            // Don't refresh if data is fresh
+            if (!AppCache.shouldRefreshDrivers()) {
+                return@LaunchedEffect
+            }
+        }
+        
+        // Step 2: Background fetch (only if not cached or stale)
+        if (driver == null) {
             isLoading = true
-            errorMessage = null
-            
+        }
+        
+        scope.launch {
             try {
                 val response = withContext(Dispatchers.IO) {
                     RetrofitClient.driverApi.getDriverList()
@@ -52,15 +74,21 @@ fun DriverDetailsScreen(
                 
                 if (response.isSuccessful && response.body()?.success == true) {
                     val drivers = response.body()?.data?.drivers ?: emptyList()
+                    // Update cache
+                    AppCache.setDrivers(drivers)
+                    // Update local state
                     driver = drivers.find { it.id == driverId }
-                    if (driver == null) {
+                    if (driver == null && cachedDriver == null) {
                         errorMessage = "Driver not found"
                     }
-                } else {
+                } else if (driver == null) {
                     errorMessage = response.body()?.error?.message ?: "Failed to load driver"
                 }
             } catch (e: Exception) {
-                errorMessage = "Network error: ${e.message}"
+                timber.log.Timber.e(e, "❌ Fetch failed")
+                if (driver == null) {
+                    errorMessage = "Network error: ${e.message}"
+                }
             } finally {
                 isLoading = false
             }
@@ -140,11 +168,11 @@ fun DriverDetailsScreen(
                     DetailRow("Phone", "+91 ${d.phone}")
                     if (d.licenseNumber != null) {
                         Divider()
-                        DetailRow("License", d.licenseNumber!!)
+                        DetailRow("License", d.licenseNumber)
                     }
                     if (d.email != null) {
                         Divider()
-                        DetailRow("Email", d.email!!)
+                        DetailRow("Email", d.email)
                     }
                 }
                 

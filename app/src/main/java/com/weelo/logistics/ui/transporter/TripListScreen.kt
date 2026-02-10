@@ -16,10 +16,32 @@ import com.weelo.logistics.data.model.Trip
 import com.weelo.logistics.data.model.TripStatus
 import com.weelo.logistics.data.repository.MockDataRepository
 import com.weelo.logistics.ui.components.*
+import com.weelo.logistics.ui.components.responsiveHorizontalPadding
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.DataSanitizer
 import kotlinx.coroutines.launch
 
+private const val TAG = "TripListScreen"
+
+/**
+ * Trip List Screen - Shows all trips for transporter
+ * 
+ * FEATURES:
+ * - Trip data from repository (mock data for now, will connect to real API)
+ * - Filter by status: All, Active, Completed, Pending
+ * - Create new trip button
+ * - Trip details navigation
+ * 
+ * BACKEND ENDPOINTS (TODO - integrate when API is ready):
+ * - GET /api/v1/assignments - Get all trips for transporter
+ * - GET /api/v1/assignments?status=pending - Filter by status
+ * 
+ * DRIVER ACCEPTANCE FLOW:
+ * 1. Transporter accepts broadcast → Creates assignment with status "pending"
+ * 2. Driver accepts trip → Status changes to "accepted"
+ * 3. Driver starts trip → Status changes to "in_progress"
+ * 4. Driver completes trip → Status changes to "completed"
+ */
 @Composable
 fun TripListScreen(
     onNavigateBack: () -> Unit,
@@ -29,13 +51,26 @@ fun TripListScreen(
     val scope = rememberCoroutineScope()
     val repository = remember { MockDataRepository() }
     var trips by remember { mutableStateOf<List<Trip>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(true) }
     var selectedFilter by remember { mutableStateOf("All") }
     
+    // Load trips from repository
     LaunchedEffect(Unit) {
+        isLoading = true
+        
         scope.launch {
-            repository.getTrips("t1").onSuccess { tripList ->
-                trips = tripList
+            try {
+                // Load trips from repository
+                // TODO: Replace "t1" with actual transporter ID from auth/preferences
+                repository.getTrips("t1").onSuccess { tripList ->
+                    trips = tripList
+                    timber.log.Timber.i("✅ Loaded ${trips.size} trips")
+                }.onFailure { error ->
+                    timber.log.Timber.e("❌ Failed to load trips: ${error.message}")
+                }
+            } catch (e: Exception) {
+                timber.log.Timber.e("❌ Error loading trips: ${e.message}")
+            } finally {
                 isLoading = false
             }
         }
@@ -50,6 +85,9 @@ fun TripListScreen(
         }
     }
     
+    // Responsive layout
+    val horizontalPadding = responsiveHorizontalPadding()
+    
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().background(Surface)) {
             PrimaryTopBar(title = "Trips (${trips.size})", onBackClick = onNavigateBack)
@@ -58,7 +96,7 @@ fun TripListScreen(
                 Modifier
                     .fillMaxWidth()
                     .background(White)
-                    .padding(16.dp),
+                    .padding(horizontal = horizontalPadding, vertical = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 FilterChip(selected = selectedFilter == "All", onClick = { selectedFilter = "All" }, label = { Text("All") })
@@ -82,7 +120,7 @@ fun TripListScreen(
             } else {
                 LazyColumn(
                     Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
+                    contentPadding = PaddingValues(horizontal = horizontalPadding, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(filteredTrips) { trip ->

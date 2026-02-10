@@ -23,6 +23,8 @@ import com.weelo.logistics.data.api.TransporterProfileRequest
 import com.weelo.logistics.data.api.UserProfile
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.ui.components.rememberScreenConfig
+import com.weelo.logistics.ui.components.responsiveHorizontalPadding
 import kotlinx.coroutines.launch
 
 /**

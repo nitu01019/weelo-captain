@@ -113,7 +113,7 @@ fun DriverNotificationsScreen(@Suppress("UNUSED_PARAMETER")
                                     NotificationType.TRIP_STARTED
                                 )
                             ) {
-                                notification.data?.get("tripId")?.let { onNavigateToTrip(it) }
+                                notification.data.get("tripId")?.let { onNavigateToTrip(it) }
                             }
                         }
                     )

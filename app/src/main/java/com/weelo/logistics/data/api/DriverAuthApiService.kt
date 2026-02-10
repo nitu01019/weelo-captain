@@ -123,7 +123,9 @@ data class DriverProfile(
     val transporterId: String,
     val transporterName: String,
     val licenseNumber: String?,
-    val profilePhoto: String?
+    val profilePhoto: String?,
+    val preferredLanguage: String? = null,
+    val isProfileCompleted: Boolean = false
 )
 
 /**

@@ -1,6 +1,5 @@
 package com.weelo.logistics.utils
 
-import android.util.Log
 
 /**
  * Secure Logger - Prevents sensitive data from appearing in logs
@@ -32,39 +31,47 @@ object SecureLogger {
     
     /**
      * Debug log - Only in development
+     * @param tag Kept for backward compatibility (Timber auto-detects tag)
      */
+    @Suppress("UNUSED_PARAMETER")
     fun d(tag: String, message: String) {
         if (isDebugEnabled) {
-            Log.d("$TAG_PREFIX:$tag", sanitizeMessage(message))
+            timber.log.Timber.d(sanitizeMessage(message))
         }
     }
     
     /**
      * Info log - General information
+     * @param tag Kept for backward compatibility (Timber auto-detects tag)
      */
+    @Suppress("UNUSED_PARAMETER")
     fun i(tag: String, message: String) {
-        Log.i("$TAG_PREFIX:$tag", sanitizeMessage(message))
+        timber.log.Timber.i(sanitizeMessage(message))
     }
     
     /**
      * Warning log - Potential issues
+     * @param tag Kept for backward compatibility (Timber auto-detects tag)
      */
+    @Suppress("UNUSED_PARAMETER")
     fun w(tag: String, message: String, throwable: Throwable? = null) {
         if (throwable != null) {
-            Log.w("$TAG_PREFIX:$tag", sanitizeMessage(message), throwable)
+            timber.log.Timber.w(throwable, sanitizeMessage(message))
         } else {
-            Log.w("$TAG_PREFIX:$tag", sanitizeMessage(message))
+            timber.log.Timber.w(sanitizeMessage(message))
         }
     }
     
     /**
      * Error log - Errors and exceptions
+     * @param tag Kept for backward compatibility (Timber auto-detects tag)
      */
+    @Suppress("UNUSED_PARAMETER")
     fun e(tag: String, message: String, throwable: Throwable? = null) {
         if (throwable != null) {
-            Log.e("$TAG_PREFIX:$tag", sanitizeMessage(message), throwable)
+            timber.log.Timber.e(throwable, sanitizeMessage(message))
         } else {
-            Log.e("$TAG_PREFIX:$tag", sanitizeMessage(message))
+            timber.log.Timber.e(sanitizeMessage(message))
         }
     }
     

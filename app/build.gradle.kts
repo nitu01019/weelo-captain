@@ -33,8 +33,8 @@ android {
             isDebuggable = true
             
             // Debug suffix for package name (allows both debug and release on same device)
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
+            // applicationIdSuffix = ".debug"  // Removed to keep consistent package name for API keys
+            // versionNameSuffix = "-debug"
         }
         
         release {
@@ -131,14 +131,24 @@ dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
     
     // Google Maps (for future GPS tracking)
+    // Google Maps & Location Services
     implementation("com.google.android.gms:play-services-maps:18.2.0")
-    implementation("com.google.android.gms:play-services-location:21.0.1")
+    implementation("com.google.android.gms:play-services-location:21.1.0")  // Updated to match customer app
+    implementation("com.google.maps.android:maps-compose:4.3.0")            // Compose Maps for embedded maps
+    implementation("com.google.maps.android:android-maps-utils:3.8.2")      // Map utilities (markers, clustering)
     
     // Kotlin coroutines support for Google Play Services
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
     
     // Coil for Image Loading
     implementation("io.coil-kt:coil-compose:2.5.0")
+    
+    // CameraX for camera capture
+    val cameraxVersion = "1.3.1"
+    implementation("androidx.camera:camera-core:$cameraxVersion")
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+    implementation("androidx.camera:camera-view:$cameraxVersion")
     
     // Security - Encrypted SharedPreferences
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
@@ -154,6 +164,9 @@ dependencies {
     
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    
+    // Timber - Production-safe logging (logs stripped in release builds)
+    implementation("com.jakewharton.timber:timber:5.0.1")
     
     // Socket.IO for real-time communication
     implementation("io.socket:socket.io-client:2.1.0") {

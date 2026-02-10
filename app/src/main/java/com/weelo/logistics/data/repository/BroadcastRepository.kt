@@ -147,7 +147,7 @@ class BroadcastRepository private constructor(
             
             if (!forceRefresh && cached != null && (now - cached.lastUpdated) < cacheValidityMs) {
                 // Return cached data if still valid
-                android.util.Log.d(TAG, "✅ Returning cached broadcasts (${cached.broadcasts.size} items)")
+                timber.log.Timber.d("✅ Returning cached broadcasts (${cached.broadcasts.size} items)")
                 _broadcastsState.value = BroadcastResult.Success(cached)
                 return@withContext BroadcastResult.Success(cached)
             }
@@ -166,7 +166,7 @@ class BroadcastRepository private constructor(
                 
                 val effectiveUserId = userId ?: RetrofitClient.getUserId() ?: ""
                 
-                android.util.Log.d(TAG, "📡 Fetching broadcasts for user: $effectiveUserId")
+                timber.log.Timber.d("📡 Fetching broadcasts for user: $effectiveUserId")
                 
                 val response = broadcastApi.getActiveBroadcasts(
                     token = "Bearer $token",
@@ -195,7 +195,7 @@ class BroadcastRepository private constructor(
                     // Update cache
                     cachedBroadcasts = cachedList
                     
-                    android.util.Log.i(TAG, "✅ Fetched ${mappedBroadcasts.size} active broadcasts")
+                    timber.log.Timber.i("✅ Fetched ${mappedBroadcasts.size} active broadcasts")
                     
                     val result = BroadcastResult.Success(cachedList)
                     _broadcastsState.value = result
@@ -208,7 +208,7 @@ class BroadcastRepository private constructor(
                         ?: "Failed to fetch broadcasts"
                     val errorCode = response.code()
                     
-                    android.util.Log.e(TAG, "❌ Fetch broadcasts failed: $errorMsg (code: $errorCode)")
+                    timber.log.Timber.e("❌ Fetch broadcasts failed: $errorMsg (code: $errorCode)")
                     
                     // Return stale cache if available
                     if (cached != null) {
@@ -225,9 +225,10 @@ class BroadcastRepository private constructor(
                 }
                 
             } catch (e: Exception) {
-                android.util.Log.e(TAG, "❌ Network error fetching broadcasts", e)
+                timber.log.Timber.e(e, "❌ Network error fetching broadcasts")
                 
                 // Return stale cache if available
+                @Suppress("NAME_SHADOWING")
                 val cached = cachedBroadcasts
                 if (cached != null) {
                     val staleCache = cached.copy(isStale = true)
@@ -270,7 +271,7 @@ class BroadcastRepository private constructor(
             return@withContext BroadcastResult.Error(errorMsg, response.code())
             
         } catch (e: Exception) {
-            android.util.Log.e(TAG, "❌ Error fetching broadcast $broadcastId", e)
+            timber.log.Timber.e(e, "❌ Error fetching broadcast $broadcastId")
             return@withContext BroadcastResult.Error(e.message ?: "Network error")
         }
     }
@@ -303,7 +304,7 @@ class BroadcastRepository private constructor(
             
             val effectiveDriverId = driverId ?: RetrofitClient.getUserId() ?: ""
             
-            android.util.Log.d(TAG, "📤 Accepting broadcast: $broadcastId with vehicle: $vehicleId")
+            timber.log.Timber.d("📤 Accepting broadcast: $broadcastId with vehicle: $vehicleId")
             
             val request = AcceptBroadcastRequest(
                 driverId = effectiveDriverId,
@@ -327,19 +328,19 @@ class BroadcastRepository private constructor(
                 // Invalidate cache to refresh list
                 invalidateCache()
                 
-                android.util.Log.i(TAG, "✅ Broadcast accepted! Assignment: ${body.assignmentId}, Trip: ${body.tripId}")
+                timber.log.Timber.i("✅ Broadcast accepted! Assignment: ${body.assignmentId}, Trip: ${body.tripId}")
                 
                 return@withContext BroadcastResult.Success(body)
             } else {
                 val errorMsg = response.errorBody()?.string() 
                     ?: response.body()?.error
                     ?: "Failed to accept broadcast"
-                android.util.Log.e(TAG, "❌ Accept broadcast failed: $errorMsg")
+                timber.log.Timber.e("❌ Accept broadcast failed: $errorMsg")
                 return@withContext BroadcastResult.Error(errorMsg, response.code())
             }
             
         } catch (e: Exception) {
-            android.util.Log.e(TAG, "❌ Network error accepting broadcast", e)
+            timber.log.Timber.e(e, "❌ Network error accepting broadcast")
             return@withContext BroadcastResult.Error(e.message ?: "Network error")
         }
     }
@@ -361,7 +362,7 @@ class BroadcastRepository private constructor(
             
             val effectiveDriverId = driverId ?: RetrofitClient.getUserId() ?: ""
             
-            android.util.Log.d(TAG, "📤 Declining broadcast: $broadcastId, reason: $reason")
+            timber.log.Timber.d("📤 Declining broadcast: $broadcastId, reason: $reason")
             
             val request = DeclineBroadcastRequest(
                 driverId = effectiveDriverId,
@@ -382,7 +383,7 @@ class BroadcastRepository private constructor(
                 // Invalidate cache
                 invalidateCache()
                 
-                android.util.Log.i(TAG, "✅ Broadcast declined")
+                timber.log.Timber.i("✅ Broadcast declined")
                 return@withContext BroadcastResult.Success(response.body()!!)
             } else {
                 val errorMsg = response.errorBody()?.string() ?: "Failed to decline broadcast"
@@ -390,7 +391,7 @@ class BroadcastRepository private constructor(
             }
             
         } catch (e: Exception) {
-            android.util.Log.e(TAG, "❌ Network error declining broadcast", e)
+            timber.log.Timber.e(e, "❌ Network error declining broadcast")
             return@withContext BroadcastResult.Error(e.message ?: "Network error")
         }
     }
@@ -417,7 +418,7 @@ class BroadcastRepository private constructor(
             )
             _broadcastsState.value = BroadcastResult.Success(cachedBroadcasts!!)
             
-            android.util.Log.i(TAG, "📥 New broadcast added via WebSocket: ${broadcast.broadcastId}")
+            timber.log.Timber.i("📥 New broadcast added via WebSocket: ${broadcast.broadcastId}")
         }
     }
     
@@ -446,7 +447,7 @@ class BroadcastRepository private constructor(
         )
         _broadcastsState.value = BroadcastResult.Success(cachedBroadcasts!!)
         
-        android.util.Log.d(TAG, "🔄 Broadcast updated via WebSocket: $broadcastId")
+        timber.log.Timber.d("🔄 Broadcast updated via WebSocket: $broadcastId")
     }
     
     /**
@@ -467,7 +468,7 @@ class BroadcastRepository private constructor(
         )
         _broadcastsState.value = BroadcastResult.Success(cachedBroadcasts!!)
         
-        android.util.Log.d(TAG, "🗑️ Broadcast removed via WebSocket: $broadcastId")
+        timber.log.Timber.d("🗑️ Broadcast removed via WebSocket: $broadcastId")
     }
     
     // =========================================================================
@@ -479,7 +480,7 @@ class BroadcastRepository private constructor(
      */
     fun invalidateCache() {
         cachedBroadcasts = cachedBroadcasts?.copy(isStale = true, lastUpdated = 0)
-        android.util.Log.d(TAG, "🔄 Cache invalidated")
+        timber.log.Timber.d("🔄 Cache invalidated")
     }
     
     /**
@@ -490,7 +491,7 @@ class BroadcastRepository private constructor(
         cachedBroadcasts = null
         acceptedBroadcastIds.clear()
         _broadcastsState.value = BroadcastResult.Loading
-        android.util.Log.d(TAG, "🗑️ Cache cleared")
+        timber.log.Timber.d("🗑️ Cache cleared")
     }
     
     // =========================================================================
@@ -596,7 +597,210 @@ class BroadcastRepository private constructor(
             System.currentTimeMillis()
         }
     }
+    
+    // =========================================================================
+    // TRUCK HOLD API - Atomic Locking for Race Condition Prevention
+    // =========================================================================
+    // 
+    // FLOW:
+    // 1. holdTrucks() → Trucks held for 15 seconds (Redis lock)
+    // 2. confirmHoldWithAssignments() → Assign vehicles + drivers atomically
+    // 3. releaseHold() → Release if user cancels or timeout
+    //
+    // This prevents double-booking when multiple transporters try to accept
+    // the same trucks simultaneously.
+    // =========================================================================
+    
+    private val truckHoldApi by lazy { RetrofitClient.truckHoldApi }
+    
+    /**
+     * Hold trucks for selection (15-second lock)
+     * 
+     * IMPORTANT: This is the first step in the acceptance flow.
+     * Trucks are locked atomically via Redis - only ONE transporter wins.
+     * 
+     * @param orderId The order/broadcast ID
+     * @param vehicleType The vehicle type (e.g., "Open", "Container")
+     * @param vehicleSubtype The subtype (e.g., "17ft", "20-24 Ton")
+     * @param quantity Number of trucks to hold
+     * @return HoldResult with holdId if successful
+     */
+    suspend fun holdTrucks(
+        orderId: String,
+        vehicleType: String,
+        vehicleSubtype: String,
+        quantity: Int
+    ): BroadcastResult<HoldTrucksResult> = withContext(Dispatchers.IO) {
+        try {
+            val token = RetrofitClient.getAccessToken()
+            if (token.isNullOrEmpty()) {
+                return@withContext BroadcastResult.Error("Not authenticated", 401)
+            }
+            
+            timber.log.Timber.i("🔒 Holding $quantity trucks: $vehicleType $vehicleSubtype for order $orderId")
+            
+            val request = com.weelo.logistics.data.api.HoldTrucksRequest(
+                orderId = orderId,
+                vehicleType = vehicleType,
+                vehicleSubtype = vehicleSubtype,
+                quantity = quantity
+            )
+            
+            val response = truckHoldApi.holdTrucks(request)
+            
+            if (response.isSuccessful && response.body()?.success == true) {
+                val data = response.body()!!.data!!
+                timber.log.Timber.i("✅ Trucks held! HoldID: ${data.holdId}, Expires: ${data.expiresAt}")
+                
+                return@withContext BroadcastResult.Success(
+                    HoldTrucksResult(
+                        holdId = data.holdId,
+                        expiresAt = data.expiresAt,
+                        heldQuantity = data.heldQuantity
+                    )
+                )
+            } else {
+                val errorMsg = response.body()?.error?.message 
+                    ?: response.body()?.message
+                    ?: response.errorBody()?.string()
+                    ?: "Failed to hold trucks"
+                val errorCode = response.body()?.error?.code
+                timber.log.Timber.e("❌ Hold failed: $errorMsg (code: $errorCode)")
+                return@withContext BroadcastResult.Error(errorMsg, response.code())
+            }
+            
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "❌ Network error holding trucks")
+            return@withContext BroadcastResult.Error(e.message ?: "Network error")
+        }
+    }
+    
+    /**
+     * Confirm hold with vehicle and driver assignments
+     * 
+     * IMPORTANT: This is the PRODUCTION endpoint that:
+     * 1. Validates vehicle availability (not in another trip)
+     * 2. Validates driver availability (not on another trip)
+     * 3. Creates assignment records
+     * 4. Updates vehicle status to 'in_transit'
+     * 5. Notifies drivers and customer
+     * 
+     * @param holdId The hold ID from holdTrucks()
+     * @param assignments List of (vehicleId, driverId) pairs
+     * @return ConfirmResult with assignmentIds and tripIds
+     */
+    suspend fun confirmHoldWithAssignments(
+        holdId: String,
+        assignments: List<Pair<String, String>> // vehicleId to driverId
+    ): BroadcastResult<ConfirmHoldResult> = withContext(Dispatchers.IO) {
+        try {
+            val token = RetrofitClient.getAccessToken()
+            if (token.isNullOrEmpty()) {
+                return@withContext BroadcastResult.Error("Not authenticated", 401)
+            }
+            
+            timber.log.Timber.i("📤 Confirming hold $holdId with ${assignments.size} assignments")
+            
+            val request = com.weelo.logistics.data.api.ConfirmHoldWithAssignmentsRequest(
+                holdId = holdId,
+                assignments = assignments.map { (vehicleId, driverId) ->
+                    com.weelo.logistics.data.api.VehicleDriverAssignment(
+                        vehicleId = vehicleId,
+                        driverId = driverId
+                    )
+                }
+            )
+            
+            val response = truckHoldApi.confirmHoldWithAssignments(request)
+            
+            if (response.isSuccessful && response.body()?.success == true) {
+                val data = response.body()!!.data!!
+                timber.log.Timber.i("✅ Hold confirmed! Assignments: ${data.assignmentIds.size}, Trips: ${data.tripIds.size}")
+                
+                // Invalidate cache
+                invalidateCache()
+                
+                return@withContext BroadcastResult.Success(
+                    ConfirmHoldResult(
+                        assignmentIds = data.assignmentIds,
+                        tripIds = data.tripIds
+                    )
+                )
+            } else {
+                val error = response.body()?.error
+                val errorMsg = error?.message 
+                    ?: response.body()?.message
+                    ?: response.errorBody()?.string()
+                    ?: "Failed to confirm hold"
+                    
+                // Include failed assignments in error message if available
+                val failedInfo = error?.failedAssignments?.joinToString("\n") { 
+                    "• ${it.vehicleId}: ${it.reason}" 
+                } ?: ""
+                
+                val fullError = if (failedInfo.isNotEmpty()) "$errorMsg\n$failedInfo" else errorMsg
+                
+                timber.log.Timber.e("❌ Confirm failed: $fullError")
+                return@withContext BroadcastResult.Error(fullError, response.code())
+            }
+            
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "❌ Network error confirming hold")
+            return@withContext BroadcastResult.Error(e.message ?: "Network error")
+        }
+    }
+    
+    /**
+     * Release held trucks (cancel/timeout)
+     * 
+     * @param holdId The hold ID to release
+     */
+    suspend fun releaseHold(holdId: String): BroadcastResult<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val token = RetrofitClient.getAccessToken()
+            if (token.isNullOrEmpty()) {
+                return@withContext BroadcastResult.Error("Not authenticated", 401)
+            }
+            
+            timber.log.Timber.i("🔓 Releasing hold: $holdId")
+            
+            val request = com.weelo.logistics.data.api.ReleaseHoldRequest(holdId = holdId)
+            val response = truckHoldApi.releaseHold(request)
+            
+            if (response.isSuccessful && response.body()?.success == true) {
+                timber.log.Timber.i("✅ Hold released")
+                return@withContext BroadcastResult.Success(true)
+            } else {
+                val errorMsg = response.body()?.message 
+                    ?: response.errorBody()?.string()
+                    ?: "Failed to release hold"
+                timber.log.Timber.e("❌ Release failed: $errorMsg")
+                return@withContext BroadcastResult.Error(errorMsg, response.code())
+            }
+            
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "❌ Network error releasing hold")
+            return@withContext BroadcastResult.Error(e.message ?: "Network error")
+        }
+    }
 }
+
+/**
+ * Result from holdTrucks()
+ */
+data class HoldTrucksResult(
+    val holdId: String,
+    val expiresAt: String,
+    val heldQuantity: Int
+)
+
+/**
+ * Result from confirmHoldWithAssignments()
+ */
+data class ConfirmHoldResult(
+    val assignmentIds: List<String>,
+    val tripIds: List<String>
+)
 
 // Note: API data classes are defined in BroadcastApiService.kt
 // - BroadcastListResponse

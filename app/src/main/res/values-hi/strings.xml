@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App Name -->
+    <string name="app_name">वीलो कैप्टन</string>
+    
+    <!-- Language Selection -->
+    <string name="welcome_to">आपका स्वागत है</string>
+    <string name="select_language">ऐप भाषा चुनें</string>
+    <string name="confirm">पुष्टि करें</string>
+    
+    <!-- Common -->
+    <string name="loading">लोड हो रहा है…</string>
+    <string name="error">त्रुटि</string>
+    <string name="retry">पुनः प्रयास करें</string>
+    <string name="cancel">रद्द करें</string>
+    <string name="ok">ठीक है</string>
+    <string name="save">सहेजें</string>
+    <string name="edit">संपादित करें</string>
+    <string name="delete">हटाएं</string>
+    <string name="back">वापस</string>
+    
+    <!-- Dashboard -->
+    <string name="dashboard">डैशबोर्ड</string>
+    <string name="my_profile">मेरी प्रोफ़ाइल</string>
+    <string name="settings">सेटिंग्स</string>
+    <string name="logout">लॉगआउट</string>
+    <string name="help">सहायता</string>
+    
+    <!-- Profile -->
+    <string name="profile_photo">प्रोफ़ाइल फ़ोटो</string>
+    <string name="license_photos">लाइसेंस फ़ोटो</string>
+    <string name="license_front">लाइसेंस आगे</string>
+    <string name="license_back">लाइसेंस पीछे</string>
+    <string name="personal_information">व्यक्तिगत जानकारी</string>
+    <string name="name">नाम</string>
+    <string name="phone">फ़ोन</string>
+    <string name="email">ईमेल</string>
+    <string name="license_number">लाइसेंस नंबर</string>
+    <string name="vehicle_type">वाहन प्रकार</string>
+    <string name="address">पता</string>
+    
+    <!-- Settings -->
+    <string name="notifications">सूचनाएं</string>
+    <string name="push_notifications">पुश सूचनाएं</string>
+    <string name="preferences">प्राथमिकताएं</string>
+    <string name="language">भाषा</string>
+    <string name="theme">थीम</string>
+    <string name="account">खाता</string>
+    <string name="privacy_policy">गोपनीयता नीति</string>
+    <string name="terms_conditions">नियम और शर्तें</string>
+    <string name="support">सहायता</string>
+    <string name="help_support">सहायता और समर्थन</string>
+    <string name="about">के बारे में</string>
+    <string name="version">संस्करण %1$s</string>
+    
+    <!-- Logout -->
+    <string name="logout_confirmation">क्या आप वाकई लॉगआउट करना चाहते हैं?</string>
+    <string name="logout_message">अपने खाते से साइन आउट करें</string>
+    
+    <!-- Notifications Settings -->
+    <string name="receive_notifications">यात्रा और भुगतान सूचनाएं प्राप्त करें</string>
+    
+    <!-- Onboarding -->
+    <string name="skip">छोड़ें</string>
+    <string name="next">अगला</string>
+    <string name="get_started">शुरू करें</string>
+    <string name="onboarding_title_1">तेज़ और विश्वसनीय लॉजिस्टिक्स</string>
+    <string name="onboarding_desc_1">ग्राहकों से जुड़ें और अपने लॉजिस्टिक्स व्यवसाय को कुशलता से प्रबंधित करें</string>
+    <string name="onboarding_title_2">रियल-टाइम ट्रैकिंग</string>
+    <string name="onboarding_desc_2">हमारी उन्नत प्रणाली के साथ अपनी डिलीवरी और बेड़े को रियल-टाइम में ट्रैक करें</string>
+    <string name="onboarding_title_3">अधिक कमाएं</string>
+    <string name="onboarding_desc_3">स्मार्ट रूटिंग और फ्लीट प्रबंधन के साथ अपनी कमाई को अधिकतम करें</string>
+    
+    <!-- Errors -->
+    <string name="error_loading_profile">प्रोफ़ाइल लोड करने में विफल</string>
+    <string name="error_saving_language">भाषा प्राथमिकता सहेजने में विफल</string>
+    <string name="error_network">नेटवर्क त्रुटि। कृपया अपना कनेक्शन जांचें।</string>
+</resources>

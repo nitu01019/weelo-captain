@@ -1,5 +1,10 @@
 package com.weelo.logistics.ui.driver
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,8 +24,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.ui.components.*
+import com.weelo.logistics.ui.components.rememberScreenConfig
+import com.weelo.logistics.ui.components.responsiveGridColumns
+import com.weelo.logistics.ui.components.responsiveHorizontalPadding
+import com.weelo.logistics.ui.components.OfflineBanner
+import com.weelo.logistics.offline.NetworkMonitor
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.launch
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.collectAsState
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.roundToInt
@@ -44,6 +56,7 @@ import kotlin.math.roundToInt
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Suppress("UNUSED_PARAMETER")
 fun DriverDashboardScreen(
     viewModel: DriverDashboardViewModel = viewModel(),
     onNavigateToNotifications: () -> Unit = {},
@@ -57,21 +70,41 @@ fun DriverDashboardScreen(
 ) {
     val dashboardState by viewModel.dashboardState.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    // NOTE: viewModel.isInitialLoad is available for future use (e.g., showing
+    // different UI on first launch vs returning user). Currently, the conditional
+    // drawer + AnimatedContent handles state transitions automatically.
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     
-    // Optimize: Use derivedStateOf to prevent unnecessary recompositions
-    val driverProfile by remember {
-        derivedStateOf {
-            when (val state = dashboardState) {
-                is DriverDashboardState.Success -> DrawerUserProfile(
+    // Network monitoring for offline banner
+    val context = LocalContext.current
+    val networkMonitor = remember { NetworkMonitor.getInstance(context) }
+    val isOnline by networkMonitor.isOnline.collectAsState()
+    
+    // =========================================================================
+    // CACHED DRAWER PROFILE — prevents flickering
+    // =========================================================================
+    // Uses remember + mutableStateOf to HOLD the last known profile.
+    // On Loading state, we keep showing the cached profile instead of null,
+    // which prevents the drawer header from flickering between states.
+    //
+    // PERFORMANCE: O(1) — just a reference swap, no allocation on recompose.
+    // =========================================================================
+    var cachedProfile by remember { mutableStateOf<DrawerUserProfile?>(null) }
+    val driverProfile = remember(dashboardState) {
+        when (val state = dashboardState) {
+            is DriverDashboardState.Success -> {
+                val profile = DrawerUserProfile(
                     id = state.data.driverId,
                     name = "Driver",
                     phone = "",
                     role = "driver"
                 )
-                else -> null
+                cachedProfile = profile
+                profile
             }
+            // Keep showing cached profile during loading/error — no flicker
+            else -> cachedProfile
         }
     }
     
@@ -118,72 +151,181 @@ fun DriverDashboardScreen(
         // Do nothing - prevents going back to login/role selection
     }
     
-    // Main Navigation Drawer - Optimized for smooth performance
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = true,
-        drawerContent = {
-            ModalDrawerSheet(
-                modifier = Modifier.width(280.dp) // Slightly narrower for faster animation
-            ) {
-                DrawerContentInternal(
-                    userProfile = driverProfile,
-                    isLoading = dashboardState is DriverDashboardState.Loading,
-                    selectedItemId = "dashboard",
-                    menuItems = menuItems,
-                    onProfileClick = {
-                        closeDrawerAndNavigate(onNavigateToProfile)
-                    },
-                    onLogout = {
-                        closeDrawerAndNavigate(onLogout)
+    // =========================================================================
+    // CONDITIONAL DRAWER — Production-Grade Anti-Flicker
+    // =========================================================================
+    // PROBLEM: ModalNavigationDrawer composes its drawer sheet on EVERY frame,
+    // even when closed. On the first frame, the internal swipeable offset
+    // hasn't settled → drawer briefly flickers visible.
+    //
+    // SOLUTION: During Loading state, don't render ModalNavigationDrawer AT ALL.
+    // Show only the skeleton + top bar. Once data arrives (Success), wrap in
+    // the full drawer layout. This eliminates all drawer-related flicker.
+    //
+    // PERFORMANCE: Zero drawer overhead during loading phase.
+    // SCALABILITY: Works on all devices regardless of speed.
+    // =========================================================================
+    
+    // Map state to a simple content key for AnimatedContent.
+    // This prevents re-animation when only data INSIDE Success changes
+    // (e.g., toggling online status, marking notification as read).
+    val contentKey = when (dashboardState) {
+        is DriverDashboardState.Idle -> "loading"
+        is DriverDashboardState.Loading -> "loading"
+        is DriverDashboardState.Success -> "content"
+        is DriverDashboardState.Error -> "error"
+    }
+    
+    // Drawer visibility — only compose when actually opening/open
+    val isDrawerVisible by remember {
+        derivedStateOf {
+            drawerState.isOpen || drawerState.isAnimationRunning
+        }
+    }
+    
+    when {
+        // =====================================================================
+        // IDLE / LOADING STATE — No drawer, just skeleton + top bar
+        // =====================================================================
+        // Idle = initial state before data fetch starts
+        // Loading = data fetch took > 150ms, showing skeleton
+        // Both show the same skeleton — no drawer overhead
+        // =====================================================================
+        dashboardState is DriverDashboardState.Idle || dashboardState is DriverDashboardState.Loading -> {
+            Scaffold(
+                topBar = {
+                    DriverDashboardTopBar(
+                        driverName = "Driver",
+                        unreadCount = 0,
+                        onMenuClick = { /* Drawer disabled during loading */ },
+                        onNotificationsClick = { },
+                        onProfileClick = { }
+                    )
+                }
+            ) { paddingValues ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues)
+                ) {
+                    DriverDashboardSkeleton()
+                }
+            }
+        }
+        
+        // =====================================================================
+        // SUCCESS / ERROR — Full drawer + content with smooth transitions
+        // =====================================================================
+        else -> {
+            ModalNavigationDrawer(
+                drawerState = drawerState,
+                gesturesEnabled = true,
+                drawerContent = {
+                    ModalDrawerSheet(
+                        modifier = if (isDrawerVisible) Modifier.width(280.dp) else Modifier.width(0.dp),
+                        drawerContainerColor = if (isDrawerVisible) {
+                            MaterialTheme.colorScheme.surface
+                        } else {
+                            androidx.compose.ui.graphics.Color.Transparent
+                        }
+                    ) {
+                        if (isDrawerVisible) {
+                            DrawerContentInternal(
+                                userProfile = driverProfile,
+                                isLoading = false,
+                                selectedItemId = "dashboard",
+                                menuItems = menuItems,
+                                onProfileClick = {
+                                    closeDrawerAndNavigate(onNavigateToProfile)
+                                },
+                                onLogout = {
+                                    closeDrawerAndNavigate(onLogout)
+                                }
+                            )
+                        }
                     }
-                )
-            }
-        }
-    ) {
-        Scaffold(
-            topBar = {
-                DriverDashboardTopBar(
-                    driverName = "Driver",
-                    unreadCount = notificationCount,
-                    onMenuClick = remember(scope, drawerState) { { scope.launch { drawerState.open() } } },
-                    onNotificationsClick = onNavigateToNotifications,
-                    onProfileClick = onNavigateToProfile
-                )
-            }
-        ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            when (val state = dashboardState) {
-                is DriverDashboardState.Loading -> {
-                    LoadingState()
                 }
-                
-                is DriverDashboardState.Success -> {
-                    DashboardContent(
-                        data = state.data,
-                        onToggleOnlineStatus = { viewModel.toggleOnlineStatus() },
-                        onRefresh = { viewModel.refresh() },
-                        onOpenFullMap = onOpenFullMap,
-                        onNavigateToTripHistory = onNavigateToTripHistory,
-                        onMarkNotificationAsRead = { viewModel.markNotificationAsRead(it) },
-                        isRefreshing = isRefreshing
+            ) {
+                Scaffold(
+                    topBar = {
+                        DriverDashboardTopBar(
+                            driverName = "Driver",
+                            unreadCount = notificationCount,
+                            onMenuClick = remember(scope, drawerState) { { scope.launch { drawerState.open() } } },
+                            onNotificationsClick = onNavigateToNotifications,
+                            onProfileClick = onNavigateToProfile
+                        )
+                    }
+                ) { paddingValues ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues)
+                ) {
+                    // Offline Banner
+                    OfflineBanner(
+                        isOffline = !isOnline,
+                        onRetryClick = { viewModel.loadDashboardData() }
                     )
-                }
-                
-                is DriverDashboardState.Error -> {
-                    ErrorState(
-                        message = state.message,
-                        onRetry = { viewModel.loadDashboardData() }
-                    )
-                }
-            }
+                    
+                    // =============================================================
+                    // ANIMATED CONTENT — Smooth fade between states
+                    // =============================================================
+                    // Uses contentKey (string) instead of full state object to
+                    // prevent re-animation when only data inside Success changes.
+                    //
+                    // Asymmetric timing: fadeIn(300ms) + fadeOut(150ms)
+                    // Content appears smoothly, old state vanishes quickly.
+                    // This is the Material 3 recommended pattern.
+                    // =============================================================
+                    Box(modifier = Modifier.fillMaxSize()) {
+                    AnimatedContent(
+                        targetState = contentKey,
+                        transitionSpec = {
+                            fadeIn(animationSpec = tween(300)) togetherWith
+                            fadeOut(animationSpec = tween(150))
+                        },
+                        label = "dashboard_animated_content"
+                    ) { key ->
+                        when (key) {
+                            "content" -> {
+                                val state = dashboardState
+                                if (state is DriverDashboardState.Success) {
+                                    DashboardContent(
+                                        data = state.data,
+                                        onToggleOnlineStatus = { viewModel.toggleOnlineStatus() },
+                                        onRefresh = { viewModel.refresh() },
+                                        onOpenFullMap = onOpenFullMap,
+                                        onNavigateToTripHistory = onNavigateToTripHistory,
+                                        onMarkNotificationAsRead = { viewModel.markNotificationAsRead(it) },
+                                        isRefreshing = isRefreshing
+                                    )
+                                }
+                            }
+                            
+                            "error" -> {
+                                val state = dashboardState
+                                if (state is DriverDashboardState.Error) {
+                                    ErrorState(
+                                        message = state.message,
+                                        onRetry = { viewModel.loadDashboardData() }
+                                    )
+                                }
+                            }
+                            
+                            else -> {
+                                // "loading" — shouldn't reach here (handled above)
+                                // but safety fallback
+                                DriverDashboardSkeleton()
+                            }
+                        }
+                    }
+                    } // End Box
+                } // End Column
+                } // End Scaffold
+            } // End ModalNavigationDrawer
         }
-        } // End Scaffold
-    } // End ModalNavigationDrawer
+    } // End when
 }
 
 /**
@@ -255,7 +397,7 @@ private fun DriverDashboardTopBar(
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = White
+            containerColor = Surface
         )
     )
 }
@@ -312,6 +454,7 @@ private fun DashboardTopBar(
     )
 }
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 private fun DashboardContent(
     data: DashboardData,
@@ -322,12 +465,19 @@ private fun DashboardContent(
     onMarkNotificationAsRead: (String) -> Unit,
     isRefreshing: Boolean
 ) {
+    // Responsive layout configuration
+    val screenConfig = rememberScreenConfig()
+    val horizontalPadding = responsiveHorizontalPadding()
+    
     Box(
         modifier = Modifier.fillMaxSize()
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = PaddingValues(
+                horizontal = horizontalPadding,
+                vertical = 16.dp
+            ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Online Status Toggle
@@ -339,26 +489,47 @@ private fun DashboardContent(
                 )
             }
             
-            // Earnings Card
-            item {
-                EarningsCard(earnings = data.earnings)
-            }
-            
-            // Active Trip (if exists)
-            if (data.activeTrip != null) {
+            // In landscape mode, show Earnings and Active Trip side by side
+            if (screenConfig.isLandscape && data.activeTrip != null) {
                 item {
-                    ActiveTripCard(
-                        trip = data.activeTrip,
-                        onOpenFullMap = { onOpenFullMap(data.activeTrip.tripId) }
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        EarningsCard(
+                            earnings = data.earnings,
+                            modifier = Modifier.weight(1f)
+                        )
+                        ActiveTripCard(
+                            trip = data.activeTrip,
+                            onOpenFullMap = { onOpenFullMap(data.activeTrip.tripId) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            } else {
+                // Portrait mode - stack vertically
+                item {
+                    EarningsCard(earnings = data.earnings)
+                }
+                
+                // Active Trip (if exists)
+                if (data.activeTrip != null) {
+                    item {
+                        ActiveTripCard(
+                            trip = data.activeTrip,
+                            onOpenFullMap = { onOpenFullMap(data.activeTrip.tripId) }
+                        )
+                    }
                 }
             }
             
-            // Trip Stats Grid
+            // Trip Stats Grid - responsive columns
             item {
                 TripStatsGrid(
                     earnings = data.earnings,
-                    performance = data.performance
+                    performance = data.performance,
+                    isLandscape = screenConfig.isLandscape
                 )
             }
             
@@ -436,15 +607,19 @@ private fun DashboardContent(
 // =============================================================================
 
 @Composable
-private fun EarningsCard(earnings: EarningsSummary) {
+private fun EarningsCard(
+    earnings: EarningsSummary,
+    modifier: Modifier = Modifier
+) {
     val hasEarnings = earnings.today > 0 || earnings.weekly > 0 || earnings.monthly > 0
     
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (hasEarnings) Primary else Primary.copy(alpha = 0.7f)
+            containerColor = Primary  // Saffron Yellow
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        shape = RoundedCornerShape(20.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
     ) {
         Column(
             modifier = Modifier.padding(20.dp),
@@ -458,15 +633,15 @@ private fun EarningsCard(earnings: EarningsSummary) {
                 Text(
                     text = "Your Earnings",
                     style = MaterialTheme.typography.titleMedium,
-                    color = White,
-                    fontWeight = FontWeight.SemiBold
+                    color = Secondary,  // Black text on yellow
+                    fontWeight = FontWeight.Bold
                 )
                 
                 if (!hasEarnings) {
                     Icon(
                         imageVector = Icons.Default.TrendingUp,
                         contentDescription = null,
-                        tint = White.copy(alpha = 0.6f),
+                        tint = Secondary.copy(alpha = 0.5f),
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -482,20 +657,20 @@ private fun EarningsCard(earnings: EarningsSummary) {
                     Text(
                         text = "₹0",
                         style = MaterialTheme.typography.headlineLarge.copy(
-                            color = White,
+                            color = Secondary,
                             fontWeight = FontWeight.Bold
                         )
                     )
                     Text(
                         text = "Start accepting trips to earn!",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = White.copy(alpha = 0.8f),
+                        color = Secondary.copy(alpha = 0.7f),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                     Text(
                         text = "Your earnings will be calculated automatically",
                         style = MaterialTheme.typography.bodySmall,
-                        color = White.copy(alpha = 0.6f),
+                        color = Secondary.copy(alpha = 0.5f),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }
@@ -510,27 +685,27 @@ private fun EarningsCard(earnings: EarningsSummary) {
                         Text(
                             text = "Today",
                             style = MaterialTheme.typography.bodySmall,
-                            color = White.copy(alpha = 0.8f)
+                            color = Secondary.copy(alpha = 0.7f)
                         )
                         AnimatedCounter(
                             targetValue = earnings.today,
                             prefix = "₹",
                             style = MaterialTheme.typography.headlineLarge.copy(
-                                color = White,
+                                color = Secondary,
                                 fontWeight = FontWeight.Bold
                             )
                         )
                         Text(
                             text = "${earnings.todayTrips} trips",
                             style = MaterialTheme.typography.bodySmall,
-                            color = White.copy(alpha = 0.8f)
+                            color = Secondary.copy(alpha = 0.7f)
                         )
                     }
                 }
             }
             
             if (hasEarnings) {
-                Divider(color = White.copy(alpha = 0.3f))
+                Divider(color = Secondary.copy(alpha = 0.2f))
                 
                 // Weekly and Monthly
                 Row(
@@ -555,8 +730,9 @@ private fun EarningsCard(earnings: EarningsSummary) {
             if (earnings.pendingPayment > 0) {
                 Card(
                     colors = CardDefaults.cardColors(
-                        containerColor = White.copy(alpha = 0.2f)
-                    )
+                        containerColor = Secondary.copy(alpha = 0.1f)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
                     Row(
                         modifier = Modifier
@@ -572,13 +748,14 @@ private fun EarningsCard(earnings: EarningsSummary) {
                             Icon(
                                 imageVector = Icons.Default.Schedule,
                                 contentDescription = null,
-                                tint = White,
+                                tint = Secondary,
                                 modifier = Modifier.size(20.dp)
                             )
                             Text(
                                 text = "Pending Payment",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = White
+                                color = Secondary,
+                                fontWeight = FontWeight.Medium
                             )
                         }
                         
@@ -586,7 +763,7 @@ private fun EarningsCard(earnings: EarningsSummary) {
                             text = "₹${earnings.pendingPayment.roundToInt()}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = White
+                            color = Secondary
                         )
                     }
                 }
@@ -628,10 +805,11 @@ private fun EarningsPeriod(
 @Composable
 private fun ActiveTripCard(
     trip: ActiveTrip,
-    onOpenFullMap: () -> Unit
+    onOpenFullMap: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = SuccessLight),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
@@ -730,10 +908,12 @@ private fun ActiveTripCard(
     }
 }
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 private fun TripStatsGrid(
     earnings: EarningsSummary,
-    performance: PerformanceMetrics
+    performance: PerformanceMetrics,
+    isLandscape: Boolean = false
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
@@ -742,25 +922,66 @@ private fun TripStatsGrid(
             fontWeight = FontWeight.SemiBold
         )
         
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StatCard(
-                icon = Icons.Default.CheckCircle,
-                value = "${performance.totalTrips}",
-                label = "Total Trips",
-                modifier = Modifier.weight(1f),
-                iconColor = Success
-            )
-            
-            StatCard(
-                icon = Icons.Default.Route,
-                value = "${performance.totalDistance.roundToInt()} km",
-                label = "Distance",
-                modifier = Modifier.weight(1f),
-                iconColor = Secondary
-            )
+        // In landscape, show more stats in a row
+        if (isLandscape) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                StatCard(
+                    icon = Icons.Default.CheckCircle,
+                    value = "${performance.totalTrips}",
+                    label = "Total Trips",
+                    modifier = Modifier.weight(1f),
+                    iconColor = Success
+                )
+                
+                StatCard(
+                    icon = Icons.Default.Route,
+                    value = "${performance.totalDistance.roundToInt()} km",
+                    label = "Distance",
+                    modifier = Modifier.weight(1f),
+                    iconColor = Secondary
+                )
+                
+                StatCard(
+                    icon = Icons.Default.Star,
+                    value = String.format("%.1f", performance.rating),
+                    label = "Rating",
+                    modifier = Modifier.weight(1f),
+                    iconColor = Warning
+                )
+                
+                StatCard(
+                    icon = Icons.Default.Timer,
+                    value = "${performance.onTimeDeliveryRate.roundToInt()}%",
+                    label = "On-Time",
+                    modifier = Modifier.weight(1f),
+                    iconColor = Info
+                )
+            }
+        } else {
+            // Portrait - 2 columns
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                StatCard(
+                    icon = Icons.Default.CheckCircle,
+                    value = "${performance.totalTrips}",
+                    label = "Total Trips",
+                    modifier = Modifier.weight(1f),
+                    iconColor = Success
+                )
+                
+                StatCard(
+                    icon = Icons.Default.Route,
+                    value = "${performance.totalDistance.roundToInt()} km",
+                    label = "Distance",
+                    modifier = Modifier.weight(1f),
+                    iconColor = Secondary
+                )
+            }
         }
     }
 }
@@ -995,26 +1216,11 @@ private fun NotificationItem(
 }
 
 // =============================================================================
-// Loading & Error States
+// Error State
 // =============================================================================
-
-@Composable
-private fun LoadingState() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        repeat(5) {
-            ShimmerCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(120.dp)
-            )
-        }
-    }
-}
+// NOTE: LoadingState() removed — replaced by DriverDashboardSkeleton()
+// from SkeletonLoading.kt for a polished, content-shaped shimmer experience.
+// =============================================================================
 
 @Composable
 private fun ErrorState(
@@ -1061,68 +1267,6 @@ private fun ErrorState(
 }
 
 // =============================================================================
-// Helper Functions
+// Helper Functions - Now in DriverDashboardUtils.kt
+// Import from: com.weelo.logistics.ui.driver.*
 // =============================================================================
-
-private fun getCurrentGreeting(): String {
-    val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-    return when (hour) {
-        in 0..11 -> "Good Morning"
-        in 12..16 -> "Good Afternoon"
-        else -> "Good Evening"
-    }
-}
-
-private fun getStatusText(status: TripProgressStatus): String {
-    return when (status) {
-        TripProgressStatus.EN_ROUTE_TO_PICKUP -> "Heading to Pickup"
-        TripProgressStatus.AT_PICKUP -> "At Pickup Location"
-        TripProgressStatus.IN_TRANSIT -> "In Transit"
-        TripProgressStatus.AT_DROP -> "At Drop Location"
-        TripProgressStatus.COMPLETED -> "Completed"
-    }
-}
-
-private fun getNotificationIcon(type: DashNotificationType): androidx.compose.ui.graphics.vector.ImageVector {
-    return when (type) {
-        DashNotificationType.NEW_TRIP_REQUEST -> Icons.Default.DirectionsCar
-        DashNotificationType.TRIP_ASSIGNED -> Icons.Default.Assignment
-        DashNotificationType.TRIP_CANCELLED -> Icons.Default.Cancel
-        DashNotificationType.PAYMENT_RECEIVED -> Icons.Default.Payment
-        DashNotificationType.RATING_RECEIVED -> Icons.Default.Star
-        DashNotificationType.SYSTEM_ALERT -> Icons.Default.Warning
-        DashNotificationType.PROMOTIONAL -> Icons.Default.CardGiftcard
-    }
-}
-
-private fun getNotificationColor(type: DashNotificationType): androidx.compose.ui.graphics.Color {
-    return when (type) {
-        DashNotificationType.NEW_TRIP_REQUEST -> Primary
-        DashNotificationType.TRIP_ASSIGNED -> Success
-        DashNotificationType.TRIP_CANCELLED -> Error
-        DashNotificationType.PAYMENT_RECEIVED -> Success
-        DashNotificationType.RATING_RECEIVED -> Warning
-        DashNotificationType.SYSTEM_ALERT -> Error
-        DashNotificationType.PROMOTIONAL -> Secondary
-    }
-}
-
-private fun formatTripDate(timestamp: Long): String {
-    val sdf = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
-    return sdf.format(Date(timestamp))
-}
-
-private fun formatTimeAgo(timestamp: Long): String {
-    val diff = System.currentTimeMillis() - timestamp
-    val minutes = diff / 60000
-    val hours = minutes / 60
-    val days = hours / 24
-    
-    return when {
-        minutes < 1 -> "Just now"
-        minutes < 60 -> "$minutes min ago"
-        hours < 24 -> "$hours hour${if (hours > 1) "s" else ""} ago"
-        days < 7 -> "$days day${if (days > 1) "s" else ""} ago"
-        else -> formatTripDate(timestamp)
-    }
-}

@@ -2,9 +2,6 @@ package com.weelo.logistics.ui.transporter
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -17,8 +14,20 @@ import com.weelo.logistics.data.api.VehicleListData
 import com.weelo.logistics.data.api.DriverListData
 import com.weelo.logistics.data.api.UserProfile
 import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.data.remote.SocketIOService
+import com.weelo.logistics.data.remote.SocketConnectionState
 import com.weelo.logistics.ui.components.*
+import com.weelo.logistics.ui.components.rememberScreenConfig
+import com.weelo.logistics.ui.components.responsiveHorizontalPadding
+import com.weelo.logistics.ui.components.OfflineBanner
+import com.weelo.logistics.offline.NetworkMonitor
+import com.weelo.logistics.offline.OfflineCache
 import com.weelo.logistics.ui.theme.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.collectAsState
+import com.weelo.logistics.utils.Constants
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -39,6 +48,7 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Suppress("UNUSED_PARAMETER")
 fun TransporterDashboardScreen(
     onNavigateToFleet: () -> Unit = {},
     onNavigateToDrivers: () -> Unit = {},
@@ -60,66 +70,163 @@ fun TransporterDashboardScreen(
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     
-    // Dashboard state
-    var isLoading by remember { mutableStateOf(true) }
+    // Network monitoring for offline banner
+    val context = LocalContext.current
+    val networkMonitor = remember { NetworkMonitor.getInstance(context) }
+    val isOnline by networkMonitor.isOnline.collectAsState()
+    
+    // Offline cache for instant loading
+    val offlineCache = remember { OfflineCache.getInstance(context) }
+    
+    // Dashboard state - NO loading spinner, show data immediately
+    var isRefreshing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var vehicleStats by remember { mutableStateOf<VehicleListData?>(null) }
     var driverStats by remember { mutableStateOf<DriverListData?>(null) }
-    var isBackendConnected by remember { mutableStateOf(false) }
+    var isBackendConnected by remember { mutableStateOf(true) }
     
     // User profile state
     var userProfile by remember { mutableStateOf<UserProfile?>(null) }
-    var isProfileLoading by remember { mutableStateOf(true) }
     
-    // OPTIMIZATION: Fetch all data in parallel for faster loading
+    // WebSocket connection state for real-time broadcasts
+    val socketState by SocketIOService.connectionState.collectAsState()
+    var isSocketConnected by remember { mutableStateOf(false) }
+    
+    // ==========================================================================
+    // CACHE-FIRST LOADING: Show cached data INSTANTLY, then refresh in background
+    // ==========================================================================
     LaunchedEffect(Unit) {
-        isLoading = true
-        isProfileLoading = true
-        errorMessage = null
-        
-        // Launch all API calls in parallel using async
-        coroutineScope {
-            val profileDeferred = async(Dispatchers.IO) {
-                try { RetrofitClient.profileApi.getProfile() } catch (e: Exception) { null }
-            }
-            val vehicleDeferred = async(Dispatchers.IO) {
-                try { RetrofitClient.vehicleApi.getVehicles() } catch (e: Exception) { null }
-            }
-            val driverDeferred = async(Dispatchers.IO) {
-                try { RetrofitClient.driverApi.getDriverList() } catch (e: Exception) { null }
-            }
-            
-            // Process profile immediately when ready
-            val profileResponse = profileDeferred.await()
-            if (profileResponse?.isSuccessful == true && profileResponse.body()?.success == true) {
-                userProfile = profileResponse.body()?.data?.user
-            }
-            isProfileLoading = false
-            
-            // Process other responses
-            val vehicleResponse = vehicleDeferred.await()
-            android.util.Log.d("Dashboard", "Vehicle API response: ${vehicleResponse?.code()} - ${vehicleResponse?.body()}")
-            if (vehicleResponse?.isSuccessful == true && vehicleResponse.body()?.success == true) {
-                vehicleStats = vehicleResponse.body()?.data
-                android.util.Log.d("Dashboard", "Vehicle stats loaded: total=${vehicleStats?.total}")
-                isBackendConnected = true
-            } else {
-                android.util.Log.e("Dashboard", "Vehicle API failed: ${vehicleResponse?.errorBody()?.string()}")
-            }
-            
-            val driverResponse = driverDeferred.await()
-            if (driverResponse?.isSuccessful == true && driverResponse.body()?.success == true) {
-                driverStats = driverResponse.body()?.data
-                isBackendConnected = true
-            }
-            
-            if (profileResponse == null && vehicleResponse == null && driverResponse == null) {
-                errorMessage = "Cannot connect to backend"
-                isBackendConnected = false
-            }
+        // Step 1: Load cached data IMMEDIATELY (no loading spinner)
+        val cachedData = offlineCache.getDashboardCache()
+        if (cachedData.profile != null || cachedData.vehicleStats != null || cachedData.driverStats != null) {
+            userProfile = cachedData.profile
+            vehicleStats = cachedData.vehicleStats
+            driverStats = cachedData.driverStats
+            timber.log.Timber.i("📦 Loaded cached data instantly")
         }
         
-        isLoading = false
+        // Step 2: Refresh from API in background (only if cache is stale or empty)
+        if (!cachedData.isFresh || cachedData.profile == null) {
+            isRefreshing = true
+            
+            coroutineScope {
+                val profileDeferred = async(Dispatchers.IO) {
+                    try { RetrofitClient.profileApi.getProfile() } catch (e: Exception) { null }
+                }
+                val vehicleDeferred = async(Dispatchers.IO) {
+                    try { RetrofitClient.vehicleApi.getVehicles() } catch (e: Exception) { null }
+                }
+                val driverDeferred = async(Dispatchers.IO) {
+                    try { RetrofitClient.driverApi.getDriverList() } catch (e: Exception) { null }
+                }
+                
+                // Process responses and update UI
+                val profileResponse = profileDeferred.await()
+                val newProfile = if (profileResponse?.isSuccessful == true && profileResponse.body()?.success == true) {
+                    profileResponse.body()?.data?.user
+                } else null
+                
+                val vehicleResponse = vehicleDeferred.await()
+                val newVehicleStats = if (vehicleResponse?.isSuccessful == true && vehicleResponse.body()?.success == true) {
+                    vehicleResponse.body()?.data
+                } else null
+                
+                val driverResponse = driverDeferred.await()
+                val newDriverStats = if (driverResponse?.isSuccessful == true && driverResponse.body()?.success == true) {
+                    driverResponse.body()?.data
+                } else null
+                
+                // Update state with fresh data
+                newProfile?.let { userProfile = it }
+                newVehicleStats?.let { vehicleStats = it }
+                newDriverStats?.let { driverStats = it }
+                
+                // Check if backend is reachable
+                isBackendConnected = profileResponse != null || vehicleResponse != null || driverResponse != null
+                
+                if (!isBackendConnected && cachedData.profile == null) {
+                    errorMessage = "Cannot connect to backend"
+                }
+                
+                // Save to cache for next time
+                offlineCache.saveDashboardData(
+                    profile = newProfile ?: userProfile,
+                    vehicleStats = newVehicleStats ?: vehicleStats,
+                    driverStats = newDriverStats ?: driverStats
+                )
+                
+                timber.log.Timber.i("🔄 Refreshed data from API")
+            }
+            
+            isRefreshing = false
+        }
+    }
+    
+    // ==========================================================================
+    // WEBSOCKET CONNECTION - Critical for receiving broadcasts overlay
+    // ==========================================================================
+    LaunchedEffect(Unit) {
+        val token = RetrofitClient.getAccessToken()
+        if (token != null) {
+            timber.log.Timber.i("🔌 Connecting WebSocket for broadcast overlay...")
+            SocketIOService.connect(Constants.API.WS_URL, token)
+        } else {
+            timber.log.Timber.w("⚠️ No auth token - WebSocket not connected")
+        }
+    }
+    
+    // Track socket connection state
+    LaunchedEffect(socketState) {
+        isSocketConnected = socketState is SocketConnectionState.Connected
+        
+        when (socketState) {
+            is SocketConnectionState.Connected -> {
+                timber.log.Timber.i("✅ WebSocket connected - Ready for broadcasts")
+            }
+            is SocketConnectionState.Disconnected -> {
+                timber.log.Timber.w("🔌 WebSocket disconnected")
+            }
+            is SocketConnectionState.Connecting -> {
+                timber.log.Timber.d("🔄 WebSocket connecting...")
+            }
+            is SocketConnectionState.Error -> {
+                val error = (socketState as SocketConnectionState.Error).message
+                timber.log.Timber.e("❌ WebSocket error: $error")
+            }
+        }
+    }
+    
+    // ==========================================================================
+    // REAL-TIME DRIVER UPDATES - Listen for driver added/updated events
+    // ==========================================================================
+    LaunchedEffect(Unit) {
+        SocketIOService.driverAdded.collect { notification ->
+            timber.log.Timber.i("👤 Driver added: ${notification.driverName}")
+            timber.log.Timber.i("📊 New driver count: ${notification.totalDrivers}")
+            
+            // Update driver stats immediately
+            driverStats = DriverListData(
+                drivers = emptyList(),
+                total = notification.totalDrivers,
+                online = notification.availableCount,
+                offline = notification.onTripCount
+            )
+        }
+    }
+    
+    LaunchedEffect(Unit) {
+        SocketIOService.driversUpdated.collect { notification ->
+            timber.log.Timber.i("👤 Drivers updated: ${notification.action}")
+            timber.log.Timber.i("📊 Updated driver count: ${notification.totalDrivers}")
+            
+            // Update driver stats immediately
+            driverStats = DriverListData(
+                drivers = emptyList(),
+                total = notification.totalDrivers,
+                online = notification.availableCount,
+                offline = notification.onTripCount
+            )
+        }
     }
     
     // Convert UserProfile to DrawerUserProfile
@@ -160,29 +267,47 @@ fun TransporterDashboardScreen(
         }
     )
     
+    // =========================================================================
+    // LAZY DRAWER CONTENT — Production-Grade Anti-Flicker
+    // =========================================================================
+    // Only compose DrawerContentInternal when the drawer is actually visible.
+    // Prevents first-frame flicker caused by ModalNavigationDrawer composing
+    // drawerContent before the swipeable offset anchors to "closed".
+    //
+    // Same pattern as DriverDashboardScreen for consistency.
+    // =========================================================================
+    val isDrawerVisible by remember {
+        derivedStateOf {
+            drawerState.isOpen || drawerState.isAnimationRunning
+        }
+    }
+    
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
+            // When drawer is not visible: zero-width transparent sheet (invisible)
+            // When drawer is visible: full 300dp sheet with content
             ModalDrawerSheet(
-                modifier = Modifier.width(300.dp)
+                modifier = if (isDrawerVisible) Modifier.width(300.dp) else Modifier.width(0.dp),
+                drawerContainerColor = if (isDrawerVisible) androidx.compose.material3.MaterialTheme.colorScheme.surface else androidx.compose.ui.graphics.Color.Transparent
             ) {
-                // Use the NavigationDrawer components
-                DrawerContentInternal(
-                    userProfile = drawerProfile,
-                    isLoading = isProfileLoading,
-                    selectedItemId = "dashboard",
-                    menuItems = menuItems,
-                    onProfileClick = {
-                        scope.launch { drawerState.close() }
-                        onNavigateToProfile()
-                    },
-                    onLogout = {
-                        scope.launch { drawerState.close() }
-                        // Clear tokens and logout
-                        RetrofitClient.clearAllData()
-                        onLogout()
-                    }
-                )
+                if (isDrawerVisible) {
+                    DrawerContentInternal(
+                        userProfile = drawerProfile,
+                        isLoading = false,
+                        selectedItemId = "dashboard",
+                        menuItems = menuItems,
+                        onProfileClick = {
+                            scope.launch { drawerState.close() }
+                            onNavigateToProfile()
+                        },
+                        onLogout = {
+                            scope.launch { drawerState.close() }
+                            RetrofitClient.clearAllData()
+                            onLogout()
+                        }
+                    )
+                }
             }
         }
     ) {
@@ -191,6 +316,12 @@ fun TransporterDashboardScreen(
                 .fillMaxSize()
                 .background(Surface)
         ) {
+            // Offline Banner - Shows when device is offline
+            OfflineBanner(
+                isOffline = !isOnline,
+                onRetryClick = { /* Trigger data refresh */ }
+            )
+            
             // Top Bar with Hamburger Menu
             TopAppBar(
                 title = {
@@ -213,7 +344,7 @@ fun TransporterDashboardScreen(
                     AvailabilityToggleCompact(
                         modifier = Modifier.padding(end = 4.dp),
                         onStatusChanged = { isOnline ->
-                            android.util.Log.d("Dashboard", "Transporter availability: ${if (isOnline) "ONLINE" else "OFFLINE"}")
+                            timber.log.Timber.d("Transporter availability: ${if (isOnline) "ONLINE" else "OFFLINE"}")
                         }
                     )
                     
@@ -230,32 +361,101 @@ fun TransporterDashboardScreen(
                 )
             )
             
-            // Show loading indicator
-            if (isLoading) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
+            // Responsive layout configuration
+            val screenConfig = rememberScreenConfig()
+            val horizontalPadding = responsiveHorizontalPadding()
+            
+            // ALWAYS show content - no loading spinner
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = horizontalPadding, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Welcome Message with User Name (or default)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    CircularProgressIndicator(color = Primary)
-                }
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // Welcome Message with User Name
-                    userProfile?.let { profile ->
-                        Text(
-                            text = "Welcome, ${profile.name?.split(" ")?.firstOrNull() ?: "Transporter"}!",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
+                    Text(
+                        text = "Welcome, ${userProfile?.name?.split(" ")?.firstOrNull() ?: "Transporter"}!",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    
+                    // Subtle refresh indicator (not blocking)
+                    if (isRefreshing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Primary,
+                            strokeWidth = 2.dp
                         )
                     }
-                    
-                    // Statistics - Total Vehicles & Total Drivers
+                }
+                
+                // Statistics - Responsive layout (4 cards in landscape, 2 in portrait)
+                if (screenConfig.isLandscape) {
+                    // Landscape - Show 4 cards in a row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Total Vehicles Card
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            onClick = onNavigateToFleet,
+                            elevation = CardDefaults.cardElevation(Elevation.low),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(BorderRadius.medium)
+                        ) {
+                            InfoCard(
+                                icon = Icons.Default.LocalShipping,
+                                title = "Total Vehicles",
+                                value = "${vehicleStats?.total ?: 0}",
+                                modifier = Modifier.fillMaxWidth(),
+                                animateValue = true,
+                                targetCount = vehicleStats?.total ?: 0
+                            )
+                        }
+                        
+                        // Total Drivers Card
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            onClick = onNavigateToDrivers,
+                            elevation = CardDefaults.cardElevation(Elevation.low),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(BorderRadius.medium)
+                        ) {
+                            InfoCard(
+                                icon = Icons.Default.People,
+                                title = "Total Drivers",
+                                value = "${driverStats?.total ?: 0}",
+                                modifier = Modifier.fillMaxWidth(),
+                                iconTint = Secondary,
+                                animateValue = true,
+                                targetCount = driverStats?.total ?: 0
+                            )
+                        }
+                        
+                        // Add Vehicle Quick Action
+                        QuickActionCard(
+                            icon = Icons.Default.AddCircle,
+                            title = "Add Vehicle",
+                            modifier = Modifier.weight(1f),
+                            onClick = onNavigateToAddVehicle
+                        )
+                        
+                        // Add Driver Quick Action
+                        QuickActionCard(
+                            icon = Icons.Default.PersonAdd,
+                            title = "Add Driver",
+                            modifier = Modifier.weight(1f),
+                            onClick = onNavigateToAddDriver
+                        )
+                    }
+                } else {
+                    // Portrait - Stack vertically with 2 cards per row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)

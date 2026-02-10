@@ -55,10 +55,16 @@ object Constants {
          * For development: EMULATOR or DEVICE
          * For testing: STAGING
          * For release: PRODUCTION (auto-selected for release builds)
+         * 
+         * OPTIONS:
+         * - Environment.EMULATOR   → Local backend via emulator (10.0.2.2:3000)
+         * - Environment.DEVICE     → Local backend via WiFi IP (192.168.x.x:3000)
+         * - Environment.PRODUCTION → AWS backend (weelo-alb-xxx.amazonaws.com)
          */
         private val currentEnvironment: Environment
             get() = if (com.weelo.logistics.BuildConfig.DEBUG) {
-                Environment.DEVICE  // <-- Change to EMULATOR if using emulator
+                Environment.PRODUCTION  // <-- Using AWS backend for testing
+                // Change to EMULATOR or DEVICE for local backend testing
             } else {
                 Environment.PRODUCTION
             }
@@ -95,15 +101,18 @@ object Constants {
         // Production URLs (HTTPS - AWS/Cloud)
         // Update these when migrating to AWS
         private const val STAGING_HOST = "staging-api.weelo.in"
-        private const val PRODUCTION_HOST = "api.weelo.in"
+        private const val PRODUCTION_HOST = "weelo-alb-380596483.ap-south-1.elb.amazonaws.com"
         private const val STAGING_URL = "https://$STAGING_HOST$API_PATH"
-        private const val PRODUCTION_URL = "https://$PRODUCTION_HOST$API_PATH"
+        // TODO: CRITICAL — Change to HTTPS when SSL certificate is configured on ALB
+        // Currently HTTP because ALB does not have SSL configured yet.
+        private const val PRODUCTION_URL = "http://$PRODUCTION_HOST$API_PATH"
         
         // WebSocket URLs (for Socket.IO real-time communication)
         private val WS_EMULATOR_URL = "http://$EMULATOR_HOST:$PORT"
         private val WS_DEVICE_URL = "http://$DEVICE_IP:$PORT"
         private const val WS_STAGING_URL = "wss://$STAGING_HOST"
-        private const val WS_PRODUCTION_URL = "wss://$PRODUCTION_HOST"
+        // TODO: CRITICAL — Change to WSS when SSL certificate is configured on ALB
+        private const val WS_PRODUCTION_URL = "ws://$PRODUCTION_HOST"
         
         // =============================================================
         // ACTIVE URLS (Auto-selected based on currentEnvironment)
@@ -167,9 +176,9 @@ object Constants {
          * Log current configuration (call at app startup for debugging)
          */
         fun logConfiguration() {
-            android.util.Log.i("WeeloAPI", """
+            timber.log.Timber.i("""
                 |╔══════════════════════════════════════════════════════════════╗
-                |║  WEELO API CONFIGURATION                                     ║
+                |║  WEELO CAPTAIN APP - API CONFIGURATION                       ║
                 |╠══════════════════════════════════════════════════════════════╣
                 |║  Environment: $environmentName
                 |║  Base URL: $BASE_URL

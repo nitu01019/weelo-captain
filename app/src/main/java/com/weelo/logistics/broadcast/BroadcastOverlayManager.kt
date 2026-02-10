@@ -1,7 +1,8 @@
 package com.weelo.logistics.broadcast
 
-import android.util.Log
+import android.content.Context
 import com.weelo.logistics.data.model.BroadcastTrip
+import com.weelo.logistics.offline.AvailabilityManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -58,6 +59,30 @@ object BroadcastOverlayManager {
     // Broadcast queue (thread-safe)
     private val broadcastQueue = ConcurrentLinkedQueue<QueuedBroadcast>()
     
+    // ==========================================================================
+    // AVAILABILITY CHECK - Context for checking online/offline status
+    // ==========================================================================
+    private var appContext: Context? = null
+    
+    /**
+     * Initialize with application context
+     * Call this from MainActivity or Application class
+     */
+    fun initialize(context: Context) {
+        appContext = context.applicationContext
+        timber.log.Timber.i("✅ BroadcastOverlayManager initialized with context")
+    }
+    
+    /**
+     * Check if user is available to receive broadcasts
+     * Returns false if user has toggled to OFFLINE
+     */
+    private fun isUserAvailable(): Boolean {
+        val context = appContext ?: return true // Default to available if no context
+        val availabilityManager = AvailabilityManager.getInstance(context)
+        return availabilityManager.isAvailable.value
+    }
+    
     // ============== STATE FLOWS (Observable by UI) ==============
     
     /**
@@ -84,6 +109,24 @@ object BroadcastOverlayManager {
      */
     private val _queueSize = MutableStateFlow(0)
     val queueSize: StateFlow<Int> = _queueSize.asStateFlow()
+    
+    /**
+     * Current index in the carousel (for < > navigation)
+     */
+    private val _currentIndex = MutableStateFlow(0)
+    val currentIndex: StateFlow<Int> = _currentIndex.asStateFlow()
+    
+    /**
+     * Total count of all active broadcasts (for "1 of 5" display)
+     */
+    private val _totalBroadcastCount = MutableStateFlow(0)
+    val totalBroadcastCount: StateFlow<Int> = _totalBroadcastCount.asStateFlow()
+    
+    /**
+     * List of all active broadcasts (for carousel navigation)
+     * Newest first for priority display
+     */
+    private val _allBroadcasts = mutableListOf<BroadcastTrip>()
     
     /**
      * Events for UI actions (accept, reject, expire)
@@ -121,50 +164,76 @@ object BroadcastOverlayManager {
      * Show a new broadcast in the overlay
      * If another broadcast is showing, this one is queued
      * 
+     * NEW BEHAVIOR: Newest broadcasts get PRIORITY
+     * - New broadcasts are added to the FRONT of the list
+     * - Auto-switches to show the newest broadcast immediately
+     * - User can navigate with < > arrows to see older broadcasts
+     * 
+     * AVAILABILITY CHECK:
+     * - If user is OFFLINE (toggled availability off), broadcast is NOT shown
+     * - User will not be disturbed when they don't want broadcasts
+     * - Backend also excludes offline users, but this is client-side safety
+     * 
      * @param broadcast The broadcast to show
-     * @return true if shown immediately, false if queued
+     * @return true if shown immediately, false if queued or blocked
      */
     fun showBroadcast(broadcast: BroadcastTrip): Boolean {
-        Log.i(TAG, "📢 New broadcast received: ${broadcast.broadcastId}")
+        timber.log.Timber.i("╔══════════════════════════════════════════════════════════════╗")
+        timber.log.Timber.i("║  📢 SHOW BROADCAST CALLED                                    ║")
+        timber.log.Timber.i("╠══════════════════════════════════════════════════════════════╣")
+        timber.log.Timber.i("║  Broadcast ID: ${broadcast.broadcastId}")
+        timber.log.Timber.i("║  Customer: ${broadcast.customerName}")
+        timber.log.Timber.i("║  Trucks Needed: ${broadcast.totalTrucksNeeded}")
+        timber.log.Timber.i("║  Is Urgent: ${broadcast.isUrgent}")
+        timber.log.Timber.i("║  App Context: ${if (appContext != null) "INITIALIZED" else "NULL - NOT INITIALIZED!"}")
+        timber.log.Timber.i("║  Current overlay visible: ${_isOverlayVisible.value}")
+        timber.log.Timber.i("║  Current broadcast count: ${_allBroadcasts.size}")
+        timber.log.Timber.i("╚══════════════════════════════════════════════════════════════╝")
         
-        // Check if already in queue (prevent duplicates)
-        if (broadcastQueue.any { it.broadcast.broadcastId == broadcast.broadcastId } || 
-            _currentBroadcast.value?.broadcastId == broadcast.broadcastId) {
-            Log.d(TAG, "⏭️ Broadcast ${broadcast.broadcastId} already in queue/showing, skipping")
+        // =====================================================================
+        // AVAILABILITY CHECK - Don't show if user is OFFLINE
+        // =====================================================================
+        val available = isUserAvailable()
+        timber.log.Timber.i("   User availability check: $available")
+        if (!available) {
+            timber.log.Timber.w("⏸️ Broadcast ${broadcast.broadcastId} NOT shown - user is OFFLINE")
             return false
         }
         
-        // Check queue size limit
-        if (broadcastQueue.size >= MAX_QUEUE_SIZE) {
-            Log.w(TAG, "⚠️ Queue full ($MAX_QUEUE_SIZE), removing oldest")
-            broadcastQueue.poll() // Remove oldest
+        // Check if already exists (prevent duplicates)
+        if (_allBroadcasts.any { it.broadcastId == broadcast.broadcastId } ||
+            broadcastQueue.any { it.broadcast.broadcastId == broadcast.broadcastId }) {
+            timber.log.Timber.d("⏭️ Broadcast ${broadcast.broadcastId} already exists, skipping")
+            return false
         }
+        
+        // Check total size limit
+        if (_allBroadcasts.size >= MAX_QUEUE_SIZE) {
+            timber.log.Timber.w("⚠️ List full ($MAX_QUEUE_SIZE), removing oldest")
+            _allBroadcasts.removeAt(_allBroadcasts.size - 1) // Remove oldest (last item)
+        }
+        
+        // Add to FRONT of list (newest first for priority)
+        _allBroadcasts.add(0, broadcast)
+        _totalBroadcastCount.value = _allBroadcasts.size
         
         val queuedBroadcast = QueuedBroadcast(broadcast)
         
-        // If no current broadcast, show immediately
-        if (_currentBroadcast.value == null) {
-            scope.launch {
+        // ALWAYS show the newest broadcast immediately (priority!)
+        // This auto-switches to the new broadcast
+        scope.launch {
+            mutex.withLock {
+                _currentIndex.value = 0 // Newest is always at index 0
                 showBroadcastInternal(queuedBroadcast)
             }
-            
-            scope.launch {
-                _broadcastEvents.emit(BroadcastEvent.NewBroadcast(broadcast, 0))
-            }
-            return true
         }
-        
-        // Add to queue
-        broadcastQueue.offer(queuedBroadcast)
-        _queueSize.value = broadcastQueue.size
-        
-        Log.i(TAG, "📥 Broadcast ${broadcast.broadcastId} queued (position: ${broadcastQueue.size})")
         
         scope.launch {
-            _broadcastEvents.emit(BroadcastEvent.NewBroadcast(broadcast, broadcastQueue.size))
+            _broadcastEvents.emit(BroadcastEvent.NewBroadcast(broadcast, 0))
         }
         
-        return false
+        timber.log.Timber.i("🎯 New broadcast shown with priority: ${broadcast.broadcastId} (total: ${_allBroadcasts.size})")
+        return true
     }
     
     /**
@@ -175,7 +244,7 @@ object BroadcastOverlayManager {
         scope.launch {
             mutex.withLock {
                 val current = _currentBroadcast.value ?: return@launch
-                Log.i(TAG, "✅ Broadcast ${current.broadcastId} ACCEPTED")
+                timber.log.Timber.i("✅ Broadcast ${current.broadcastId} ACCEPTED")
                 
                 _broadcastEvents.emit(BroadcastEvent.Accepted(current))
                 hideOverlayAndShowNext()
@@ -191,7 +260,7 @@ object BroadcastOverlayManager {
         scope.launch {
             mutex.withLock {
                 val current = _currentBroadcast.value ?: return@launch
-                Log.i(TAG, "❌ Broadcast ${current.broadcastId} REJECTED")
+                timber.log.Timber.i("❌ Broadcast ${current.broadcastId} REJECTED")
                 
                 _broadcastEvents.emit(BroadcastEvent.Rejected(current))
                 hideOverlayAndShowNext()
@@ -213,10 +282,10 @@ object BroadcastOverlayManager {
                 if (!queuedBroadcast.isExpired()) {
                     broadcastQueue.offer(queuedBroadcast)
                     _queueSize.value = broadcastQueue.size
-                    Log.d(TAG, "🔄 Broadcast ${current.broadcastId} put back in queue")
+                    timber.log.Timber.d("🔄 Broadcast ${current.broadcastId} put back in queue")
                 }
                 
-                hideOverlay()
+                hideOverlayInternal()
             }
         }
     }
@@ -232,7 +301,89 @@ object BroadcastOverlayManager {
                 _isOverlayVisible.value = false
                 _remainingTimeSeconds.value = 0
                 _queueSize.value = 0
-                Log.i(TAG, "🗑️ All broadcasts cleared")
+                _currentIndex.value = 0
+                _allBroadcasts.clear()
+                timber.log.Timber.i("🗑️ All broadcasts cleared")
+            }
+        }
+    }
+    
+    /**
+     * Remove a specific broadcast by order ID (when customer cancels)
+     * 
+     * IMPORTANT: Call this when receiving 'order_cancelled' WebSocket event
+     * This ensures cancelled orders are immediately removed from all transporters' screens
+     * 
+     * @param orderId The order ID to remove
+     */
+    fun removeBroadcast(orderId: String) {
+        scope.launch {
+            mutex.withLock {
+                // Remove from current if showing
+                if (_currentBroadcast.value?.broadcastId == orderId) {
+                    timber.log.Timber.i("🚫 Removing CURRENT broadcast (order cancelled): $orderId")
+                    hideOverlayAndShowNext()
+                    return@withLock
+                }
+                
+                // Remove from queue
+                val removed = broadcastQueue.removeAll { it.broadcast.broadcastId == orderId }
+                if (removed) {
+                    _queueSize.value = broadcastQueue.size
+                    timber.log.Timber.i("🚫 Removed broadcast from queue (order cancelled): $orderId")
+                }
+                
+                // Remove from all broadcasts list
+                _allBroadcasts.removeAll { it.broadcastId == orderId }
+                updateCurrentIndex()
+            }
+        }
+    }
+    
+    /**
+     * Navigate to previous broadcast in carousel
+     */
+    fun showPreviousBroadcast() {
+        scope.launch {
+            mutex.withLock {
+                if (_allBroadcasts.size <= 1) return@withLock
+                
+                val newIndex = if (_currentIndex.value > 0) {
+                    _currentIndex.value - 1
+                } else {
+                    _allBroadcasts.size - 1 // Wrap around
+                }
+                
+                _currentIndex.value = newIndex
+                val broadcast = _allBroadcasts.getOrNull(newIndex)
+                if (broadcast != null) {
+                    _currentBroadcast.value = broadcast
+                    timber.log.Timber.d("⬅️ Showing previous broadcast: ${broadcast.broadcastId} (${newIndex + 1}/${_allBroadcasts.size})")
+                }
+            }
+        }
+    }
+    
+    /**
+     * Navigate to next broadcast in carousel
+     */
+    fun showNextBroadcast() {
+        scope.launch {
+            mutex.withLock {
+                if (_allBroadcasts.size <= 1) return@withLock
+                
+                val newIndex = if (_currentIndex.value < _allBroadcasts.size - 1) {
+                    _currentIndex.value + 1
+                } else {
+                    0 // Wrap around
+                }
+                
+                _currentIndex.value = newIndex
+                val broadcast = _allBroadcasts.getOrNull(newIndex)
+                if (broadcast != null) {
+                    _currentBroadcast.value = broadcast
+                    timber.log.Timber.d("➡️ Showing next broadcast: ${broadcast.broadcastId} (${newIndex + 1}/${_allBroadcasts.size})")
+                }
             }
         }
     }
@@ -241,32 +392,73 @@ object BroadcastOverlayManager {
      * Get current queue for debugging
      */
     fun getQueueInfo(): String {
-        return "Queue size: ${broadcastQueue.size}, Current: ${_currentBroadcast.value?.broadcastId}, Visible: ${_isOverlayVisible.value}"
+        return "Queue size: ${broadcastQueue.size}, Current: ${_currentBroadcast.value?.broadcastId}, Visible: ${_isOverlayVisible.value}, AllBroadcasts: ${_allBroadcasts.size}"
+    }
+    
+    private fun updateCurrentIndex() {
+        val current = _currentBroadcast.value
+        if (current != null && _allBroadcasts.isNotEmpty()) {
+            val index = _allBroadcasts.indexOfFirst { it.broadcastId == current.broadcastId }
+            if (index >= 0) {
+                _currentIndex.value = index
+            }
+        }
     }
     
     // ============== PRIVATE METHODS ==============
     
+    /**
+     * Internal method to show broadcast - MUST be called from within mutex.withLock
+     * DO NOT call mutex.withLock inside this method - it will cause deadlock!
+     */
     private suspend fun showBroadcastInternal(queuedBroadcast: QueuedBroadcast) {
-        mutex.withLock {
-            // Clean expired broadcasts from queue first
-            cleanExpiredBroadcasts()
-            
-            // Check if this broadcast is expired
-            if (queuedBroadcast.isExpired()) {
-                Log.w(TAG, "⏰ Broadcast ${queuedBroadcast.broadcast.broadcastId} expired, skipping")
-                _broadcastEvents.emit(BroadcastEvent.Expired(queuedBroadcast.broadcast))
-                showNextInQueue()
-                return
-            }
-            
-            _currentBroadcast.value = queuedBroadcast.broadcast
-            _isOverlayVisible.value = true
-            _remainingTimeSeconds.value = (queuedBroadcast.remainingTimeMs() / 1000).toInt()
-            
-            Log.i(TAG, "🎯 Showing broadcast ${queuedBroadcast.broadcast.broadcastId} (${_remainingTimeSeconds.value}s remaining)")
-            
-            // Start countdown timer
-            startCountdownTimer(queuedBroadcast)
+        // NOTE: Mutex is already held by caller - DO NOT lock again!
+        
+        // Clean expired broadcasts from queue first
+        cleanExpiredBroadcasts()
+        
+        // Check if this broadcast is expired
+        if (queuedBroadcast.isExpired()) {
+            timber.log.Timber.w("⏰ Broadcast ${queuedBroadcast.broadcast.broadcastId} expired, skipping")
+            _broadcastEvents.emit(BroadcastEvent.Expired(queuedBroadcast.broadcast))
+            showNextInQueueInternal()
+            return
+        }
+        
+        timber.log.Timber.i("╔══════════════════════════════════════════════════════════════╗")
+        timber.log.Timber.i("║  🎯 SETTING OVERLAY VISIBLE = TRUE                           ║")
+        timber.log.Timber.i("╠══════════════════════════════════════════════════════════════╣")
+        timber.log.Timber.i("║  Broadcast: ${queuedBroadcast.broadcast.broadcastId}")
+        timber.log.Timber.i("║  Before: _isOverlayVisible = ${_isOverlayVisible.value}")
+        timber.log.Timber.i("║  Before: _currentBroadcast = ${_currentBroadcast.value?.broadcastId}")
+        
+        _currentBroadcast.value = queuedBroadcast.broadcast
+        _isOverlayVisible.value = true
+        _remainingTimeSeconds.value = (queuedBroadcast.remainingTimeMs() / 1000).toInt()
+        
+        timber.log.Timber.i("║  After: _isOverlayVisible = ${_isOverlayVisible.value}")
+        timber.log.Timber.i("║  After: _currentBroadcast = ${_currentBroadcast.value?.broadcastId}")
+        timber.log.Timber.i("║  Timer: ${_remainingTimeSeconds.value}s remaining")
+        timber.log.Timber.i("╚══════════════════════════════════════════════════════════════╝")
+        
+        // Start countdown timer
+        startCountdownTimer(queuedBroadcast)
+    }
+    
+    /**
+     * Internal method to show next in queue - called when mutex is already held
+     */
+    private suspend fun showNextInQueueInternal() {
+        cleanExpiredBroadcasts()
+        
+        val next = broadcastQueue.poll()
+        _queueSize.value = broadcastQueue.size
+        
+        if (next != null) {
+            timber.log.Timber.d("📤 Showing next broadcast from queue: ${next.broadcast.broadcastId}")
+            showBroadcastInternal(next)
+        } else {
+            timber.log.Timber.d("📭 Queue empty, no more broadcasts")
         }
     }
     
@@ -277,9 +469,13 @@ object BroadcastOverlayManager {
                 _remainingTimeSeconds.value = (remaining / 1000).toInt()
                 
                 if (remaining <= 0) {
-                    Log.w(TAG, "⏰ Broadcast ${queuedBroadcast.broadcast.broadcastId} EXPIRED (timeout)")
+                    timber.log.Timber.w("⏰ Broadcast ${queuedBroadcast.broadcast.broadcastId} EXPIRED (timeout)")
                     _broadcastEvents.emit(BroadcastEvent.Expired(queuedBroadcast.broadcast))
-                    hideOverlayAndShowNext()
+                    // Need to acquire mutex since we're NOT inside a mutex block here
+                    mutex.withLock {
+                        hideOverlayInternal()
+                        showNextInQueueInternal()
+                    }
                     break
                 }
                 
@@ -288,29 +484,23 @@ object BroadcastOverlayManager {
         }
     }
     
+    /**
+     * Hide overlay and show next - called from within mutex.withLock
+     */
     private suspend fun hideOverlayAndShowNext() {
-        hideOverlay()
-        showNextInQueue()
+        // NOTE: Mutex is already held by caller
+        hideOverlayInternal()
+        showNextInQueueInternal()
     }
     
-    private fun hideOverlay() {
+    /**
+     * Internal hide overlay - does NOT acquire mutex
+     */
+    private fun hideOverlayInternal() {
+        timber.log.Timber.i("🔽 Hiding overlay - setting _isOverlayVisible = false")
         _currentBroadcast.value = null
         _isOverlayVisible.value = false
         _remainingTimeSeconds.value = 0
-    }
-    
-    private suspend fun showNextInQueue() {
-        cleanExpiredBroadcasts()
-        
-        val next = broadcastQueue.poll()
-        _queueSize.value = broadcastQueue.size
-        
-        if (next != null) {
-            Log.d(TAG, "📤 Showing next broadcast from queue: ${next.broadcast.broadcastId}")
-            showBroadcastInternal(next)
-        } else {
-            Log.d(TAG, "📭 Queue empty, no more broadcasts")
-        }
     }
     
     private fun cleanExpiredBroadcasts() {
@@ -318,7 +508,7 @@ object BroadcastOverlayManager {
         if (expiredCount > 0) {
             broadcastQueue.removeAll { it.isExpired() }
             _queueSize.value = broadcastQueue.size
-            Log.d(TAG, "🧹 Cleaned $expiredCount expired broadcasts from queue")
+            timber.log.Timber.d("🧹 Cleaned $expiredCount expired broadcasts from queue")
         }
     }
 }

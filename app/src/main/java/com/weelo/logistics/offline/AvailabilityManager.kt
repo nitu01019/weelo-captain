@@ -1,7 +1,6 @@
 package com.weelo.logistics.offline
 
 import android.content.Context
-import android.util.Log
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
@@ -104,14 +103,14 @@ class AvailabilityManager private constructor(
                 if (isOnline) {
                     val pendingSync = dataStore.data.first()[KEY_PENDING_SYNC] ?: false
                     if (pendingSync) {
-                        Log.i(TAG, "📶 Network available - syncing pending availability status")
+                        timber.log.Timber.i("📶 Network available - syncing pending availability status")
                         syncWithBackend(_isAvailable.value)
                     }
                 }
             }
         }
         
-        Log.i(TAG, "✅ AvailabilityManager initialized")
+        timber.log.Timber.i("✅ AvailabilityManager initialized")
     }
     
     /**
@@ -120,7 +119,7 @@ class AvailabilityManager private constructor(
      * @param available true = online (receive broadcasts), false = offline (no broadcasts)
      */
     suspend fun setAvailability(available: Boolean) {
-        Log.i(TAG, "🔄 Setting availability: ${if (available) "ONLINE ✅" else "OFFLINE ❌"}")
+        timber.log.Timber.i("🔄 Setting availability: ${if (available) "ONLINE ✅" else "OFFLINE ❌"}")
         
         // 1. Update local state immediately (instant UI feedback)
         _isAvailable.value = available
@@ -148,7 +147,7 @@ class AvailabilityManager private constructor(
      */
     private suspend fun syncWithBackend(available: Boolean) {
         if (!networkMonitor.isCurrentlyOnline()) {
-            Log.w(TAG, "📵 Offline - availability will sync when online")
+            timber.log.Timber.w("📵 Offline - availability will sync when online")
             return
         }
         
@@ -167,15 +166,15 @@ class AvailabilityManager private constructor(
                 dataStore.edit { prefs ->
                     prefs[KEY_PENDING_SYNC] = false
                 }
-                Log.i(TAG, "✅ Availability synced with backend: ${if (available) "ONLINE" else "OFFLINE"}")
+                timber.log.Timber.i("✅ Availability synced with backend: ${if (available) "ONLINE" else "OFFLINE"}")
             } else {
                 val error = response.body()?.error?.message ?: "Sync failed"
                 _syncError.value = error
-                Log.e(TAG, "❌ Failed to sync availability: $error")
+                timber.log.Timber.e("❌ Failed to sync availability: $error")
             }
         } catch (e: Exception) {
             _syncError.value = e.message
-            Log.e(TAG, "❌ Availability sync error: ${e.message}")
+            timber.log.Timber.e("❌ Availability sync error: ${e.message}")
             // Keep pending sync flag so it retries later
         } finally {
             _isSyncing.value = false

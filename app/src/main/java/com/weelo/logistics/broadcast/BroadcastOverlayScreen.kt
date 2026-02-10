@@ -2,13 +2,21 @@ package com.weelo.logistics.broadcast
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.FlingBehavior
+import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -18,6 +26,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -29,32 +38,86 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
+import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.LatLngBounds
+import com.google.maps.android.compose.*
 import com.weelo.logistics.core.notification.BroadcastSoundService
 import com.weelo.logistics.data.model.BroadcastTrip
 import com.weelo.logistics.data.model.RequestedVehicle
+import com.weelo.logistics.data.model.RoutePointType
+import com.weelo.logistics.data.repository.BroadcastRepository
+import com.weelo.logistics.data.repository.BroadcastResult
 import com.weelo.logistics.ui.theme.*
+import kotlinx.coroutines.launch
+
+private const val TAG = "BroadcastOverlay"
+
+// =============================================================================
+// RAPIDO STYLE COLORS - Yellow & Bold Black (Professional Dark Theme)
+// =============================================================================
+private val RapidoYellow = Color(0xFFFDD835)      // Bright Yellow - Primary accent
+private val RapidoYellowDark = Color(0xFFF9A825)  // Darker Yellow for hover states
+private val RapidoBlack = Color(0xFF1A1A1A)       // Bold Black - Primary background
+private val RapidoDarkGray = Color(0xFF2D2D2D)    // Slightly lighter for cards
+private val RapidoGray = Color(0xFF424242)        // Dark Gray for secondary text
+private val RapidoMediumGray = Color(0xFF757575)  // Medium gray for borders
+private val RapidoLightGray = Color(0xFFE0E0E0)   // Light text on dark
+private val RapidoWhite = Color(0xFFFFFFFF)       // White - Primary text
+private val RapidoGreen = Color(0xFF4CAF50)       // Success green
+private val RapidoRed = Color(0xFFEF5350)         // Reject red
+private val RapidoBlue = Color(0xFF2196F3)        // Direction/Navigation blue
 
 /**
  * =============================================================================
- * BROADCAST OVERLAY SCREEN - Multi-Truck Professional Design
+ * TRUCK HOLD STATE - Tracks accepted/rejected trucks
+ * =============================================================================
+ */
+data class TruckHoldState(
+    val vehicleType: String,
+    val vehicleSubtype: String,
+    val quantity: Int,
+    val holdId: String? = null,
+    val status: TruckHoldStatus = TruckHoldStatus.PENDING,
+    val isHolding: Boolean = false  // Loading state for API call
+)
+
+enum class TruckHoldStatus {
+    PENDING,    // Not yet decided
+    ACCEPTED,   // Accepted and held (Redis lock acquired)
+    REJECTED,   // Rejected by transporter (blurred)
+    FAILED      // Hold failed (e.g., already taken)
+}
+
+/**
+ * =============================================================================
+ * BROADCAST OVERLAY SCREEN - Per-Truck Accept/Reject with Hold System
  * =============================================================================
  * 
  * Full-screen overlay that appears when a new broadcast arrives.
  * 
- * FEATURES:
- * - Shows ALL truck types in one card (Option 2 design)
- * - Each truck type has quantity selector [-] count [+]
- * - Each truck type has REJECT / ACCEPT buttons
- * - 60-second countdown timer
- * - Sound notification on new broadcast
- * - Route visualization with directions
+ * NEW FLOW (Per-Truck Accept = Hold):
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 1. Transporter sees personalized broadcast with trucks they can provide
+ * 2. Each truck type has:
+ *    - [+] / [-] quantity selector
+ *    - [ACCEPT] button → Calls holdTrucks() API (Redis 60-sec lock)
+ *    - [REJECT] button → Blurs that truck (won't give it)
+ * 3. Direction button opens Google Maps (no in-app map)
+ * 4. [SUBMIT] button at bottom:
+ *    - DISABLED (gray) when no trucks accepted
+ *    - ENABLED (yellow/bold) when at least 1 truck accepted
+ * 5. Click SUBMIT → Opens truck selection page with ONLY held trucks
+ * 6. Non-accepted trucks are auto-released/rejected
  * 
- * FLOW:
- * 1. New broadcast arrives → Overlay appears with sound
- * 2. Transporter selects quantity for any truck type
- * 3. Click ACCEPT → Goes to hold confirmation (15 sec)
- * 4. Click REJECT → Skips that truck type
- * 5. Timer expires → Overlay dismissed
+ * CORE INVARIANTS:
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ✓ Accept = HOLD (Redis atomic lock, 60-sec TTL)
+ * ✓ Other transporters see reduced availability in real-time
+ * ✓ Reject = Local blur only (truck stays in pool for others)
+ * ✓ Submit opens next screen with held trucks only
  * 
  * =============================================================================
  */
@@ -64,12 +127,31 @@ fun BroadcastOverlayScreen(
     onReject: (BroadcastTrip) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val soundService = remember { BroadcastSoundService.getInstance(context) }
+    val broadcastRepository = remember { BroadcastRepository.getInstance(context) }
     
     val isVisible by BroadcastOverlayManager.isOverlayVisible.collectAsState()
     val currentBroadcast by BroadcastOverlayManager.currentBroadcast.collectAsState()
     val remainingSeconds by BroadcastOverlayManager.remainingTimeSeconds.collectAsState()
-    val queueSize by BroadcastOverlayManager.queueSize.collectAsState()
+    val currentIndex by BroadcastOverlayManager.currentIndex.collectAsState()
+    val totalCount by BroadcastOverlayManager.totalBroadcastCount.collectAsState()
+    
+    // =========================================================================
+    // TRUCK HOLD STATE - Tracks accepted/rejected/pending trucks
+    // =========================================================================
+    var truckHoldStates by remember { mutableStateOf<Map<String, TruckHoldState>>(emptyMap()) }
+    
+    // Reset when broadcast changes
+    LaunchedEffect(currentBroadcast?.broadcastId) {
+        truckHoldStates = emptyMap()
+    }
+    
+    // Calculate accepted trucks for Submit button
+    val acceptedTrucks = truckHoldStates.values.filter { it.status == TruckHoldStatus.ACCEPTED }
+    val totalAcceptedQuantity = acceptedTrucks.sumOf { it.quantity }
+    val isSubmitEnabled = acceptedTrucks.isNotEmpty()
+    val hasAnyHolding = truckHoldStates.values.any { it.isHolding }
     
     // Play sound when new broadcast appears
     LaunchedEffect(currentBroadcast) {
@@ -82,167 +164,289 @@ fun BroadcastOverlayScreen(
         }
     }
     
+    // =========================================================================
+    // ACCEPT TRUCK - Call holdTrucks() API (Redis atomic lock)
+    // =========================================================================
+    fun handleAcceptTruck(vehicleType: String, vehicleSubtype: String, quantity: Int) {
+        val key = "$vehicleType|$vehicleSubtype"
+        val broadcast = currentBroadcast ?: return
+        
+        // Set loading state
+        truckHoldStates = truckHoldStates + (key to TruckHoldState(
+            vehicleType = vehicleType,
+            vehicleSubtype = vehicleSubtype,
+            quantity = quantity,
+            status = TruckHoldStatus.PENDING,
+            isHolding = true
+        ))
+        
+        timber.log.Timber.i("🔒 Holding $quantity trucks: $vehicleType $vehicleSubtype")
+        
+        scope.launch {
+            val result = broadcastRepository.holdTrucks(
+                orderId = broadcast.broadcastId,
+                vehicleType = vehicleType,
+                vehicleSubtype = vehicleSubtype,
+                quantity = quantity
+            )
+            
+            when (result) {
+                is BroadcastResult.Success -> {
+                    timber.log.Timber.i("✅ Hold acquired: ${result.data.holdId}")
+                    truckHoldStates = truckHoldStates + (key to TruckHoldState(
+                        vehicleType = vehicleType,
+                        vehicleSubtype = vehicleSubtype,
+                        quantity = quantity,
+                        holdId = result.data.holdId,
+                        status = TruckHoldStatus.ACCEPTED,
+                        isHolding = false
+                    ))
+                    Toast.makeText(context, "✓ $quantity truck(s) held", Toast.LENGTH_SHORT).show()
+                }
+                is BroadcastResult.Error -> {
+                    timber.log.Timber.e("❌ Hold failed: ${result.message}")
+                    truckHoldStates = truckHoldStates + (key to TruckHoldState(
+                        vehicleType = vehicleType,
+                        vehicleSubtype = vehicleSubtype,
+                        quantity = quantity,
+                        status = TruckHoldStatus.FAILED,
+                        isHolding = false
+                    ))
+                    Toast.makeText(context, "Failed: ${result.message}", Toast.LENGTH_LONG).show()
+                }
+                is BroadcastResult.Loading -> {
+                    // Loading state - already handled by isHolding flag
+                }
+            }
+        }
+    }
+    
+    // =========================================================================
+    // REJECT TRUCK - Local blur only (truck stays in pool for others)
+    // =========================================================================
+    fun handleRejectTruck(vehicleType: String, vehicleSubtype: String) {
+        val key = "$vehicleType|$vehicleSubtype"
+        timber.log.Timber.i("❌ Rejected: $vehicleType $vehicleSubtype")
+        
+        truckHoldStates = truckHoldStates + (key to TruckHoldState(
+            vehicleType = vehicleType,
+            vehicleSubtype = vehicleSubtype,
+            quantity = 0,
+            status = TruckHoldStatus.REJECTED,
+            isHolding = false
+        ))
+    }
+    
+    // =========================================================================
+    // SUBMIT - Proceed with accepted trucks only
+    // =========================================================================
+    fun handleSubmit() {
+        currentBroadcast?.let { broadcast ->
+            timber.log.Timber.i("📤 Submit: ${acceptedTrucks.size} types, $totalAcceptedQuantity trucks")
+            
+            BroadcastOverlayManager.acceptCurrentBroadcast()
+            
+            // Pass hold info to next screen via notes field
+            val holdInfo = acceptedTrucks.joinToString(";") { 
+                "${it.vehicleType}|${it.vehicleSubtype}|${it.quantity}|${it.holdId ?: ""}" 
+            }
+            
+            onAccept(broadcast.copy(notes = holdInfo))
+        }
+    }
+    
+    // =========================================================================
+    // DISMISS - Release all holds
+    // =========================================================================
+    fun handleDismiss() {
+        scope.launch {
+            truckHoldStates.values
+                .filter { it.holdId != null && it.status == TruckHoldStatus.ACCEPTED }
+                .forEach { state ->
+                    timber.log.Timber.i("🔓 Releasing: ${state.holdId}")
+                    broadcastRepository.releaseHold(state.holdId!!)
+                }
+        }
+        
+        currentBroadcast?.let { broadcast ->
+            BroadcastOverlayManager.rejectCurrentBroadcast()
+            onReject(broadcast)
+        }
+    }
+    
     // Animate visibility
     AnimatedVisibility(
         visible = isVisible && currentBroadcast != null,
-        enter = fadeIn(animationSpec = tween(300)) + slideInVertically(
+        enter = fadeIn(tween(250)) + slideInVertically(
             initialOffsetY = { it },
-            animationSpec = tween(400, easing = FastOutSlowInEasing)
+            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
         ),
-        exit = fadeOut(animationSpec = tween(200)) + slideOutVertically(
-            targetOffsetY = { it },
-            animationSpec = tween(300)
+        exit = fadeOut(tween(150)) + slideOutVertically(
+            targetOffsetY = { it / 2 },
+            animationSpec = tween(200)
         )
     ) {
         currentBroadcast?.let { broadcast ->
             Dialog(
-                onDismissRequest = { 
-                    BroadcastOverlayManager.dismissOverlay()
-                },
+                onDismissRequest = { handleDismiss() },
                 properties = DialogProperties(
                     dismissOnBackPress = true,
                     dismissOnClickOutside = false,
                     usePlatformDefaultWidth = false
                 )
             ) {
-                BroadcastOverlayContent(
+                BroadcastOverlayContentNew(
                     broadcast = broadcast,
                     remainingSeconds = remainingSeconds,
-                    queueSize = queueSize,
-                    onAcceptTruck = { vehicleType, vehicleSubtype, quantity ->
-                        BroadcastOverlayManager.acceptCurrentBroadcast()
-                        // Pass the selection info via broadcast object
-                        onAccept(broadcast)
-                    },
-                    onRejectTruck = { vehicleType, vehicleSubtype ->
-                        // Just reject this truck type, keep overlay if more types exist
-                        // For now, reject entire broadcast
-                        BroadcastOverlayManager.rejectCurrentBroadcast()
-                        onReject(broadcast)
-                    },
-                    onDismiss = {
-                        BroadcastOverlayManager.dismissOverlay()
-                    }
+                    currentIndex = currentIndex,
+                    totalCount = totalCount,
+                    truckHoldStates = truckHoldStates,
+                    isSubmitEnabled = isSubmitEnabled,
+                    totalAcceptedQuantity = totalAcceptedQuantity,
+                    hasAnyHolding = hasAnyHolding,
+                    onAcceptTruck = ::handleAcceptTruck,
+                    onRejectTruck = ::handleRejectTruck,
+                    onSubmit = ::handleSubmit,
+                    onDismiss = ::handleDismiss,
+                    onPrevious = { BroadcastOverlayManager.showPreviousBroadcast() },
+                    onNext = { BroadcastOverlayManager.showNextBroadcast() }
                 )
             }
         }
     }
 }
 
+/**
+ * =============================================================================
+ * RAPIDO STYLE BROADCAST OVERLAY
+ * =============================================================================
+ * 
+ * DESIGN PRINCIPLES:
+ * - Yellow background with Bold Black text
+ * - Simple, clean, professional
+ * - No childish colors
+ * - Clear hierarchy
+ * - Easy to read at a glance
+ * =============================================================================
+ */
 @Composable
 private fun BroadcastOverlayContent(
     broadcast: BroadcastTrip,
     remainingSeconds: Int,
-    queueSize: Int,
+    currentIndex: Int,
+    totalCount: Int,
     onAcceptTruck: (vehicleType: String, vehicleSubtype: String, quantity: Int) -> Unit,
     onRejectTruck: (vehicleType: String, vehicleSubtype: String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit
 ) {
     val context = LocalContext.current
-    
-    // Timer color (red when < 30 seconds)
-    val timerColor = when {
-        remainingSeconds < 15 -> Error
-        remainingSeconds < 30 -> Warning
-        else -> Success
-    }
+    val showNavigation = totalCount > 1
     
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Surface)
+            .background(RapidoYellow)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // ============== HEADER ==============
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = Primary,
-                shadowElevation = 4.dp
+            
+            // ============== HEADER - Yellow with Black text ==============
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                // Top row: Close | Timer
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Close button
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(RapidoBlack.copy(alpha = 0.1f), CircleShape)
+                            .clickable { onDismiss() },
+                        contentAlignment = Alignment.Center
                     ) {
-                        // Close button
-                        IconButton(
-                            onClick = onDismiss,
-                            modifier = Modifier
-                                .size(40.dp)
-                                .background(White.copy(alpha = 0.2f), CircleShape)
-                        ) {
-                            Icon(Icons.Default.Close, "Close", tint = White)
-                        }
-                        
-                        // Title
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                "New Booking Request",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = White
-                            )
-                            if (broadcast.isUrgent) {
-                                Text(
-                                    "🔥 URGENT",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Warning,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                        
-                        // Timer
-                        Surface(
-                            color = timerColor.copy(alpha = 0.2f),
-                            shape = RoundedCornerShape(20.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    Icons.Outlined.Timer,
-                                    null,
-                                    tint = White,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    formatTime(remainingSeconds),
-                                    color = White,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 18.sp
-                                )
-                            }
-                        }
+                        Icon(Icons.Default.Close, "Close", tint = RapidoBlack, modifier = Modifier.size(24.dp))
                     }
                     
-                    // Queue indicator
-                    if (queueSize > 0) {
-                        Spacer(Modifier.height(8.dp))
+                    // Timer - Bold and prominent
+                    Row(
+                        modifier = Modifier
+                            .background(RapidoBlack, RoundedCornerShape(20.dp))
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            "+$queueSize more requests waiting",
-                            color = Warning,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.fillMaxWidth(),
-                            textAlign = TextAlign.Center
+                            formatTime(remainingSeconds),
+                            color = RapidoYellow,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 20.sp
                         )
+                    }
+                }
+                
+                Spacer(Modifier.height(16.dp))
+                
+                // Title - Bold Black
+                Text(
+                    "NEW RIDE",
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Black,
+                    color = RapidoBlack,
+                    letterSpacing = 1.sp
+                )
+                
+                // Navigation (if multiple broadcasts)
+                if (showNavigation) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .background(RapidoBlack.copy(alpha = 0.1f), CircleShape)
+                                .clickable { onPrevious() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.ChevronLeft, "Previous", tint = RapidoBlack)
+                        }
+                        
+                        Text(
+                            "  ${currentIndex + 1} / $totalCount  ",
+                            fontWeight = FontWeight.Bold,
+                            color = RapidoBlack,
+                            fontSize = 14.sp
+                        )
+                        
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .background(RapidoBlack.copy(alpha = 0.1f), CircleShape)
+                                .clickable { onNext() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.ChevronRight, "Next", tint = RapidoBlack)
+                        }
                     }
                 }
             }
             
-            // ============== MAIN CONTENT (Scrollable) ==============
+            // ============== MAIN CONTENT ==============
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .weight(1f)
+                    .background(RapidoWhite, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
+                contentPadding = PaddingValues(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Order Info Header
+                // ========== FARE - Big and Bold ==========
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -251,173 +455,360 @@ private fun BroadcastOverlayContent(
                     ) {
                         Column {
                             Text(
-                                "Order #${broadcast.broadcastId.takeLast(8).uppercase()}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = Primary,
-                                fontWeight = FontWeight.SemiBold
+                                "#${broadcast.broadcastId.takeLast(6).uppercase()}",
+                                fontSize = 12.sp,
+                                color = RapidoGray,
+                                fontWeight = FontWeight.Medium
                             )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Person, null, Modifier.size(14.dp), tint = TextSecondary)
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    broadcast.customerName,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
+                            Text(
+                                broadcast.customerName,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = RapidoBlack
+                            )
                         }
                         
-                        // Total Value
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Success.copy(alpha = 0.1f)
+                        // Fare - Yellow background
+                        Box(
+                            modifier = Modifier
+                                .background(RapidoYellow, RoundedCornerShape(12.dp))
+                                .padding(horizontal = 20.dp, vertical = 12.dp)
                         ) {
-                            Column(
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    "Total Value",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = TextSecondary
-                                )
-                                Text(
-                                    "₹${String.format("%,.0f", broadcast.totalFare)}",
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Success
-                                )
-                            }
+                            Text(
+                                "₹${String.format("%,.0f", broadcast.totalFare)}",
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Black,
+                                color = RapidoBlack
+                            )
                         }
                     }
                 }
                 
-                // Route Card
+                // ========== ROUTE - Clean and Simple ==========
                 item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = White),
-                        elevation = CardDefaults.cardElevation(2.dp)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(RapidoLightGray, RoundedCornerShape(12.dp))
+                            .padding(16.dp)
                     ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
+                        val hasRoutePoints = broadcast.routePoints.isNotEmpty() && broadcast.routePoints.size > 2
+                        val hasRouteBreakdown = broadcast.hasRouteBreakdown
+                        
+                        if (hasRoutePoints) {
+                            // Multiple stops
+                            broadcast.routePoints.forEachIndexed { index, point ->
+                                val isLast = index == broadcast.routePoints.size - 1
+                                
+                                Row(verticalAlignment = Alignment.Top) {
+                                    // Dot
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.width(20.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(10.dp)
+                                                .background(RapidoBlack, CircleShape)
+                                        )
+                                        if (!isLast) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .width(2.dp)
+                                                    .height(40.dp)
+                                                    .background(RapidoBlack.copy(alpha = 0.3f))
+                                            )
+                                        }
+                                    }
+                                    
+                                    Spacer(Modifier.width(12.dp))
+                                    
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            point.displayName.uppercase(),
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = RapidoGray,
+                                            letterSpacing = 1.sp
+                                        )
+                                        Text(
+                                            point.address,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = RapidoBlack,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        
+                                        // Leg info
+                                        if (!isLast && hasRouteBreakdown) {
+                                            val leg = broadcast.routeBreakdown.getLegAt(index)
+                                            if (leg != null) {
+                                                Text(
+                                                    "${leg.distanceKm} km • ${leg.durationFormatted}",
+                                                    fontSize = 12.sp,
+                                                    color = RapidoGray
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                if (!isLast) Spacer(Modifier.height(4.dp))
+                            }
+                        } else {
+                            // Simple pickup → drop
                             // Pickup
                             Row(verticalAlignment = Alignment.Top) {
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.width(24.dp)
+                                    modifier = Modifier.width(20.dp)
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(12.dp)
-                                            .background(Success, CircleShape)
+                                            .size(10.dp)
+                                            .background(RapidoBlack, CircleShape)
                                     )
                                     Box(
                                         modifier = Modifier
                                             .width(2.dp)
-                                            .height(32.dp)
-                                            .background(Divider)
+                                            .height(40.dp)
+                                            .background(RapidoBlack.copy(alpha = 0.3f))
                                     )
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text("PICKUP", style = MaterialTheme.typography.labelSmall, color = Success, fontWeight = FontWeight.SemiBold)
+                                    Text("PICKUP", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = RapidoGray, letterSpacing = 1.sp)
                                     Text(
                                         broadcast.pickupLocation.address,
-                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = RapidoBlack,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
+                            
+                            Spacer(Modifier.height(4.dp))
                             
                             // Drop
                             Row(verticalAlignment = Alignment.Top) {
                                 Box(
                                     modifier = Modifier
-                                        .size(12.dp)
-                                        .background(Error, CircleShape)
+                                        .size(10.dp)
+                                        .background(RapidoBlack, CircleShape)
                                 )
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text("DROP", style = MaterialTheme.typography.labelSmall, color = Error, fontWeight = FontWeight.SemiBold)
+                                    Text("DROP", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = RapidoGray, letterSpacing = 1.sp)
                                     Text(
                                         broadcast.dropLocation.address,
-                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = RapidoBlack,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
+                        }
+                    }
+                }
+                
+                // ========== DISTANCE & TIME - Bold Summary ==========
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(RapidoYellow.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("DISTANCE", fontSize = 10.sp, color = RapidoGray, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                            Text(
+                                if (broadcast.hasRouteBreakdown) "${broadcast.routeBreakdown.totalDistanceKm} km" 
+                                else "${broadcast.distance.toInt()} km",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Black,
+                                color = RapidoBlack
+                            )
+                        }
+                        
+                        Box(Modifier.width(1.dp).height(40.dp).background(RapidoBlack.copy(alpha = 0.2f)))
+                        
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("TIME", fontSize = 10.sp, color = RapidoGray, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                            Text(
+                                if (broadcast.hasRouteBreakdown) broadcast.routeBreakdown.totalDurationFormatted 
+                                else "${broadcast.estimatedDuration} min",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Black,
+                                color = RapidoBlack
+                            )
+                        }
+                        
+                        if (broadcast.totalStops > 0) {
+                            Box(Modifier.width(1.dp).height(40.dp).background(RapidoBlack.copy(alpha = 0.2f)))
                             
-                            Spacer(Modifier.height(12.dp))
-                            
-                            // Distance & Directions
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Outlined.Route, null, Modifier.size(18.dp), tint = TextSecondary)
-                                    Spacer(Modifier.width(4.dp))
-                                    Text(
-                                        "${broadcast.distance.toInt()} km",
-                                        fontWeight = FontWeight.Bold,
-                                        color = Primary
-                                    )
-                                    Text(" • ~${broadcast.estimatedDuration} min", color = TextSecondary)
-                                }
-                                
-                                TextButton(
-                                    onClick = {
-                                        val uri = Uri.parse(
-                                            "https://www.google.com/maps/dir/?api=1" +
-                                            "&origin=${Uri.encode(broadcast.pickupLocation.address)}" +
-                                            "&destination=${Uri.encode(broadcast.dropLocation.address)}" +
-                                            "&travelmode=driving"
-                                        )
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, uri))
-                                    }
-                                ) {
-                                    Icon(Icons.Default.Directions, null, Modifier.size(18.dp), tint = Primary)
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Directions", color = Primary, fontWeight = FontWeight.Medium)
-                                }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("STOPS", fontSize = 10.sp, color = RapidoGray, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                Text(
+                                    "${broadcast.totalStops}",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = RapidoBlack
+                                )
                             }
                         }
                     }
                 }
                 
-                // Goods Type
+                // ========== EMBEDDED MAP ==========
                 item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.Inventory2, null, Modifier.size(16.dp), tint = TextSecondary)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Goods: ${broadcast.goodsType}", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                        broadcast.weight?.let {
-                            Text(" • $it", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    BroadcastRouteMap(
+                        broadcast = broadcast,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                    )
+                }
+                
+                // ========== DIRECTIONS BUTTONS - PROMINENT ==========
+                item {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Primary Navigate Button - Large and Yellow
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    // Open Google Maps with turn-by-turn navigation
+                                    val pickupLat = broadcast.pickupLocation.latitude
+                                    val pickupLng = broadcast.pickupLocation.longitude
+                                    val dropLat = broadcast.dropLocation.latitude
+                                    val dropLng = broadcast.dropLocation.longitude
+                                    
+                                    // Build waypoints string for intermediate stops
+                                    val waypointsStr = if (broadcast.hasIntermediateStops) {
+                                        broadcast.intermediateStops.joinToString("|") { 
+                                            "${it.latitude},${it.longitude}"
+                                        }
+                                    } else ""
+                                    
+                                    val uri = if (waypointsStr.isNotEmpty()) {
+                                        Uri.parse("google.navigation:q=$dropLat,$dropLng&waypoints=$waypointsStr&mode=d")
+                                    } else {
+                                        Uri.parse("google.navigation:q=$dropLat,$dropLng&mode=d")
+                                    }
+                                    
+                                    val mapIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+                                        setPackage("com.google.android.apps.maps")
+                                    }
+                                    
+                                    try {
+                                        context.startActivity(mapIntent)
+                                    } catch (e: Exception) {
+                                        // Fallback to browser if Google Maps not installed
+                                        val webUri = Uri.parse("https://www.google.com/maps/dir/?api=1&origin=$pickupLat,$pickupLng&destination=$dropLat,$dropLng&travelmode=driving")
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, webUri))
+                                    }
+                                }
+                                .background(RapidoYellow, RoundedCornerShape(12.dp))
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Navigation, 
+                                contentDescription = "Navigate",
+                                tint = RapidoBlack, 
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                "NAVIGATE",
+                                color = RapidoBlack,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 16.sp,
+                                letterSpacing = 1.sp
+                            )
+                        }
+                        
+                        // Secondary View Route Button - Outlined
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(2.dp, RapidoBlack, RoundedCornerShape(12.dp))
+                                .clickable {
+                                    val origin = Uri.encode(broadcast.pickupLocation.address)
+                                    val destination = Uri.encode(broadcast.dropLocation.address)
+                                    val waypoints = if (broadcast.hasIntermediateStops) {
+                                        broadcast.intermediateStops.map { Uri.encode(it.address) }.joinToString("|")
+                                    } else ""
+                                    
+                                    val uri = if (waypoints.isNotEmpty()) {
+                                        Uri.parse("https://www.google.com/maps/dir/?api=1&origin=$origin&destination=$destination&waypoints=$waypoints&travelmode=driving")
+                                    } else {
+                                        Uri.parse("https://www.google.com/maps/dir/?api=1&origin=$origin&destination=$destination&travelmode=driving")
+                                    }
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                                }
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Directions, 
+                                contentDescription = "View Route",
+                                tint = RapidoBlack, 
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "VIEW FULL ROUTE",
+                                color = RapidoBlack,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                letterSpacing = 1.sp
+                            )
                         }
                     }
                 }
                 
-                // Section Header
+                // ========== GOODS INFO ==========
                 item {
-                    Spacer(Modifier.height(8.dp))
                     Text(
-                        "SELECT TRUCKS TO ACCEPT",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = TextSecondary,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 0.5.sp
+                        "${broadcast.goodsType}${broadcast.weight?.let { " • $it" } ?: ""}",
+                        fontSize = 12.sp,
+                        color = RapidoGray
+                    )
+                }
+                
+                // ========== TRUCKS SECTION ==========
+                item {
+                    Text(
+                        "SELECT TRUCKS",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = RapidoBlack,
+                        letterSpacing = 1.sp
                     )
                 }
                 
                 // ============== TRUCK TYPES (Multi-Truck UI) ==============
+                // PERSONALIZED: Each transporter sees their capacity (trucksYouCanProvide)
                 if (broadcast.requestedVehicles.isNotEmpty()) {
                     items(broadcast.requestedVehicles.filter { it.remainingCount > 0 }) { vehicle ->
                         TruckTypeCard(
                             vehicle = vehicle,
+                            // Pass personalized max from backend
+                            trucksYouCanProvide = broadcast.trucksYouCanProvide,
+                            yourAvailableTrucks = broadcast.yourAvailableTrucks,
                             onAccept = { quantity ->
                                 onAcceptTruck(vehicle.vehicleType, vehicle.vehicleSubtype, quantity)
                             },
@@ -427,21 +818,21 @@ private fun BroadcastOverlayContent(
                         )
                     }
                 } else {
-                    // Legacy single truck type
+                    // Legacy single truck type - use vehicleTypesDisplay as fallback
                     item {
                         LegacySingleTruckCard(
                             broadcast = broadcast,
                             onAccept = { quantity ->
                                 onAcceptTruck(
-                                    broadcast.vehicleType?.id ?: "truck",
-                                    broadcast.vehicleType?.name ?: "",
+                                    broadcast.vehicleTypesDisplay,
+                                    "",
                                     quantity
                                 )
                             },
                             onReject = {
                                 onRejectTruck(
-                                    broadcast.vehicleType?.id ?: "truck",
-                                    broadcast.vehicleType?.name ?: ""
+                                    broadcast.vehicleTypesDisplay,
+                                    ""
                                 )
                             }
                         )
@@ -455,190 +846,915 @@ private fun BroadcastOverlayContent(
 }
 
 /**
- * TRUCK TYPE CARD - Individual truck type with quantity selector
- * Responsive design for all screen sizes
+ * =============================================================================
+ * NEW BROADCAST OVERLAY CONTENT - Professional Dark Theme with Hold System
+ * =============================================================================
  */
 @Composable
-private fun TruckTypeCard(
+private fun BroadcastOverlayContentNew(
+    broadcast: BroadcastTrip,
+    remainingSeconds: Int,
+    currentIndex: Int,
+    totalCount: Int,
+    truckHoldStates: Map<String, TruckHoldState>,
+    isSubmitEnabled: Boolean,
+    totalAcceptedQuantity: Int,
+    hasAnyHolding: Boolean,
+    onAcceptTruck: (vehicleType: String, vehicleSubtype: String, quantity: Int) -> Unit,
+    onRejectTruck: (vehicleType: String, vehicleSubtype: String) -> Unit,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit
+) {
+    val context = LocalContext.current
+    val showNavigation = totalCount > 1
+    
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(RapidoBlack)
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            
+            // ============== HEADER - Dark with Yellow accents ==============
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(RapidoBlack)
+                    .padding(16.dp)
+            ) {
+                // Top row: Close | Timer | Direction
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Close button
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(RapidoDarkGray, CircleShape)
+                            .clickable { onDismiss() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Close, "Close", tint = RapidoWhite, modifier = Modifier.size(24.dp))
+                    }
+                    
+                    // Timer - Yellow text on dark
+                    Row(
+                        modifier = Modifier
+                            .background(RapidoYellow, RoundedCornerShape(20.dp))
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Timer,
+                            contentDescription = null,
+                            tint = RapidoBlack,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            formatTime(remainingSeconds),
+                            color = RapidoBlack,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 18.sp
+                        )
+                    }
+                    
+                    // Directions button - Opens Google Maps
+                    Box(
+                        modifier = Modifier
+                            .background(RapidoBlue, RoundedCornerShape(12.dp))
+                            .clickable {
+                                val pickup = broadcast.pickupLocation
+                                val drop = broadcast.dropLocation
+                                val uri = Uri.parse("https://www.google.com/maps/dir/?api=1&origin=${pickup.latitude},${pickup.longitude}&destination=${drop.latitude},${drop.longitude}&travelmode=driving")
+                                context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Navigation, null, tint = RapidoWhite, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("DIRECTIONS", color = RapidoWhite, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    }
+                }
+                
+                Spacer(Modifier.height(16.dp))
+                
+                // Title
+                Text(
+                    "NEW BOOKING",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Black,
+                    color = RapidoYellow,
+                    letterSpacing = 2.sp
+                )
+                
+                // Navigation (if multiple broadcasts) - Smooth animated carousel
+                if (showNavigation) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .background(RapidoDarkGray.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        // Previous button with ripple effect
+                        IconButton(
+                            onClick = onPrevious,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(RapidoGray.copy(alpha = 0.3f), CircleShape)
+                        ) {
+                            Icon(
+                                Icons.Default.ChevronLeft,
+                                "Previous",
+                                tint = RapidoYellow,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        
+                        Spacer(Modifier.width(8.dp))
+                        
+                        // Page indicator dots
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            repeat(minOf(totalCount, 5)) { index ->
+                                val actualIndex = if (totalCount <= 5) index else {
+                                    // Show dots around current index for large counts
+                                    when {
+                                        currentIndex < 2 -> index
+                                        currentIndex > totalCount - 3 -> totalCount - 5 + index
+                                        else -> currentIndex - 2 + index
+                                    }
+                                }
+                                val isActive = actualIndex == currentIndex
+                                
+                                // Animated dot
+                                val dotSize by animateDpAsState(
+                                    targetValue = if (isActive) 10.dp else 6.dp,
+                                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                                    label = "dotSize"
+                                )
+                                val dotColor by animateColorAsState(
+                                    targetValue = if (isActive) RapidoYellow else RapidoMediumGray,
+                                    animationSpec = tween(200),
+                                    label = "dotColor"
+                                )
+                                
+                                Box(
+                                    modifier = Modifier
+                                        .size(dotSize)
+                                        .background(dotColor, CircleShape)
+                                )
+                            }
+                        }
+                        
+                        Spacer(Modifier.width(8.dp))
+                        
+                        // Counter text
+                        Text(
+                            "${currentIndex + 1}/$totalCount",
+                            color = RapidoLightGray,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        
+                        Spacer(Modifier.width(8.dp))
+                        
+                        // Next button with ripple effect
+                        IconButton(
+                            onClick = onNext,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(RapidoGray.copy(alpha = 0.3f), CircleShape)
+                        ) {
+                            Icon(
+                                Icons.Default.ChevronRight,
+                                "Next",
+                                tint = RapidoYellow,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // ============== MAIN CONTENT - SMOOTH SCROLLING ==============
+            // Industry-style smooth scrolling like Rapido/Uber
+            val listState = rememberLazyListState()
+            
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(RapidoDarkGray, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                // Smooth fling behavior for industry-style scrolling
+                flingBehavior = ScrollableDefaults.flingBehavior()
+            ) {
+                // ========== ORDER INFO ==========
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                "#${broadcast.broadcastId.takeLast(6).uppercase()}",
+                                fontSize = 11.sp,
+                                color = RapidoMediumGray,
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                broadcast.customerName,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = RapidoWhite
+                            )
+                        }
+                        
+                        // Total Fare
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("TOTAL FARE", fontSize = 10.sp, color = RapidoMediumGray)
+                            Text(
+                                "₹${"%,.0f".format(broadcast.totalFare)}",
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Black,
+                                color = RapidoYellow
+                            )
+                        }
+                    }
+                }
+                
+                // ========== ROUTE (Compact) ==========
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(RapidoBlack, RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                    ) {
+                        // Pickup
+                        Row(verticalAlignment = Alignment.Top) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .background(RapidoGreen, CircleShape)
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("PICKUP", fontSize = 9.sp, color = RapidoGreen, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                Text(
+                                    broadcast.pickupLocation.address,
+                                    fontSize = 13.sp,
+                                    color = RapidoWhite,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        
+                        // Connector line
+                        Box(
+                            modifier = Modifier
+                                .padding(start = 4.dp)
+                                .width(2.dp)
+                                .height(20.dp)
+                                .background(RapidoGray)
+                        )
+                        
+                        // Drop
+                        Row(verticalAlignment = Alignment.Top) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .background(RapidoRed, CircleShape)
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("DROP", fontSize = 9.sp, color = RapidoRed, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                Text(
+                                    broadcast.dropLocation.address,
+                                    fontSize = 13.sp,
+                                    color = RapidoWhite,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        
+                        // Distance
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            Text(
+                                "${broadcast.distance} KM",
+                                fontSize = 12.sp,
+                                color = RapidoYellow,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+                
+                // ========== TRUCK TYPES - Per-Truck Accept/Reject ==========
+                item {
+                    Text(
+                        "SELECT TRUCKS TO PROVIDE",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = RapidoMediumGray,
+                        letterSpacing = 1.sp,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                    )
+                }
+                
+                // Truck cards
+                val vehicles = if (broadcast.requestedVehicles.isNotEmpty()) {
+                    broadcast.requestedVehicles
+                } else {
+                    @Suppress("DEPRECATION")
+                    listOf(RequestedVehicle(
+                        vehicleType = broadcast.vehicleType?.name ?: "Truck",
+                        vehicleSubtype = "",
+                        count = broadcast.totalTrucksNeeded,
+                        filledCount = broadcast.trucksFilledSoFar,
+                        farePerTruck = broadcast.farePerTruck,
+                        capacityTons = 0.0
+                    ))
+                }
+                
+                items(vehicles) { vehicle ->
+                    val key = "${vehicle.vehicleType}|${vehicle.vehicleSubtype}"
+                    val holdState = truckHoldStates[key]
+                    val maxQty = minOf(
+                        broadcast.trucksYouCanProvide.takeIf { it > 0 } ?: vehicle.remainingCount,
+                        vehicle.remainingCount
+                    ).coerceAtLeast(1)
+                    
+                    TruckTypeCardNew(
+                        vehicle = vehicle,
+                        maxQuantity = maxQty,
+                        holdState = holdState,
+                        onAccept = { qty -> onAcceptTruck(vehicle.vehicleType, vehicle.vehicleSubtype, qty) },
+                        onReject = { onRejectTruck(vehicle.vehicleType, vehicle.vehicleSubtype) }
+                    )
+                }
+            }
+            
+            // ============== SUBMIT BUTTON - Fixed at bottom ==============
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(RapidoBlack)
+                    .padding(16.dp)
+            ) {
+                Button(
+                    onClick = onSubmit,
+                    enabled = isSubmitEnabled && !hasAnyHolding,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isSubmitEnabled) RapidoYellow else RapidoGray,
+                        contentColor = RapidoBlack,
+                        disabledContainerColor = RapidoGray,
+                        disabledContentColor = RapidoMediumGray
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (hasAnyHolding) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = RapidoBlack,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("HOLDING...", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                    } else if (isSubmitEnabled) {
+                        Icon(Icons.Default.Check, null, modifier = Modifier.size(24.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "SUBMIT ($totalAcceptedQuantity TRUCK${if (totalAcceptedQuantity > 1) "S" else ""})",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 16.sp,
+                            letterSpacing = 1.sp
+                        )
+                    } else {
+                        Text(
+                            "SELECT TRUCKS TO CONTINUE",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = RapidoMediumGray
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * =============================================================================
+ * NEW TRUCK TYPE CARD - Dark Theme with Hold States
+ * =============================================================================
+ */
+@Composable
+private fun TruckTypeCardNew(
     vehicle: RequestedVehicle,
+    maxQuantity: Int,
+    holdState: TruckHoldState?,
     onAccept: (quantity: Int) -> Unit,
     onReject: () -> Unit
 ) {
     var selectedQuantity by remember { mutableStateOf(1) }
-    val showQuantitySelector = vehicle.remainingCount > 1
     
-    LaunchedEffect(vehicle.remainingCount) {
-        if (selectedQuantity > vehicle.remainingCount) {
-            selectedQuantity = vehicle.remainingCount.coerceAtLeast(1)
+    val isRejected = holdState?.status == TruckHoldStatus.REJECTED
+    val isAccepted = holdState?.status == TruckHoldStatus.ACCEPTED
+    val isHolding = holdState?.isHolding == true
+    val isFailed = holdState?.status == TruckHoldStatus.FAILED
+    @Suppress("UNUSED_VARIABLE")
+    val isPending = holdState == null || holdState.status == TruckHoldStatus.PENDING && !isHolding
+    
+    // Card opacity for rejected state
+    val cardAlpha = if (isRejected) 0.4f else 1f
+    
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(cardAlpha)
+            .background(
+                when {
+                    isAccepted -> RapidoGreen.copy(alpha = 0.15f)
+                    isFailed -> RapidoRed.copy(alpha = 0.15f)
+                    else -> RapidoBlack
+                },
+                RoundedCornerShape(12.dp)
+            )
+            .border(
+                width = if (isAccepted) 2.dp else 1.dp,
+                color = when {
+                    isAccepted -> RapidoGreen
+                    isFailed -> RapidoRed
+                    else -> RapidoGray
+                },
+                shape = RoundedCornerShape(12.dp)
+            )
+            .padding(16.dp)
+    ) {
+        // Header: Vehicle Type & Fare
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.LocalShipping,
+                        null,
+                        tint = if (isAccepted) RapidoGreen else RapidoYellow,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        vehicle.vehicleType.uppercase(),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Black,
+                        color = RapidoWhite
+                    )
+                }
+                if (vehicle.vehicleSubtype.isNotBlank()) {
+                    Text(
+                        vehicle.vehicleSubtype,
+                        fontSize = 12.sp,
+                        color = RapidoLightGray,
+                        modifier = Modifier.padding(start = 28.dp)
+                    )
+                }
+            }
+            
+            // Fare per truck
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    "₹${"%,.0f".format(vehicle.farePerTruck)}",
+                    fontWeight = FontWeight.Black,
+                    color = RapidoYellow,
+                    fontSize = 18.sp
+                )
+                Text("/truck", fontSize = 10.sp, color = RapidoMediumGray)
+            }
+        }
+        
+        Spacer(Modifier.height(12.dp))
+        
+        // Status badge or controls
+        if (isRejected) {
+            // Rejected state
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(RapidoRed.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                    .padding(12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("SKIPPED", color = RapidoRed, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            }
+        } else if (isAccepted) {
+            // Accepted state
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(RapidoGreen.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                    .padding(12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.CheckCircle, null, tint = RapidoGreen, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "${holdState?.quantity ?: 1} TRUCK${if ((holdState?.quantity ?: 1) > 1) "S" else ""} HELD",
+                        color = RapidoGreen,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                    )
+                }
+            }
+        } else if (isFailed) {
+            // Failed state - allow retry
+            Column {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(RapidoRed.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                        .padding(12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("HOLD FAILED - TRY AGAIN", color = RapidoRed, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+                Spacer(Modifier.height(8.dp))
+                // Show controls again for retry
+                TruckControlsRow(
+                    selectedQuantity = selectedQuantity,
+                    maxQuantity = maxQuantity,
+                    isHolding = false,
+                    onQuantityChange = { selectedQuantity = it },
+                    onAccept = { onAccept(selectedQuantity) },
+                    onReject = onReject
+                )
+            }
+        } else {
+            // Pending state - show controls
+            TruckControlsRow(
+                selectedQuantity = selectedQuantity,
+                maxQuantity = maxQuantity,
+                isHolding = isHolding,
+                onQuantityChange = { selectedQuantity = it },
+                onAccept = { onAccept(selectedQuantity) },
+                onReject = onReject
+            )
+        }
+        
+        // Total fare if multiple
+        if (!isRejected && !isAccepted && selectedQuantity > 1) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "TOTAL: ₹${"%,.0f".format(vehicle.farePerTruck * selectedQuantity)}",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = RapidoYellow,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.End
+            )
+        }
+    }
+}
+
+/**
+ * Truck Controls Row - Quantity selector + Accept/Reject buttons
+ */
+@Composable
+private fun TruckControlsRow(
+    selectedQuantity: Int,
+    maxQuantity: Int,
+    isHolding: Boolean,
+    onQuantityChange: (Int) -> Unit,
+    onAccept: () -> Unit,
+    onReject: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Quantity Selector
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .background(RapidoDarkGray, RoundedCornerShape(8.dp))
+                .border(1.dp, RapidoGray, RoundedCornerShape(8.dp))
+                .padding(4.dp)
+        ) {
+            // Minus button
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(
+                        if (selectedQuantity > 1) RapidoYellow else RapidoGray,
+                        RoundedCornerShape(6.dp)
+                    )
+                    .clickable(enabled = selectedQuantity > 1 && !isHolding) { 
+                        onQuantityChange(selectedQuantity - 1) 
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "−",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (selectedQuantity > 1) RapidoBlack else RapidoMediumGray
+                )
+            }
+            
+            // Quantity display
+            Text(
+                "$selectedQuantity",
+                modifier = Modifier.padding(horizontal = 20.dp),
+                fontWeight = FontWeight.Black,
+                fontSize = 20.sp,
+                color = RapidoWhite
+            )
+            
+            // Plus button
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(
+                        if (selectedQuantity < maxQuantity) RapidoYellow else RapidoGray,
+                        RoundedCornerShape(6.dp)
+                    )
+                    .clickable(enabled = selectedQuantity < maxQuantity && !isHolding) { 
+                        onQuantityChange(selectedQuantity + 1) 
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "+",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (selectedQuantity < maxQuantity) RapidoBlack else RapidoMediumGray
+                )
+            }
+        }
+        
+        // Buttons
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Reject/Skip button
+            Box(
+                modifier = Modifier
+                    .border(2.dp, RapidoRed, RoundedCornerShape(8.dp))
+                    .clickable(enabled = !isHolding) { onReject() }
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                Text(
+                    "SKIP",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    color = RapidoRed,
+                    letterSpacing = 1.sp
+                )
+            }
+            
+            // Accept button
+            Box(
+                modifier = Modifier
+                    .background(
+                        if (isHolding) RapidoGray else RapidoYellow,
+                        RoundedCornerShape(8.dp)
+                    )
+                    .clickable(enabled = !isHolding) { onAccept() }
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                if (isHolding) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            color = RapidoWhite,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("HOLD", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = RapidoWhite)
+                    }
+                } else {
+                    Text(
+                        "ACCEPT",
+                        fontWeight = FontWeight.Black,
+                        fontSize = 12.sp,
+                        color = RapidoBlack,
+                        letterSpacing = 1.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * TRUCK TYPE CARD - Rapido Style with Personalized Quantity (Legacy)
+ * Yellow & Black, Clean and Bold
+ * 
+ * PERSONALIZED:
+ * - maxQuantity is MIN(transporterAvailable, trucksStillNeeded)
+ * - Each transporter sees their capacity, not the total order
+ */
+@Composable
+@Suppress("UNUSED_PARAMETER")
+private fun TruckTypeCard(
+    vehicle: RequestedVehicle,
+    trucksYouCanProvide: Int = 0,  // Personalized max from backend
+    yourAvailableTrucks: Int = 0,  // How many trucks transporter has
+    onAccept: (quantity: Int) -> Unit,
+    onReject: () -> Unit
+) {
+    var selectedQuantity by remember { mutableStateOf(1) }
+    
+    // Use personalized max if available, otherwise fall back to remainingCount
+    val maxQuantity = if (trucksYouCanProvide > 0) {
+        trucksYouCanProvide
+    } else {
+        vehicle.remainingCount
+    }
+    
+    LaunchedEffect(maxQuantity) {
+        if (selectedQuantity > maxQuantity) {
+            selectedQuantity = maxQuantity.coerceAtLeast(1)
         }
     }
     
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = White),
-        elevation = CardDefaults.cardElevation(2.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(RapidoLightGray, RoundedCornerShape(12.dp))
+            .padding(16.dp)
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            // Row 1: Truck Icon + Type + Count Badge
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Truck Icon
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .background(Primary.copy(alpha = 0.1f), RoundedCornerShape(10.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Default.LocalShipping, null, tint = Primary, modifier = Modifier.size(24.dp))
-                }
-                
-                Spacer(Modifier.width(10.dp))
-                
-                // Type & Subtype
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        vehicle.vehicleType.uppercase(),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    if (vehicle.vehicleSubtype.isNotBlank()) {
-                        Text(
-                            vehicle.vehicleSubtype,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary,
-                            maxLines = 1
-                        )
-                    }
-                }
-                
-                // Count + Fare
-                Column(horizontalAlignment = Alignment.End) {
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = Success.copy(alpha = 0.15f)
-                    ) {
-                        Text(
-                            "${vehicle.remainingCount}x",
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = Success
-                        )
-                    }
-                    Text(
-                        "₹${String.format("%,.0f", vehicle.farePerTruck)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Primary,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-            
-            Spacer(Modifier.height(10.dp))
-            
-            // Row 2: Quantity (if > 1 available) + Actions
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Quantity Selector - Only show if more than 1 available
-                if (showQuantitySelector) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .background(Surface, RoundedCornerShape(6.dp))
-                            .border(1.dp, Divider, RoundedCornerShape(6.dp))
-                            .padding(2.dp)
-                    ) {
-                        IconButton(
-                            onClick = { if (selectedQuantity > 1) selectedQuantity-- },
-                            modifier = Modifier.size(28.dp),
-                            enabled = selectedQuantity > 1
-                        ) {
-                            Icon(
-                                Icons.Default.Remove, 
-                                "Decrease", 
-                                tint = if (selectedQuantity > 1) Primary else TextDisabled,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                        
-                        Text(
-                            selectedQuantity.toString(),
-                            modifier = Modifier.widthIn(min = 28.dp),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center
-                        )
-                        
-                        IconButton(
-                            onClick = { if (selectedQuantity < vehicle.remainingCount) selectedQuantity++ },
-                            modifier = Modifier.size(28.dp),
-                            enabled = selectedQuantity < vehicle.remainingCount
-                        ) {
-                            Icon(
-                                Icons.Default.Add, 
-                                "Increase", 
-                                tint = if (selectedQuantity < vehicle.remainingCount) Primary else TextDisabled,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                } else {
-                    // Just show "1 truck" text when only 1 available
-                    Text(
-                        "1 truck",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-                }
-                
-                // Action Buttons
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(
-                        onClick = onReject,
-                        shape = RoundedCornerShape(6.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Error.copy(alpha = 0.5f)),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        modifier = Modifier.height(36.dp)
-                    ) {
-                        Text("REJECT", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                    }
-                    
-                    Button(
-                        onClick = { onAccept(selectedQuantity) },
-                        shape = RoundedCornerShape(6.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Success),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        modifier = Modifier.height(36.dp)
-                    ) {
-                        Text(
-                            if (showQuantitySelector) "ACCEPT $selectedQuantity" else "ACCEPT",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-            
-            // Total earnings if multiple selected
-            if (selectedQuantity > 1) {
-                Spacer(Modifier.height(6.dp))
+        // Header: Vehicle Type & Fare
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
                 Text(
-                    "Total: ₹${String.format("%,.0f", vehicle.farePerTruck * selectedQuantity)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Success,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.End
+                    vehicle.vehicleType.uppercase(),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Black,
+                    color = RapidoBlack
+                )
+                if (vehicle.vehicleSubtype.isNotBlank()) {
+                    Text(
+                        vehicle.vehicleSubtype,
+                        fontSize = 12.sp,
+                        color = RapidoGray
+                    )
+                }
+            }
+            
+            Box(
+                modifier = Modifier
+                    .background(RapidoYellow, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    "₹${String.format("%,.0f", vehicle.farePerTruck)}",
+                    fontWeight = FontWeight.Black,
+                    color = RapidoBlack,
+                    fontSize = 16.sp
                 )
             }
+        }
+        
+        Spacer(Modifier.height(8.dp))
+        
+        // Available badge
+        Text(
+            "$maxQuantity AVAILABLE",
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = RapidoGray,
+            letterSpacing = 1.sp
+        )
+        
+        Spacer(Modifier.height(16.dp))
+        
+        // Bottom Row: Quantity | Buttons
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Quantity Selector
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .background(RapidoWhite, RoundedCornerShape(8.dp))
+                    .border(1.dp, RapidoBlack.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                    .padding(4.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(
+                            if (selectedQuantity > 1) RapidoYellow else RapidoLightGray,
+                            RoundedCornerShape(6.dp)
+                        )
+                        .clickable { if (selectedQuantity > 1) selectedQuantity-- },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("-", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = RapidoBlack)
+                }
+                
+                Text(
+                    "$selectedQuantity",
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                    fontWeight = FontWeight.Black,
+                    fontSize = 20.sp,
+                    color = RapidoBlack
+                )
+                
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(
+                            if (selectedQuantity < maxQuantity) RapidoYellow else RapidoLightGray,
+                            RoundedCornerShape(6.dp)
+                        )
+                        .clickable { if (selectedQuantity < maxQuantity) selectedQuantity++ },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("+", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = RapidoBlack)
+                }
+            }
+            
+            // Buttons
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Skip - Outlined
+                Box(
+                    modifier = Modifier
+                        .border(2.dp, RapidoBlack, RoundedCornerShape(8.dp))
+                        .clickable { onReject() }
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                ) {
+                    Text(
+                        "SKIP",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        color = RapidoBlack,
+                        letterSpacing = 1.sp
+                    )
+                }
+                
+                // Accept - Filled Yellow
+                Box(
+                    modifier = Modifier
+                        .background(RapidoYellow, RoundedCornerShape(8.dp))
+                        .clickable { onAccept(selectedQuantity) }
+                        .padding(horizontal = 20.dp, vertical = 10.dp)
+                ) {
+                    Text(
+                        "ACCEPT",
+                        fontWeight = FontWeight.Black,
+                        fontSize = 12.sp,
+                        color = RapidoBlack,
+                        letterSpacing = 1.sp
+                    )
+                }
+            }
+        }
+        
+        // Total if multiple selected
+        if (selectedQuantity > 1) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "TOTAL: ₹${String.format("%,.0f", vehicle.farePerTruck * selectedQuantity)}",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = RapidoBlack,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.End
+            )
         }
     }
 }
@@ -756,6 +1872,144 @@ private fun LegacySingleTruckCard(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * =============================================================================
+ * EMBEDDED ROUTE MAP - Shows route with markers
+ * =============================================================================
+ * 
+ * Displays a small Google Map showing:
+ * - Pickup marker (green)
+ * - Drop marker (red)
+ * - Intermediate stops (yellow)
+ * - Polyline connecting all points
+ * 
+ * Map auto-zooms to fit all markers
+ */
+@Composable
+private fun BroadcastRouteMap(
+    broadcast: BroadcastTrip,
+    modifier: Modifier = Modifier
+) {
+    // Build list of LatLng points
+    val points = remember(broadcast) {
+        if (broadcast.routePoints.isNotEmpty()) {
+            broadcast.routePoints.map { LatLng(it.latitude, it.longitude) }
+        } else {
+            listOf(
+                LatLng(broadcast.pickupLocation.latitude, broadcast.pickupLocation.longitude),
+                LatLng(broadcast.dropLocation.latitude, broadcast.dropLocation.longitude)
+            )
+        }
+    }
+    
+    // Calculate bounds to fit all markers
+    val boundsBuilder = remember(points) {
+        LatLngBounds.builder().apply {
+            points.forEach { include(it) }
+        }
+    }
+    
+    // Camera position
+    val cameraPositionState = rememberCameraPositionState {
+        if (points.isNotEmpty()) {
+            position = CameraPosition.fromLatLngZoom(points.first(), 10f)
+        }
+    }
+    
+    // Auto-fit bounds when map loads
+    LaunchedEffect(points) {
+        if (points.size >= 2) {
+            try {
+                val bounds = boundsBuilder.build()
+                cameraPositionState.animate(
+                    CameraUpdateFactory.newLatLngBounds(bounds, 50),
+                    durationMs = 500
+                )
+            } catch (e: Exception) {
+                // Fallback if bounds calculation fails
+            }
+        }
+    }
+    
+    Box(modifier = modifier) {
+        GoogleMap(
+            modifier = Modifier.fillMaxSize(),
+            cameraPositionState = cameraPositionState,
+            properties = MapProperties(
+                mapType = MapType.NORMAL,
+                isMyLocationEnabled = false
+            ),
+            uiSettings = MapUiSettings(
+                zoomControlsEnabled = false,
+                mapToolbarEnabled = false,
+                compassEnabled = false,
+                myLocationButtonEnabled = false,
+                scrollGesturesEnabled = false,
+                zoomGesturesEnabled = false,
+                tiltGesturesEnabled = false,
+                rotationGesturesEnabled = false
+            )
+        ) {
+            // Draw markers for each point
+            if (broadcast.routePoints.isNotEmpty()) {
+                broadcast.routePoints.forEach { point ->
+                    val position = LatLng(point.latitude, point.longitude)
+                    val markerColor = when (point.type) {
+                        RoutePointType.PICKUP -> BitmapDescriptorFactory.HUE_GREEN
+                        RoutePointType.STOP -> BitmapDescriptorFactory.HUE_YELLOW
+                        RoutePointType.DROP -> BitmapDescriptorFactory.HUE_RED
+                    }
+                    
+                    Marker(
+                        state = MarkerState(position = position),
+                        title = point.displayName,
+                        snippet = point.shortAddress,
+                        icon = BitmapDescriptorFactory.defaultMarker(markerColor)
+                    )
+                }
+            } else {
+                // Legacy - just pickup and drop
+                Marker(
+                    state = MarkerState(position = points.first()),
+                    title = "Pickup",
+                    snippet = broadcast.pickupLocation.address,
+                    icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)
+                )
+                Marker(
+                    state = MarkerState(position = points.last()),
+                    title = "Drop",
+                    snippet = broadcast.dropLocation.address,
+                    icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_RED)
+                )
+            }
+            
+            // Draw polyline connecting points
+            if (points.size >= 2) {
+                Polyline(
+                    points = points,
+                    color = RapidoBlack,
+                    width = 8f
+                )
+            }
+        }
+        
+        // Overlay tap hint
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(8.dp)
+                .background(RapidoBlack.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+            Text(
+                "Tap 'Get Directions' for navigation",
+                color = RapidoWhite,
+                fontSize = 10.sp
+            )
         }
     }
 }

@@ -1,10 +1,19 @@
 package com.weelo.logistics.ui.transporter
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -18,8 +27,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.weelo.logistics.data.api.CreateDriverRequest
+import androidx.compose.ui.unit.sp
+import com.weelo.logistics.data.api.InitiateDriverOnboardingRequest
+import com.weelo.logistics.data.api.VerifyDriverOnboardingRequest
+import com.weelo.logistics.data.api.ResendDriverOtpRequest
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.Dispatchers
@@ -28,55 +41,223 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * AddDriverScreen - Clean Modern UI for Driver Registration
+ * =============================================================================
+ * ADD DRIVER SCREEN - Single Page with Inline OTP
+ * =============================================================================
  * 
- * Purpose: Transporter adds new driver to their fleet
+ * REDESIGNED FLOW (All on one page):
+ * 1. Enter driver's phone number
+ * 2. Click "Send OTP" → OTP section appears BELOW phone field
+ * 3. Enter OTP (received on driver's phone)
+ * 4. Click "Verify & Add" → Driver added
  * 
- * Required Fields:
- * 1. Phone Number (10 digits)
- * 2. Full Name
- * 3. License Number
+ * BACKEND ENDPOINTS:
+ * - POST /api/v1/driver-onboarding/initiate (Send OTP to driver's phone)
+ * - POST /api/v1/driver-onboarding/verify (Verify OTP and add driver)
+ * - POST /api/v1/driver-onboarding/resend (Resend OTP)
  * 
- * Backend Endpoint: POST /api/v1/driver/create
+ * KEY UX IMPROVEMENTS:
+ * - No page navigation for OTP (inline experience)
+ * - Clear indication that OTP goes to DRIVER's phone
+ * - Proper input field widths for portrait mode
+ * - Auto-verify when 6 digits entered
+ * 
+ * =============================================================================
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddDriverScreen(
-    transporterId: String,
+    @Suppress("UNUSED_PARAMETER") transporterId: String, // Reserved for future use
     onNavigateBack: () -> Unit,
     onDriverAdded: () -> Unit
 ) {
-    // Form state
+    // ==========================================================================
+    // STATE
+    // ==========================================================================
+    
+    // Form fields
     var phoneNumber by remember { mutableStateOf("") }
     var fullName by remember { mutableStateOf("") }
     var licenseNumber by remember { mutableStateOf("") }
     
+    // OTP state
+    var otpCode by remember { mutableStateOf("") }
+    var isOtpSent by remember { mutableStateOf(false) }
+    var isPhoneVerified by remember { mutableStateOf(false) }
+    
     // UI state
+    @Suppress("UNUSED_VARIABLE")
+    var isLoading by remember { mutableStateOf(false) } // Reserved for future full-form loading
+    var isSendingOtp by remember { mutableStateOf(false) }
+    var isVerifyingOtp by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var isLoading by remember { mutableStateOf(false) }
+    var successMessage by remember { mutableStateOf<String?>(null) }
+    
+    // Resend OTP timer
+    var canResendOtp by remember { mutableStateOf(false) }
+    var resendCountdown by remember { mutableStateOf(30) }
+    
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     
-    // Validation
-    val isFormValid = phoneNumber.length == 10 && fullName.isNotBlank() && licenseNumber.isNotBlank()
+    // ==========================================================================
+    // COUNTDOWN TIMER FOR RESEND OTP
+    // ==========================================================================
+    LaunchedEffect(isOtpSent) {
+        if (isOtpSent && !isPhoneVerified) {
+            canResendOtp = false
+            resendCountdown = 30
+            while (resendCountdown > 0) {
+                delay(1000)
+                resendCountdown--
+            }
+            canResendOtp = true
+        }
+    }
     
+    // ==========================================================================
+    // AUTO-VERIFY WHEN 6 DIGITS ENTERED
+    // ==========================================================================
+    LaunchedEffect(otpCode) {
+        if (otpCode.length == 6 && isOtpSent && !isVerifyingOtp && !isPhoneVerified) {
+            isVerifyingOtp = true
+            errorMessage = null
+            
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.driverApi.verifyDriverOnboarding(
+                        VerifyDriverOnboardingRequest(phone = phoneNumber, otp = otpCode)
+                    )
+                }
+                
+                if (response.isSuccessful && response.body()?.success == true) {
+                    isPhoneVerified = true
+                    successMessage = "Phone verified! Complete the form to add driver."
+                    snackbarHostState.showSnackbar("Driver added successfully!")
+                    delay(500)
+                    onDriverAdded()
+                } else {
+                    errorMessage = response.body()?.error?.message ?: "Invalid OTP"
+                    otpCode = ""
+                }
+            } catch (e: Exception) {
+                errorMessage = "Network error: ${e.message}"
+                otpCode = ""
+            } finally {
+                isVerifyingOtp = false
+            }
+        }
+    }
+    
+    // Validation
+    val isPhoneValid = phoneNumber.length == 10
+    val isFormComplete = isPhoneValid && fullName.isNotBlank() && licenseNumber.isNotBlank()
+    
+    // ==========================================================================
+    // SEND OTP FUNCTION
+    // ==========================================================================
+    fun sendOtp() {
+        if (!isPhoneValid) {
+            errorMessage = "Enter valid 10-digit phone number"
+            return
+        }
+        if (fullName.isBlank()) {
+            errorMessage = "Enter driver's name"
+            return
+        }
+        if (licenseNumber.isBlank()) {
+            errorMessage = "Enter license number"
+            return
+        }
+        
+        isSendingOtp = true
+        errorMessage = null
+        
+        scope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.driverApi.initiateDriverOnboarding(
+                        InitiateDriverOnboardingRequest(
+                            phone = phoneNumber,
+                            name = fullName.trim(),
+                            licenseNumber = licenseNumber.trim(),
+                            licensePhoto = null
+                        )
+                    )
+                }
+                
+                if (response.isSuccessful && response.body()?.success == true) {
+                    isOtpSent = true
+                    successMessage = "OTP sent to driver's phone"
+                    snackbarHostState.showSnackbar("OTP sent to driver's phone!")
+                } else {
+                    errorMessage = when (response.code()) {
+                        401 -> "Session expired. Please login again."
+                        403 -> "Permission denied"
+                        409 -> response.body()?.error?.message ?: "Driver already exists"
+                        else -> response.body()?.error?.message ?: "Failed to send OTP"
+                    }
+                }
+            } catch (e: Exception) {
+                errorMessage = "Network error: ${e.message}"
+            } finally {
+                isSendingOtp = false
+            }
+        }
+    }
+    
+    // ==========================================================================
+    // RESEND OTP FUNCTION
+    // ==========================================================================
+    fun resendOtp() {
+        if (!canResendOtp) return
+        
+        isSendingOtp = true
+        errorMessage = null
+        otpCode = ""
+        
+        scope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.driverApi.resendDriverOnboardingOtp(
+                        ResendDriverOtpRequest(phone = phoneNumber)
+                    )
+                }
+                
+                if (response.isSuccessful && response.body()?.success == true) {
+                    canResendOtp = false
+                    resendCountdown = 30
+                    snackbarHostState.showSnackbar("OTP resent!")
+                    // Restart countdown
+                    while (resendCountdown > 0) {
+                        delay(1000)
+                        resendCountdown--
+                    }
+                    canResendOtp = true
+                } else {
+                    errorMessage = response.body()?.error?.message ?: "Failed to resend"
+                }
+            } catch (e: Exception) {
+                errorMessage = "Network error"
+            } finally {
+                isSendingOtp = false
+            }
+        }
+    }
+    
+    // ==========================================================================
+    // UI
+    // ==========================================================================
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { 
-                    Text(
-                        "Add Driver",
-                        fontWeight = FontWeight.SemiBold
-                    )
-                },
+                title = { Text("Add Driver", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.White
-                )
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -87,12 +268,12 @@ fun AddDriverScreen(
                 .padding(padding)
                 .background(Surface)
                 .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Header Card
+            // ==================== HEADER ====================
             Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
+                modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.White),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -103,10 +284,9 @@ fun AddDriverScreen(
                         .padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // Avatar Icon
                     Box(
                         modifier = Modifier
-                            .size(80.dp)
+                            .size(72.dp)
                             .clip(CircleShape)
                             .background(Primary.copy(alpha = 0.1f)),
                         contentAlignment = Alignment.Center
@@ -114,12 +294,12 @@ fun AddDriverScreen(
                         Icon(
                             imageVector = Icons.Default.PersonAdd,
                             contentDescription = null,
-                            modifier = Modifier.size(40.dp),
+                            modifier = Modifier.size(36.dp),
                             tint = Primary
                         )
                     }
                     
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
                     
                     Text(
                         text = "Add New Driver",
@@ -129,19 +309,17 @@ fun AddDriverScreen(
                     )
                     
                     Text(
-                        text = "Fill in the details to add a driver to your fleet",
+                        text = "OTP will be sent to driver's phone",
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary,
-                        modifier = Modifier.padding(top = 4.dp)
+                        textAlign = TextAlign.Center
                     )
                 }
             }
             
-            // Form Card
+            // ==================== FORM CARD ====================
             Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.White),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -150,9 +328,8 @@ fun AddDriverScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
-                    // Section Header
                     Text(
                         text = "Driver Information",
                         style = MaterialTheme.typography.titleMedium,
@@ -160,39 +337,222 @@ fun AddDriverScreen(
                         color = TextPrimary
                     )
                     
-                    // Phone Number
-                    CleanTextField(
-                        value = phoneNumber,
-                        onValueChange = { 
-                            if (it.length <= 10 && it.all { char -> char.isDigit() }) {
-                                phoneNumber = it
-                                errorMessage = null
+                    // ==================== PHONE NUMBER FIELD ====================
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FormTextField(
+                            value = phoneNumber,
+                            onValueChange = { 
+                                if (it.length <= 10 && it.all { c -> c.isDigit() }) {
+                                    phoneNumber = it
+                                    errorMessage = null
+                                    // Reset OTP if phone changed
+                                    if (isOtpSent) {
+                                        isOtpSent = false
+                                        otpCode = ""
+                                        isPhoneVerified = false
+                                    }
+                                }
+                            },
+                            label = "Phone Number",
+                            placeholder = "10-digit mobile number",
+                            leadingIcon = Icons.Default.Phone,
+                            keyboardType = KeyboardType.Phone,
+                            isRequired = true,
+                            enabled = !isOtpSent,
+                            trailingContent = {
+                                if (isPhoneVerified) {
+                                    Icon(
+                                        Icons.Default.CheckCircle,
+                                        contentDescription = "Verified",
+                                        tint = Success,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
                             }
-                        },
-                        label = "Phone Number",
-                        placeholder = "Enter 10-digit phone number",
-                        leadingIcon = Icons.Default.Phone,
-                        keyboardType = KeyboardType.Phone,
-                        isRequired = true,
-                        isError = errorMessage?.contains("Phone") == true
-                    )
+                        )
+                        
+                        // ==================== INLINE OTP SECTION ====================
+                        AnimatedVisibility(
+                            visible = isOtpSent && !isPhoneVerified,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = Primary.copy(alpha = 0.05f)
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Sms,
+                                            contentDescription = null,
+                                            tint = Primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = "Enter OTP sent to driver",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Medium,
+                                            color = Primary
+                                        )
+                                    }
+                                    
+                                    // 6-Digit OTP Input
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            repeat(6) { index ->
+                                                OtpDigitBox(
+                                                    digit = otpCode.getOrNull(index)?.toString() ?: "",
+                                                    isFilled = index < otpCode.length,
+                                                    isActive = index == otpCode.length,
+                                                    hasError = errorMessage != null
+                                                )
+                                            }
+                                        }
+                                        
+                                        // Invisible input field
+                                        BasicTextField(
+                                            value = otpCode,
+                                            onValueChange = { newValue ->
+                                                if (newValue.length <= 6 && newValue.all { it.isDigit() }) {
+                                                    otpCode = newValue
+                                                    errorMessage = null
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .matchParentSize()
+                                                .padding(horizontal = 20.dp),
+                                            keyboardOptions = KeyboardOptions(
+                                                keyboardType = KeyboardType.NumberPassword
+                                            ),
+                                            enabled = !isVerifyingOtp,
+                                            decorationBox = { Box(Modifier.fillMaxSize()) }
+                                        )
+                                    }
+                                    
+                                    // Verifying indicator
+                                    if (isVerifyingOtp) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.Center
+                                        ) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                strokeWidth = 2.dp,
+                                                color = Primary
+                                            )
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                "Verifying...",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Primary
+                                            )
+                                        }
+                                    }
+                                    
+                                    // Resend OTP
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Didn't receive? ",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = TextSecondary
+                                        )
+                                        
+                                        if (canResendOtp) {
+                                            TextButton(
+                                                onClick = { resendOtp() },
+                                                contentPadding = PaddingValues(horizontal = 4.dp)
+                                            ) {
+                                                Text(
+                                                    "Resend OTP",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Primary
+                                                )
+                                            }
+                                        } else {
+                                            Text(
+                                                text = "Resend in ${resendCountdown}s",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = TextDisabled
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Send OTP Button (shown when OTP not sent)
+                        AnimatedVisibility(
+                            visible = !isOtpSent && isFormComplete,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            Button(
+                                onClick = { sendOtp() },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Primary),
+                                enabled = !isSendingOtp
+                            ) {
+                                if (isSendingOtp) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        color = Color.White,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Sending...", fontWeight = FontWeight.Medium)
+                                } else {
+                                    Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Send OTP to Driver", fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+                    }
                     
-                    // Full Name
-                    CleanTextField(
+                    Divider(color = TextDisabled.copy(alpha = 0.2f))
+                    
+                    // ==================== NAME FIELD ====================
+                    FormTextField(
                         value = fullName,
                         onValueChange = { 
                             fullName = it
                             errorMessage = null
                         },
                         label = "Full Name",
-                        placeholder = "Enter driver's full name",
+                        placeholder = "Driver's full name",
                         leadingIcon = Icons.Default.Person,
                         isRequired = true,
-                        isError = errorMessage?.contains("Name") == true
+                        enabled = !isOtpSent
                     )
                     
-                    // License Number
-                    CleanTextField(
+                    // ==================== LICENSE FIELD ====================
+                    FormTextField(
                         value = licenseNumber,
                         onValueChange = { 
                             licenseNumber = it.uppercase()
@@ -202,11 +562,11 @@ fun AddDriverScreen(
                         placeholder = "e.g., DL1234567890",
                         leadingIcon = Icons.Default.Badge,
                         isRequired = true,
-                        isError = errorMessage?.contains("License") == true
+                        enabled = !isOtpSent
                     )
                     
-                    // Error Message
-                    if (errorMessage != null) {
+                    // ==================== ERROR MESSAGE ====================
+                    AnimatedVisibility(visible = errorMessage != null) {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = Error.copy(alpha = 0.1f)),
@@ -224,7 +584,7 @@ fun AddDriverScreen(
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    text = errorMessage!!,
+                                    text = errorMessage ?: "",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Error
                                 )
@@ -234,19 +594,15 @@ fun AddDriverScreen(
                 }
             }
             
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            // Info Card
+            // ==================== INFO CARD ====================
             Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = Info.copy(alpha = 0.1f))
             ) {
                 Row(
                     modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.Top
                 ) {
                     Icon(
                         imageVector = Icons.Default.Info,
@@ -255,100 +611,21 @@ fun AddDriverScreen(
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = "The driver can login using their phone number after you add them.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
-                    )
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            // Add Driver Button
-            Button(
-                onClick = {
-                    // Validate
-                    when {
-                        phoneNumber.length != 10 -> {
-                            errorMessage = "Phone number must be 10 digits"
-                        }
-                        fullName.isBlank() -> {
-                            errorMessage = "Name is required"
-                        }
-                        licenseNumber.isBlank() -> {
-                            errorMessage = "License number is required"
-                        }
-                        else -> {
-                            // Make API call
-                            isLoading = true
-                            errorMessage = null
-                            
-                            scope.launch {
-                                try {
-                                    val request = CreateDriverRequest(
-                                        phone = phoneNumber,
-                                        name = fullName.trim(),
-                                        licenseNumber = licenseNumber.trim()
-                                    )
-                                    
-                                    val response = withContext(Dispatchers.IO) {
-                                        RetrofitClient.driverApi.createDriver(request)
-                                    }
-                                    
-                                    isLoading = false
-                                    
-                                    if (response.isSuccessful && response.body()?.success == true) {
-                                        snackbarHostState.showSnackbar(
-                                            message = "Driver added successfully!",
-                                            duration = SnackbarDuration.Short
-                                        )
-                                        delay(500)
-                                        onDriverAdded()
-                                    } else {
-                                        errorMessage = response.body()?.message 
-                                            ?: response.body()?.error?.message 
-                                            ?: "Failed to add driver"
-                                    }
-                                } catch (e: Exception) {
-                                    isLoading = false
-                                    errorMessage = "Network error. Please try again."
-                                }
-                            }
-                        }
+                    Column {
+                        Text(
+                            text = "How it works:",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextPrimary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "1. Fill in driver details\n2. OTP will be sent to driver's phone\n3. Ask driver for the 6-digit code\n4. Enter OTP to verify and add driver",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                            lineHeight = 20.sp
+                        )
                     }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .height(56.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Primary),
-                enabled = isFormValid && !isLoading
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = Color.White,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = "Adding Driver...",
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.PersonAdd,
-                        contentDescription = null
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Add Driver",
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold
-                    )
                 }
             }
             
@@ -357,23 +634,24 @@ fun AddDriverScreen(
     }
 }
 
-/**
- * Clean TextField component for forms
- */
+// =============================================================================
+// FORM TEXT FIELD COMPONENT
+// =============================================================================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CleanTextField(
+private fun FormTextField(
     value: String,
     onValueChange: (String) -> Unit,
     label: String,
     placeholder: String,
     leadingIcon: ImageVector,
+    modifier: Modifier = Modifier,
     keyboardType: KeyboardType = KeyboardType.Text,
     isRequired: Boolean = false,
-    isError: Boolean = false
+    enabled: Boolean = true,
+    trailingContent: @Composable (() -> Unit)? = null
 ) {
-    Column {
-        // Label
+    Column(modifier = modifier) {
         Row {
             Text(
                 text = label,
@@ -392,36 +670,99 @@ private fun CleanTextField(
         
         Spacer(modifier = Modifier.height(8.dp))
         
-        // Text Field
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
             modifier = Modifier.fillMaxWidth(),
             placeholder = {
-                Text(
-                    text = placeholder,
-                    color = TextDisabled
-                )
+                Text(text = placeholder, color = TextDisabled)
             },
             leadingIcon = {
                 Icon(
                     imageVector = leadingIcon,
                     contentDescription = null,
-                    tint = if (isError) Error else TextSecondary
+                    tint = if (enabled) TextSecondary else TextDisabled
                 )
             },
+            trailingIcon = trailingContent,
             singleLine = true,
-            isError = isError,
+            enabled = enabled,
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
             shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = Primary,
                 unfocusedBorderColor = TextDisabled.copy(alpha = 0.3f),
-                errorBorderColor = Error,
+                disabledBorderColor = TextDisabled.copy(alpha = 0.2f),
                 focusedContainerColor = Color.White,
-                unfocusedContainerColor = Surface,
-                errorContainerColor = Error.copy(alpha = 0.05f)
+                unfocusedContainerColor = Color.White,
+                disabledContainerColor = Surface
             )
         )
+    }
+}
+
+// =============================================================================
+// OTP DIGIT BOX COMPONENT
+// =============================================================================
+@Composable
+private fun OtpDigitBox(
+    digit: String,
+    isFilled: Boolean,
+    isActive: Boolean,
+    hasError: Boolean
+) {
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            hasError -> Error
+            isActive -> Primary
+            isFilled -> Success
+            else -> TextDisabled.copy(alpha = 0.3f)
+        },
+        animationSpec = tween(150),
+        label = "borderColor"
+    )
+    
+    val backgroundColor by animateColorAsState(
+        targetValue = when {
+            hasError -> Error.copy(alpha = 0.05f)
+            isFilled -> Success.copy(alpha = 0.05f)
+            isActive -> Primary.copy(alpha = 0.05f)
+            else -> Color.White
+        },
+        animationSpec = tween(150),
+        label = "backgroundColor"
+    )
+    
+    val elevation by animateDpAsState(
+        targetValue = if (isActive) 2.dp else 0.dp,
+        animationSpec = tween(150),
+        label = "elevation"
+    )
+    
+    Card(
+        modifier = Modifier.size(44.dp),
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = backgroundColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = elevation),
+        border = androidx.compose.foundation.BorderStroke(
+            width = if (isActive || isFilled || hasError) 2.dp else 1.dp,
+            color = borderColor
+        )
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = digit,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = when {
+                    hasError -> Error
+                    isFilled -> TextPrimary
+                    else -> TextSecondary
+                }
+            )
+        }
     }
 }

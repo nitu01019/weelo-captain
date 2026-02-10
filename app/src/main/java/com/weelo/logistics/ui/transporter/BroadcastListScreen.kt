@@ -1,6 +1,7 @@
 package com.weelo.logistics.ui.transporter
 
-import android.util.Log
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -28,6 +29,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
+import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.LatLngBounds
+import com.google.maps.android.compose.*
 import com.weelo.logistics.core.notification.BroadcastSoundService
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.remote.RetrofitClient
@@ -39,6 +46,15 @@ import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.Constants
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+// =============================================================================
+// RAPIDO STYLE COLORS
+// =============================================================================
+private val RapidoYellow = Color(0xFFFDD835)
+private val RapidoBlack = Color(0xFF1A1A1A)
+private val RapidoGray = Color(0xFF616161)
+private val RapidoLightGray = Color(0xFFF5F5F5)
+private val RapidoWhite = Color(0xFFFFFFFF)
 
 private const val TAG = "BroadcastListScreen"
 private const val HOLD_DURATION_SECONDS = 15
@@ -93,11 +109,11 @@ fun BroadcastListScreen(
             when (val result = repository.fetchActiveBroadcasts(forceRefresh = forceRefresh)) {
                 is BroadcastResult.Success -> {
                     broadcasts = result.data.broadcasts
-                    Log.d(TAG, "Loaded ${broadcasts.size} broadcasts")
+                    timber.log.Timber.d("Loaded ${broadcasts.size} broadcasts")
                 }
                 is BroadcastResult.Error -> {
                     errorMessage = result.message
-                    Log.e(TAG, "Error: ${result.message}")
+                    timber.log.Timber.e("Error: ${result.message}")
                 }
                 is BroadcastResult.Loading -> { }
             }
@@ -147,7 +163,7 @@ fun BroadcastListScreen(
     // Listen for availability updates
     LaunchedEffect(Unit) {
         SocketIOService.trucksRemainingUpdates.collect { notification ->
-            Log.d(TAG, "Availability update: ${notification.orderId}")
+            timber.log.Timber.d("Availability update: ${notification.orderId}")
             fetchBroadcasts(forceRefresh = true)
         }
     }
@@ -326,7 +342,7 @@ fun BroadcastListScreen(
                                     "${broadcast.broadcastId}|$vehicleType|$vehicleSubtype|$quantity"
                                 )
                             },
-                            onRejectTruck = { vehicleType, vehicleSubtype ->
+                            onRejectTruck = { vehicleType, _ ->
                                 Toast.makeText(context, "Rejected $vehicleType", Toast.LENGTH_SHORT).show()
                             }
                         )
@@ -339,20 +355,24 @@ fun BroadcastListScreen(
 
 /**
  * =============================================================================
- * BROADCAST ORDER CARD - Single card with multiple truck types
+ * BROADCAST ORDER CARD - RAPIDO STYLE
+ * Yellow accents, Bold Black text, Embedded Map
  * =============================================================================
  */
 @Composable
+@Suppress("UNUSED_VARIABLE")
 fun BroadcastOrderCard(
     broadcast: BroadcastTrip,
     onAcceptTruck: (vehicleType: String, vehicleSubtype: String, quantity: Int) -> Unit,
     onRejectTruck: (vehicleType: String, vehicleSubtype: String) -> Unit
 ) {
+    val context = LocalContext.current
+    
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        colors = CardDefaults.cardColors(containerColor = RapidoWhite),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             // ========== URGENT BANNER ==========
@@ -360,25 +380,25 @@ fun BroadcastOrderCard(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Error)
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .background(RapidoYellow)
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("🔥", fontSize = 12.sp)
-                        Spacer(Modifier.width(6.dp))
+                        Text("🔥", fontSize = 14.sp)
+                        Spacer(Modifier.width(8.dp))
                         Text(
-                            "URGENT REQUEST",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = White,
-                            letterSpacing = 1.sp
+                            "URGENT",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black,
+                            color = RapidoBlack,
+                            letterSpacing = 2.sp
                         )
                     }
                 }
             }
             
             Column(modifier = Modifier.padding(16.dp)) {
-                // ========== HEADER: Order ID + Customer ==========
+                // ========== HEADER: Order ID + Fare ==========
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -387,115 +407,129 @@ fun BroadcastOrderCard(
                     Column {
                         Text(
                             "Order #${broadcast.broadcastId.takeLast(8).uppercase()}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = Primary,
-                            fontWeight = FontWeight.SemiBold
+                            fontSize = 12.sp,
+                            color = RapidoGray,
+                            fontWeight = FontWeight.Medium
                         )
-                        Spacer(Modifier.height(2.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Person,
-                                null,
-                                modifier = Modifier.size(14.dp),
-                                tint = TextSecondary
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                broadcast.customerName,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
+                        Text(
+                            broadcast.customerName,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = RapidoBlack
+                        )
                     }
                     
-                    // Total Value Badge
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Success.copy(alpha = 0.1f)
+                    // Fare Badge - Yellow
+                    Box(
+                        modifier = Modifier
+                            .background(RapidoYellow, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
                     ) {
                         Text(
                             "₹${String.format("%,.0f", broadcast.totalFare)}",
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = Success
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Black,
+                            color = RapidoBlack
                         )
                     }
                 }
                 
                 Spacer(Modifier.height(16.dp))
                 
+                // ========== EMBEDDED MAP ==========
+                BroadcastCardMap(
+                    broadcast = broadcast,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(150.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                )
+                
+                Spacer(Modifier.height(12.dp))
+                
                 // ========== ROUTE SECTION ==========
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = Surface
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(RapidoLightGray, RoundedCornerShape(12.dp))
+                        .padding(12.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Route visualization
+                    // Pickup
+                    Row(verticalAlignment = Alignment.Top) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.width(24.dp)
+                            modifier = Modifier.width(20.dp)
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(12.dp)
-                                    .background(Success, CircleShape)
+                                    .size(10.dp)
+                                    .background(RapidoBlack, CircleShape)
                             )
                             Box(
                                 modifier = Modifier
                                     .width(2.dp)
                                     .height(32.dp)
-                                    .background(Divider)
+                                    .background(RapidoBlack.copy(alpha = 0.3f))
                             )
                             Box(
                                 modifier = Modifier
-                                    .size(12.dp)
-                                    .background(Error, CircleShape)
+                                    .size(10.dp)
+                                    .background(RapidoBlack, CircleShape)
                             )
                         }
                         
                         Spacer(Modifier.width(12.dp))
                         
-                        // Locations
+                        // Locations - Rapido style
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
+                                "PICKUP",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = RapidoGray,
+                                letterSpacing = 1.sp
+                            )
+                            Text(
                                 broadcast.pickupLocation.address,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = RapidoBlack,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(Modifier.height(16.dp))
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "DROP",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = RapidoGray,
+                                letterSpacing = 1.sp
+                            )
                             Text(
                                 broadcast.dropLocation.address,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = RapidoBlack,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
                         
-                        // Distance
+                        // Distance - Rapido style
                         Column(
                             horizontalAlignment = Alignment.End,
                             modifier = Modifier.padding(start = 8.dp)
                         ) {
                             Text(
                                 "${broadcast.distance.toInt()} km",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Primary
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Black,
+                                color = RapidoBlack
                             )
                             Text(
                                 "~${broadcast.estimatedDuration} min",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextSecondary
+                                fontSize = 12.sp,
+                                color = RapidoGray
                             )
                         }
                     }
@@ -504,39 +538,23 @@ fun BroadcastOrderCard(
                 Spacer(Modifier.height(12.dp))
                 
                 // Goods Type
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Outlined.Inventory2,
-                        null,
-                        modifier = Modifier.size(16.dp),
-                        tint = TextSecondary
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        "Goods: ${broadcast.goodsType}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-                    broadcast.weight?.let { weight ->
-                        Text(
-                            " • $weight",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary
-                        )
-                    }
-                }
+                Text(
+                    "${broadcast.goodsType}${broadcast.weight?.let { " • $it" } ?: ""}",
+                    fontSize = 12.sp,
+                    color = RapidoGray
+                )
                 
                 Spacer(Modifier.height(16.dp))
-                Divider(color = Divider)
+                Box(Modifier.fillMaxWidth().height(1.dp).background(RapidoLightGray))
                 Spacer(Modifier.height(16.dp))
                 
                 // ========== TRUCKS REQUIRED SECTION ==========
                 Text(
                     "TRUCKS REQUIRED",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = TextSecondary,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.5.sp
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = RapidoBlack,
+                    letterSpacing = 1.sp
                 )
                 
                 Spacer(Modifier.height(12.dp))
@@ -562,12 +580,14 @@ fun BroadcastOrderCard(
                     }
                 } else {
                     // Legacy single type
+                    @Suppress("DEPRECATION")
                     TruckTypeRow(
                         vehicleType = broadcast.vehicleType?.id ?: "truck",
                         vehicleSubtype = broadcast.vehicleType?.name ?: "",
                         available = broadcast.totalRemainingTrucks,
                         farePerTruck = broadcast.farePerTruck,
                         onAccept = { quantity ->
+                            @Suppress("DEPRECATION")
                             onAcceptTruck(
                                 broadcast.vehicleType?.id ?: "truck",
                                 broadcast.vehicleType?.name ?: "",
@@ -575,6 +595,7 @@ fun BroadcastOrderCard(
                             )
                         },
                         onReject = {
+                            @Suppress("DEPRECATION")
                             onRejectTruck(
                                 broadcast.vehicleType?.id ?: "truck",
                                 broadcast.vehicleType?.name ?: ""
@@ -589,7 +610,8 @@ fun BroadcastOrderCard(
 
 /**
  * =============================================================================
- * TRUCK TYPE ROW - Single truck type with quantity selector
+ * TRUCK TYPE ROW - RAPIDO STYLE
+ * Yellow accents, Bold Black text
  * =============================================================================
  */
 @Composable
@@ -610,169 +632,259 @@ fun TruckTypeRow(
         }
     }
     
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = Primary.copy(alpha = 0.04f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Primary.copy(alpha = 0.15f))
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(RapidoLightGray, RoundedCornerShape(12.dp))
+            .padding(12.dp)
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            // Row 1: Truck info + Available count
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Truck Icon
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .background(Primary.copy(alpha = 0.1f), RoundedCornerShape(10.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.LocalShipping,
-                            null,
-                            tint = Primary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                    
-                    Spacer(Modifier.width(12.dp))
-                    
-                    Column {
-                        Text(
-                            vehicleType.uppercase(),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary
-                        )
-                        if (vehicleSubtype.isNotBlank()) {
-                            Text(
-                                vehicleSubtype,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextSecondary
-                            )
-                        }
-                    }
+        // Row 1: Truck info + Fare
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Truck Icon - Yellow background
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(RapidoYellow, RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.LocalShipping,
+                        null,
+                        tint = RapidoBlack,
+                        modifier = Modifier.size(24.dp)
+                    )
                 }
                 
-                // Available badge
-                Column(horizontalAlignment = Alignment.End) {
+                Spacer(Modifier.width(12.dp))
+                
+                Column {
                     Text(
-                        "$available available",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Success,
-                        fontWeight = FontWeight.SemiBold
+                        vehicleType.uppercase(),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Black,
+                        color = RapidoBlack
                     )
+                    if (vehicleSubtype.isNotBlank()) {
+                        Text(
+                            vehicleSubtype,
+                            fontSize = 12.sp,
+                            color = RapidoGray
+                        )
+                    }
+                }
+            }
+            
+            // Fare badge - Yellow
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    "$available available",
+                    fontSize = 12.sp,
+                    color = RapidoGray,
+                    fontWeight = FontWeight.Medium
+                )
+                Box(
+                    modifier = Modifier
+                        .background(RapidoYellow, RoundedCornerShape(6.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
                     Text(
                         "₹${String.format("%,.0f", farePerTruck)}/truck",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Primary
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = RapidoBlack
                     )
                 }
             }
-            
-            Spacer(Modifier.height(12.dp))
-            
-            // Row 2: Quantity selector + Actions
+        }
+        
+        Spacer(Modifier.height(12.dp))
+        
+        // Row 2: Quantity selector + Actions - RAPIDO STYLE
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Quantity Selector - Rapido style
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .background(RapidoWhite, RoundedCornerShape(8.dp))
+                    .border(1.dp, RapidoBlack.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                    .padding(4.dp)
             ) {
-                // Quantity Selector
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
+                // Minus button - Yellow when active
+                Box(
                     modifier = Modifier
-                        .background(White, RoundedCornerShape(8.dp))
-                        .border(1.dp, Divider, RoundedCornerShape(8.dp))
-                        .padding(4.dp)
+                        .size(32.dp)
+                        .background(
+                            if (selectedQuantity > 1) RapidoYellow else RapidoLightGray,
+                            RoundedCornerShape(6.dp)
+                        )
+                        .clickable { if (selectedQuantity > 1) selectedQuantity-- },
+                    contentAlignment = Alignment.Center
                 ) {
-                    // Minus button
-                    IconButton(
-                        onClick = { if (selectedQuantity > 1) selectedQuantity-- },
-                        modifier = Modifier.size(32.dp),
-                        enabled = selectedQuantity > 1
-                    ) {
-                        Icon(
-                            Icons.Default.Remove,
-                            "Decrease",
-                            tint = if (selectedQuantity > 1) Primary else TextDisabled
-                        )
-                    }
-                    
-                    // Count
-                    Text(
-                        text = selectedQuantity.toString(),
-                        modifier = Modifier.widthIn(min = 32.dp),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center
-                    )
-                    
-                    // Plus button
-                    IconButton(
-                        onClick = { if (selectedQuantity < available) selectedQuantity++ },
-                        modifier = Modifier.size(32.dp),
-                        enabled = selectedQuantity < available
-                    ) {
-                        Icon(
-                            Icons.Default.Add,
-                            "Increase",
-                            tint = if (selectedQuantity < available) Primary else TextDisabled
-                        )
-                    }
+                    Text("-", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = RapidoBlack)
                 }
                 
-                // Action Buttons
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Reject Button
-                    OutlinedButton(
-                        onClick = onReject,
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = Error
-                        ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Error.copy(alpha = 0.5f)),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            "REJECT",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold
+                // Count
+                Text(
+                    text = selectedQuantity.toString(),
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Black,
+                    color = RapidoBlack,
+                    textAlign = TextAlign.Center
+                )
+                
+                // Plus button - Yellow when active
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(
+                            if (selectedQuantity < available) RapidoYellow else RapidoLightGray,
+                            RoundedCornerShape(6.dp)
                         )
-                    }
-                    
-                    // Accept Button
-                    Button(
-                        onClick = { onAccept(selectedQuantity) },
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Success),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            "ACCEPT $selectedQuantity",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                        .clickable { if (selectedQuantity < available) selectedQuantity++ },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("+", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = RapidoBlack)
                 }
             }
             
-            // Show total if selecting multiple
-            if (selectedQuantity > 1) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Total: ₹${String.format("%,.0f", farePerTruck * selectedQuantity)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Success,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.End
-                )
+            // Action Buttons - RAPIDO STYLE
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Reject Button - Black outline
+                Box(
+                    modifier = Modifier
+                        .border(2.dp, RapidoBlack, RoundedCornerShape(8.dp))
+                        .clickable { onReject() }
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        "REJECT",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = RapidoBlack,
+                        letterSpacing = 0.5.sp
+                    )
+                }
+                
+                // Accept Button - YELLOW background, BLACK text
+                Box(
+                    modifier = Modifier
+                        .background(RapidoYellow, RoundedCornerShape(8.dp))
+                        .clickable { onAccept(selectedQuantity) }
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        "ACCEPT $selectedQuantity",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black,
+                        color = RapidoBlack,
+                        letterSpacing = 0.5.sp
+                    )
+                }
             }
+        }
+        
+        // Show total if selecting multiple
+        if (selectedQuantity > 1) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "TOTAL: ₹${String.format("%,.0f", farePerTruck * selectedQuantity)}",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = RapidoBlack,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.End
+            )
+        }
+    }
+}
+
+/**
+ * =============================================================================
+ * EMBEDDED MAP FOR BROADCAST CARD - Shows route with markers
+ * =============================================================================
+ */
+@Composable
+private fun BroadcastCardMap(
+    broadcast: BroadcastTrip,
+    modifier: Modifier = Modifier
+) {
+    // Build list of LatLng points
+    val points = remember(broadcast) {
+        listOf(
+            LatLng(broadcast.pickupLocation.latitude, broadcast.pickupLocation.longitude),
+            LatLng(broadcast.dropLocation.latitude, broadcast.dropLocation.longitude)
+        )
+    }
+    
+    // Calculate bounds
+    val boundsBuilder = remember(points) {
+        LatLngBounds.builder().apply {
+            points.forEach { include(it) }
+        }
+    }
+    
+    // Camera position
+    val cameraPositionState = rememberCameraPositionState {
+        position = CameraPosition.fromLatLngZoom(points.first(), 10f)
+    }
+    
+    // Auto-fit bounds
+    LaunchedEffect(points) {
+        try {
+            val bounds = boundsBuilder.build()
+            cameraPositionState.animate(
+                CameraUpdateFactory.newLatLngBounds(bounds, 60),
+                durationMs = 300
+            )
+        } catch (e: Exception) { }
+    }
+    
+    Box(modifier = modifier) {
+        GoogleMap(
+            modifier = Modifier.fillMaxSize(),
+            cameraPositionState = cameraPositionState,
+            properties = MapProperties(mapType = MapType.NORMAL),
+            uiSettings = MapUiSettings(
+                zoomControlsEnabled = false,
+                mapToolbarEnabled = false,
+                compassEnabled = false,
+                myLocationButtonEnabled = false,
+                scrollGesturesEnabled = false,
+                zoomGesturesEnabled = false,
+                tiltGesturesEnabled = false,
+                rotationGesturesEnabled = false
+            )
+        ) {
+            // Pickup marker - Green
+            Marker(
+                state = MarkerState(position = points.first()),
+                title = "Pickup",
+                icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)
+            )
+            
+            // Drop marker - Red
+            Marker(
+                state = MarkerState(position = points.last()),
+                title = "Drop",
+                icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_RED)
+            )
+            
+            // Polyline - Black
+            Polyline(
+                points = points,
+                color = RapidoBlack,
+                width = 6f
+            )
         }
     }
 }

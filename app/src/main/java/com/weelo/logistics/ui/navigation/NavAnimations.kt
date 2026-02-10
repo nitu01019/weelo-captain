@@ -5,11 +5,20 @@ import androidx.compose.animation.core.*
 
 /**
  * =============================================================================
- * NAVIGATION ANIMATIONS - Smooth Screen Transitions
+ * NAVIGATION ANIMATIONS - Optimized for Performance
  * =============================================================================
  * 
- * Provides smooth, polished animations for navigation transitions.
- * Inspired by Material Design motion guidelines.
+ * OPTIMIZATIONS FOR SMOOTH 60fps ANIMATIONS:
+ * 1. Reduced animation duration (300ms → 200ms) for snappier feel
+ * 2. Simplified easing curves for GPU efficiency
+ * 3. Removed redundant fade animations on main transitions
+ * 4. Uses hardware-accelerated slide animations
+ * 
+ * PERFORMANCE TIPS:
+ * - Slide animations are GPU-accelerated (fast)
+ * - Fade animations require alpha blending (slower)
+ * - Scale animations can cause jank on complex screens
+ * - Keep animations under 300ms for perceived responsiveness
  * 
  * USAGE:
  * ```kotlin
@@ -25,102 +34,109 @@ import androidx.compose.animation.core.*
  */
 object NavAnimations {
     
-    // Animation duration constants
-    private const val DURATION_STANDARD = 300
-    private const val DURATION_FAST = 200
-    private const val DURATION_EMPHASIZED = 400
+    // =========================================================================
+    // OPTIMIZED ANIMATION DURATIONS
+    // =========================================================================
+    // Reduced for snappier, more responsive feel
+    // 200ms is the sweet spot for perceived instant response
     
-    // Easing curves (Material Design 3)
-    private val EasingEmphasized = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
-    private val EasingEmphasizedDecelerate = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f)
-    private val EasingEmphasizedAccelerate = CubicBezierEasing(0.3f, 0.0f, 0.8f, 0.15f)
-    private val EasingStandard = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
+    private const val DURATION_FAST = 150        // Quick transitions
+    private const val DURATION_STANDARD = 200    // Normal navigation (was 300)
+    private const val DURATION_EMPHASIZED = 250  // Important transitions (was 400)
+    
+    // =========================================================================
+    // OPTIMIZED EASING CURVES
+    // =========================================================================
+    // Using simpler curves for better GPU performance
+    
+    private val EasingFastOutSlowIn = FastOutSlowInEasing  // Standard Material easing
+    private val EasingLinearOutSlowIn = LinearOutSlowInEasing  // Decelerate (entering)
+    private val EasingFastOutLinearIn = FastOutLinearInEasing  // Accelerate (exiting)
     
     // =========================================================================
     // SLIDE TRANSITIONS (Horizontal - for forward/back navigation)
     // =========================================================================
+    // OPTIMIZED: Pure slide without fade for GPU acceleration
     
     /**
      * Slide in from right - for navigating forward
+     * OPTIMIZED: No fade, pure hardware-accelerated slide
      */
     val slideInFromRight: EnterTransition = slideInHorizontally(
         initialOffsetX = { fullWidth -> fullWidth },
         animationSpec = tween(
             durationMillis = DURATION_STANDARD,
-            easing = EasingEmphasizedDecelerate
-        )
-    ) + fadeIn(
-        animationSpec = tween(
-            durationMillis = DURATION_FAST,
-            easing = LinearEasing
+            easing = EasingLinearOutSlowIn
         )
     )
     
     /**
      * Slide out to left - for navigating forward (current screen exits)
+     * OPTIMIZED: Smaller offset (1/5 instead of 1/4) for parallax effect
      */
     val slideOutToLeft: ExitTransition = slideOutHorizontally(
-        targetOffsetX = { fullWidth -> -fullWidth / 4 },
+        targetOffsetX = { fullWidth -> -fullWidth / 5 },
         animationSpec = tween(
             durationMillis = DURATION_STANDARD,
-            easing = EasingEmphasizedAccelerate
+            easing = EasingFastOutLinearIn
         )
     ) + fadeOut(
         animationSpec = tween(
             durationMillis = DURATION_FAST,
             easing = LinearEasing
-        )
+        ),
+        targetAlpha = 0.7f  // Don't fade fully - reduces GPU work
     )
     
     /**
      * Slide in from left - for navigating back
+     * OPTIMIZED: No fade, pure hardware-accelerated slide
      */
     val slideInFromLeft: EnterTransition = slideInHorizontally(
-        initialOffsetX = { fullWidth -> -fullWidth / 4 },
+        initialOffsetX = { fullWidth -> -fullWidth / 5 },
         animationSpec = tween(
             durationMillis = DURATION_STANDARD,
-            easing = EasingEmphasizedDecelerate
+            easing = EasingLinearOutSlowIn
         )
     ) + fadeIn(
         animationSpec = tween(
             durationMillis = DURATION_FAST,
             easing = LinearEasing
-        )
+        ),
+        initialAlpha = 0.7f
     )
     
     /**
      * Slide out to right - for navigating back (current screen exits)
+     * OPTIMIZED: Full slide out
      */
     val slideOutToRight: ExitTransition = slideOutHorizontally(
         targetOffsetX = { fullWidth -> fullWidth },
         animationSpec = tween(
             durationMillis = DURATION_STANDARD,
-            easing = EasingEmphasizedAccelerate
-        )
-    ) + fadeOut(
-        animationSpec = tween(
-            durationMillis = DURATION_FAST,
-            easing = LinearEasing
+            easing = EasingFastOutLinearIn
         )
     )
     
     // =========================================================================
     // FADE TRANSITIONS (For modals, dialogs, overlays)
     // =========================================================================
+    // OPTIMIZED: Reduced scale animation for better performance
     
     /**
      * Fade in with slight scale - for modal screens
+     * OPTIMIZED: Minimal scale (0.95 instead of 0.92) for faster render
      */
     val fadeInWithScale: EnterTransition = fadeIn(
         animationSpec = tween(
             durationMillis = DURATION_STANDARD,
-            easing = EasingEmphasizedDecelerate
+            easing = EasingFastOutSlowIn
         )
     ) + scaleIn(
-        initialScale = 0.92f,
+        initialScale = 0.95f,
         animationSpec = tween(
             durationMillis = DURATION_STANDARD,
-            easing = EasingEmphasizedDecelerate
+            easing = EasingFastOutSlowIn
         )
     )
     
@@ -130,39 +146,40 @@ object NavAnimations {
     val fadeOutWithScale: ExitTransition = fadeOut(
         animationSpec = tween(
             durationMillis = DURATION_FAST,
-            easing = EasingEmphasizedAccelerate
+            easing = EasingFastOutLinearIn
         )
     ) + scaleOut(
-        targetScale = 0.92f,
+        targetScale = 0.95f,
         animationSpec = tween(
             durationMillis = DURATION_FAST,
-            easing = EasingEmphasizedAccelerate
+            easing = EasingFastOutLinearIn
         )
     )
     
     /**
-     * Simple fade in
+     * Simple fade in - OPTIMIZED
      */
     val fadeIn: EnterTransition = androidx.compose.animation.fadeIn(
         animationSpec = tween(
-            durationMillis = DURATION_STANDARD,
-            easing = EasingStandard
+            durationMillis = DURATION_FAST,
+            easing = LinearEasing
         )
     )
     
     /**
-     * Simple fade out
+     * Simple fade out - OPTIMIZED
      */
     val fadeOut: ExitTransition = androidx.compose.animation.fadeOut(
         animationSpec = tween(
             durationMillis = DURATION_FAST,
-            easing = EasingStandard
+            easing = LinearEasing
         )
     )
     
     // =========================================================================
     // VERTICAL TRANSITIONS (For bottom sheets, notifications)
     // =========================================================================
+    // OPTIMIZED: Faster vertical transitions
     
     /**
      * Slide up from bottom - for bottom sheets
@@ -171,11 +188,7 @@ object NavAnimations {
         initialOffsetY = { fullHeight -> fullHeight },
         animationSpec = tween(
             durationMillis = DURATION_STANDARD,
-            easing = EasingEmphasizedDecelerate
-        )
-    ) + fadeIn(
-        animationSpec = tween(
-            durationMillis = DURATION_FAST
+            easing = EasingLinearOutSlowIn
         )
     )
     
@@ -186,11 +199,7 @@ object NavAnimations {
         targetOffsetY = { fullHeight -> fullHeight },
         animationSpec = tween(
             durationMillis = DURATION_STANDARD,
-            easing = EasingEmphasizedAccelerate
-        )
-    ) + fadeOut(
-        animationSpec = tween(
-            durationMillis = DURATION_FAST
+            easing = EasingFastOutLinearIn
         )
     )
     
@@ -201,17 +210,14 @@ object NavAnimations {
         initialOffsetY = { fullHeight -> -fullHeight },
         animationSpec = tween(
             durationMillis = DURATION_STANDARD,
-            easing = EasingEmphasizedDecelerate
-        )
-    ) + fadeIn(
-        animationSpec = tween(
-            durationMillis = DURATION_FAST
+            easing = EasingLinearOutSlowIn
         )
     )
     
     // =========================================================================
     // SHARED ELEMENT TRANSITIONS (Container transform)
     // =========================================================================
+    // OPTIMIZED: Faster scale transitions
     
     /**
      * Expand from center - for FAB to screen transitions
@@ -220,11 +226,11 @@ object NavAnimations {
         initialScale = 0.0f,
         animationSpec = tween(
             durationMillis = DURATION_EMPHASIZED,
-            easing = EasingEmphasized
+            easing = EasingFastOutSlowIn
         )
     ) + fadeIn(
         animationSpec = tween(
-            durationMillis = DURATION_EMPHASIZED / 2,
+            durationMillis = DURATION_FAST,
             easing = LinearEasing
         )
     )
@@ -236,11 +242,11 @@ object NavAnimations {
         targetScale = 0.0f,
         animationSpec = tween(
             durationMillis = DURATION_EMPHASIZED,
-            easing = EasingEmphasized
+            easing = EasingFastOutSlowIn
         )
     ) + fadeOut(
         animationSpec = tween(
-            durationMillis = DURATION_EMPHASIZED / 2,
+            durationMillis = DURATION_FAST,
             easing = LinearEasing
         )
     )

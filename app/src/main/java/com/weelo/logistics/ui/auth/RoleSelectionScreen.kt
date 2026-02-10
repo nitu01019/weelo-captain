@@ -25,6 +25,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.weelo.logistics.ui.components.PrimaryButton
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.ui.components.rememberScreenConfig
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 
 /**
  * Role Selection Screen - PRD-01 Compliant
@@ -37,14 +40,22 @@ fun RoleSelectionScreen(
 ) {
     var showGuideDialog by remember { mutableStateOf(false) }
     
+    // Responsive layout support
+    val screenConfig = rememberScreenConfig()
+    
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Background)
-            .padding(24.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(
+                horizontal = if (screenConfig.isLandscape) 48.dp else 24.dp,
+                vertical = 24.dp
+            ),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(modifier = Modifier.height(60.dp))
+        // Reduced top spacing in landscape
+        Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 16.dp else 60.dp))
         
         // Header with Guide Icon
         Row(
@@ -83,27 +94,56 @@ fun RoleSelectionScreen(
             }
         }
         
-        Spacer(modifier = Modifier.height(48.dp))
+        Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 24.dp else 48.dp))
         
-        // Transporter Card - Better icon
-        RoleCard(
-            icon = Icons.Default.Business, // Changed to Business/Company icon
-            title = "Transporter",
-            description = "I own and manage vehicles",
-            iconColor = Primary,
-            onClick = { onRoleSelected("TRANSPORTER") }
-        )
-        
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        // Driver Card - Better icon
-        RoleCard(
-            icon = Icons.Default.AccountCircle, // Changed to AccountCircle for driver
-            title = "Driver",
-            description = "I drive vehicles for trips",
-            iconColor = Secondary,
-            onClick = { onRoleSelected("DRIVER") }
-        )
+        // Role Cards - Side by side in landscape, stacked in portrait
+        if (screenConfig.isLandscape) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Transporter Card
+                Box(modifier = Modifier.weight(1f)) {
+                    RoleCard(
+                        icon = Icons.Default.Business,
+                        title = "Transporter",
+                        description = "I own and manage vehicles",
+                        iconColor = Primary,
+                        onClick = { onRoleSelected("TRANSPORTER") }
+                    )
+                }
+                
+                // Driver Card
+                Box(modifier = Modifier.weight(1f)) {
+                    RoleCard(
+                        icon = Icons.Default.AccountCircle,
+                        title = "Driver",
+                        description = "I drive vehicles for trips",
+                        iconColor = Secondary,
+                        onClick = { onRoleSelected("DRIVER") }
+                    )
+                }
+            }
+        } else {
+            // Portrait - Stacked vertically
+            RoleCard(
+                icon = Icons.Default.Business,
+                title = "Transporter",
+                description = "I own and manage vehicles",
+                iconColor = Primary,
+                onClick = { onRoleSelected("TRANSPORTER") }
+            )
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            RoleCard(
+                icon = Icons.Default.AccountCircle,
+                title = "Driver",
+                description = "I drive vehicles for trips",
+                iconColor = Secondary,
+                onClick = { onRoleSelected("DRIVER") }
+            )
+        }
         
         Spacer(modifier = Modifier.weight(1f))
     }

@@ -32,10 +32,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.ui.components.rememberScreenConfig
 import com.weelo.logistics.utils.InputValidator
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.data.api.VerifyOTPRequest
+import com.weelo.logistics.data.api.VerifyOTPResponse
 import com.weelo.logistics.data.api.SendOTPRequest
+import com.weelo.logistics.WeeloApp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -80,6 +85,7 @@ fun OTPVerificationScreen(
     
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     
     // Countdown timer
     LaunchedEffect(Unit) {
@@ -108,37 +114,106 @@ fun OTPVerificationScreen(
             
             // Make actual API call to verify OTP
             try {
-                val roleForApi = role.lowercase()
                 val response = withContext(Dispatchers.IO) {
-                    RetrofitClient.authApi.verifyOTP(
-                        VerifyOTPRequest(
-                            phone = phoneNumber,
-                            otp = otpValue,
-                            role = roleForApi
+                    if (role == "DRIVER") {
+                        // Driver: use /driver-auth/verify-otp (OTP was sent to transporter)
+                        RetrofitClient.driverAuthApi.verifyOtp(
+                            com.weelo.logistics.data.api.DriverVerifyOtpRequest(
+                                driverPhone = phoneNumber,
+                                otp = otpValue
+                            )
                         )
-                    )
+                    } else {
+                        // Transporter: use /auth/verify-otp
+                        RetrofitClient.authApi.verifyOTP(
+                            VerifyOTPRequest(
+                                phone = phoneNumber,
+                                otp = otpValue,
+                                role = role.lowercase()
+                            )
+                        )
+                    }
                 }
                 
                 isLoading = false
                 
-                if (response.isSuccessful && response.body()?.success == true) {
-                    val data = response.body()?.data
+                if (response.isSuccessful) {
+                    val responseBody = response.body()
                     
-                    // Save tokens securely
-                    data?.tokens?.let { tokens ->
-                        RetrofitClient.saveTokens(tokens.accessToken, tokens.refreshToken)
+                    // Check success based on role-specific response
+                    val isSuccess = if (role == "DRIVER") {
+                        (responseBody as? com.weelo.logistics.data.api.DriverVerifyOtpResponse)?.success == true
+                    } else {
+                        (responseBody as? VerifyOTPResponse)?.success == true
                     }
                     
-                    // Save user info
-                    data?.user?.let { user ->
-                        RetrofitClient.saveUserInfo(user.id, user.role)
+                    if (isSuccess) {
+                        if (role == "DRIVER") {
+                            // Driver response structure
+                            val driverResponse = responseBody as com.weelo.logistics.data.api.DriverVerifyOtpResponse
+                            driverResponse.data?.let {
+                                RetrofitClient.saveTokens(it.accessToken, it.refreshToken)
+                                RetrofitClient.saveUserInfo(it.driver.id, it.role)
+                                
+                                // ============================================================
+                                // CRITICAL: Restore ALL preferences from backend BEFORE
+                                // navigation fires. Must use withContext to ensure writes
+                                // complete before onVerifySuccess() triggers onboarding check.
+                                //
+                                // WHY: driver_onboarding_check reads from DriverPreferences
+                                // immediately. If we navigate before saving, the check sees
+                                // empty language → forces language screen every login.
+                                //
+                                // SCALABILITY: O(1) writes, no extra network call.
+                                // ============================================================
+                                val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences
+                                    .getInstance(context.applicationContext)
+                                
+                                // 1. Restore language from backend (if exists)
+                                val backendLang = it.driver.preferredLanguage
+                                if (!backendLang.isNullOrEmpty()) {
+                                    timber.log.Timber.i("🔑 Restoring language from backend: $backendLang")
+                                    driverPrefs.saveLanguage(backendLang)
+                                }
+                                
+                                // 2. Restore profile completion status from backend
+                                if (it.driver.isProfileCompleted == true) {
+                                    timber.log.Timber.i("🔑 Restoring profile completed from backend")
+                                    driverPrefs.markProfileCompleted()
+                                }
+                            }
+                        } else {
+                            // Transporter response structure
+                            val transporterResponse = responseBody as VerifyOTPResponse
+                            transporterResponse.data?.tokens?.let { tokens ->
+                                RetrofitClient.saveTokens(tokens.accessToken, tokens.refreshToken)
+                            }
+                            transporterResponse.data?.user?.let { user ->
+                                RetrofitClient.saveUserInfo(user.id, user.role)
+                            }
+                        }
+                        
+                        // ================================================================
+                        // CRITICAL: Connect WebSocket for real-time broadcast reception!
+                        // Without this, transporters won't receive booking notifications
+                        // ================================================================
+                        timber.log.Timber.i("🔌 Connecting WebSocket after successful login...")
+                        WeeloApp.getInstance()?.connectWebSocketIfLoggedIn()
+                        
+                        successMessage = "Verified successfully!"
+                        delay(150) // Quick success feedback ⚡
+                        onVerifySuccess()
+                    } else {
+                        val errorMsg = if (role == "DRIVER") {
+                            (responseBody as? com.weelo.logistics.data.api.DriverVerifyOtpResponse)?.error?.message
+                        } else {
+                            (responseBody as? VerifyOTPResponse)?.error?.message
+                        }
+                        errorMessage = errorMsg ?: "Invalid OTP. Please try again."
+                        otpValue = ""
                     }
-                    
-                    successMessage = "Verified successfully!"
-                    delay(150) // Quick success feedback ⚡
-                    onVerifySuccess()
                 } else {
-                    errorMessage = response.body()?.error?.message ?: "Invalid OTP. Please try again."
+                    errorMessage = "Invalid OTP. Please try again."
                     otpValue = ""
                 }
             } catch (e: Exception) {
@@ -149,28 +224,24 @@ fun OTPVerificationScreen(
         }
     }
     
+    // Responsive layout support
+    val screenConfig = rememberScreenConfig()
+    
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFFFAFAFA),
-                        Color.White
-                    )
-                )
-            )
+            .background(Background)
     ) {
-        // Minimal background decoration
+        // Premium background decoration with green accents
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .alpha(0.05f)
+                .alpha(0.08f)
         ) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .offset(x = 100.dp, y = (-50).dp)
+                    .offset(x = 80.dp, y = (-40).dp)
                     .size(200.dp)
                     .background(
                         Brush.radialGradient(
@@ -179,15 +250,35 @@ fun OTPVerificationScreen(
                         shape = RoundedCornerShape(50)
                     )
             )
+            // Bottom accent for landscape
+            if (screenConfig.isLandscape) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .offset(x = (-40).dp, y = 40.dp)
+                        .size(120.dp)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(Primary, Color.Transparent)
+                            ),
+                            shape = RoundedCornerShape(50)
+                        )
+                )
+            }
         }
         
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(
+                    horizontal = if (screenConfig.isLandscape) 48.dp else 24.dp,
+                    vertical = 24.dp
+                ),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(40.dp))
+            // Reduced spacing in landscape
+            Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 16.dp else 40.dp))
             
             // Header Section
             OTPHeader(
@@ -237,14 +328,23 @@ fun OTPVerificationScreen(
                     scope.launch {
                         // Call resend OTP API
                         try {
-                            val roleForApi = role.lowercase()
                             withContext(Dispatchers.IO) {
-                                RetrofitClient.authApi.sendOTP(
-                                    SendOTPRequest(
-                                        phone = phoneNumber,
-                                        role = roleForApi
+                                if (role == "DRIVER") {
+                                    // Driver: use /driver-auth/send-otp (sends to transporter)
+                                    RetrofitClient.driverAuthApi.sendOtp(
+                                        com.weelo.logistics.data.api.DriverSendOtpRequest(
+                                            driverPhone = phoneNumber
+                                        )
                                     )
-                                )
+                                } else {
+                                    // Transporter: use /auth/send-otp
+                                    RetrofitClient.authApi.sendOTP(
+                                        SendOTPRequest(
+                                            phone = phoneNumber,
+                                            role = role.lowercase()
+                                        )
+                                    )
+                                }
                             }
                         } catch (e: Exception) {
                             errorMessage = "Failed to resend OTP"

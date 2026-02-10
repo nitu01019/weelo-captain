@@ -6,7 +6,6 @@ package com.weelo.logistics.ui.navigation
  */
 sealed class Screen(val route: String) {
     // Welcome & Auth
-    object Splash : Screen("splash")
     object Onboarding : Screen("onboarding")
     object Login : Screen("login")
     object Signup : Screen("signup")
@@ -37,8 +36,7 @@ sealed class Screen(val route: String) {
         fun createRoute(tripId: String) = "trip_details/$tripId"
     }
     
-    // Broadcast System - NEW
-    object BroadcastList : Screen("broadcast_list")
+    // Broadcast System - Overlay only (no list screen)
     object BroadcastSoundSettings : Screen("broadcast_sound_settings")
     object TruckHoldConfirm : Screen("truck_hold_confirm/{orderId}/{vehicleType}/{vehicleSubtype}/{quantity}") {
         fun createRoute(orderId: String, vehicleType: String, vehicleSubtype: String, quantity: Int) = 

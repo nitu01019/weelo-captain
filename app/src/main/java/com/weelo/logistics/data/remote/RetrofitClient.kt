@@ -2,7 +2,6 @@ package com.weelo.logistics.data.remote
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.weelo.logistics.data.api.*
@@ -111,11 +110,11 @@ object RetrofitClient {
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
-            Log.i(TAG, "✅ RetrofitClient initialized with encrypted storage")
+            timber.log.Timber.i("✅ RetrofitClient initialized with encrypted storage")
         } catch (e: Exception) {
             // Fallback to regular SharedPreferences in case of encryption issues
             securePrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            Log.w(TAG, "⚠️ Using fallback SharedPreferences: ${e.message}")
+            timber.log.Timber.w("⚠️ Using fallback SharedPreferences: ${e.message}")
         }
     }
     
@@ -129,10 +128,10 @@ object RetrofitClient {
      */
     private val loggingInterceptor = HttpLoggingInterceptor { message ->
         // Log ALL network traffic for debugging
-        Log.d(TAG, "🌐 $message")
+        timber.log.Timber.d("🌐 $message")
         // Extra logging for response body (to catch parsing issues)
         if (message.startsWith("{") || message.startsWith("[") || message.startsWith("<") || message.startsWith("\"")) {
-            Log.w(TAG, "📦 RAW RESPONSE BODY: ${message.take(500)}")
+            timber.log.Timber.w("📦 RAW RESPONSE BODY: ${message.take(500)}")
         }
     }.apply {
         level = HttpLoggingInterceptor.Level.BODY  // Shows full request/response body
@@ -143,7 +142,7 @@ object RetrofitClient {
      */
     private val debugInterceptor = Interceptor { chain ->
         val request = chain.request()
-        Log.d(TAG, "📤 REQUEST: ${request.method} ${request.url}")
+        timber.log.Timber.d("📤 REQUEST: ${request.method} ${request.url}")
         
         val response = chain.proceed(request)
         
@@ -154,7 +153,7 @@ object RetrofitClient {
         val buffer = source?.buffer?.clone()
         val responseString = buffer?.readString(Charsets.UTF_8) ?: "null"
         
-        Log.d(TAG, "📥 RESPONSE [${response.code}]: ${responseString.take(500)}")
+        timber.log.Timber.d("📥 RESPONSE [${response.code}]: ${responseString.take(500)}")
         
         response
     }
@@ -183,7 +182,7 @@ object RetrofitClient {
         val buffer = source.buffer.clone()
         val responseString = buffer.readString(Charsets.UTF_8).trim()
         
-        Log.d(TAG, "🔍 Response sanitizer - Code: ${response.code}, Body: ${responseString.take(200)}")
+        timber.log.Timber.d("🔍 Response sanitizer - Code: ${response.code}, Body: ${responseString.take(200)}")
         
         // Check if response is valid JSON
         val isValidJson = responseString.isNotEmpty() && 
@@ -195,7 +194,7 @@ object RetrofitClient {
         }
         
         // Non-JSON response - wrap it in a proper error response
-        Log.w(TAG, "⚠️ Non-JSON response detected, wrapping in error structure")
+        timber.log.Timber.w("⚠️ Non-JSON response detected, wrapping in error structure")
         
         val errorMessage = when {
             responseString.isEmpty() -> "Empty response from server"
@@ -229,6 +228,12 @@ object RetrofitClient {
     
     /**
      * Auth interceptor - Adds Authorization header to protected requests
+     * 
+     * PUBLIC ENDPOINTS (no auth required):
+     * - /auth/send-otp, /auth/verify-otp (Customer/Transporter login)
+     * - /driver-auth/send-otp, /driver-auth/verify-otp (Driver login)
+     * - /auth/refresh (Token refresh)
+     * - /vehicles/types, /pricing/estimate (Public data)
      */
     private val authInterceptor = Interceptor { chain ->
         val originalRequest = chain.request()
@@ -238,7 +243,9 @@ object RetrofitClient {
         val publicEndpoints = listOf(
             "/auth/send-otp", 
             "/auth/verify-otp", 
-            "/auth/refresh", 
+            "/auth/refresh",
+            "/driver-auth/send-otp",    // Driver login - OTP to transporter
+            "/driver-auth/verify-otp",  // Driver OTP verification
             "/vehicles/types", 
             "/pricing/estimate"
         )
@@ -247,11 +254,11 @@ object RetrofitClient {
         val token = getAccessToken()
         
         // Debug logging
-        Log.d(TAG, "🔐 Auth Interceptor - Path: $path")
-        Log.d(TAG, "🔐 Token present: ${token != null}, Token length: ${token?.length ?: 0}")
-        Log.d(TAG, "🔐 Is public endpoint: $isPublicEndpoint")
+        timber.log.Timber.d("🔐 Auth Interceptor - Path: $path")
+        timber.log.Timber.d("🔐 Token present: ${token != null}, Token length: ${token?.length ?: 0}")
+        timber.log.Timber.d("🔐 Is public endpoint: $isPublicEndpoint")
         if (token == null && !isPublicEndpoint) {
-            Log.w(TAG, "⚠️ NO TOKEN for protected endpoint: $path")
+            timber.log.Timber.w("⚠️ NO TOKEN for protected endpoint: $path")
         }
         
         val newRequest = originalRequest.newBuilder()
@@ -261,7 +268,7 @@ object RetrofitClient {
             .apply {
                 if (token != null && !isPublicEndpoint) {
                     addHeader("Authorization", "Bearer $token")
-                    Log.d(TAG, "✅ Added Authorization header")
+                    timber.log.Timber.d("✅ Added Authorization header")
                 }
             }
             .build()
@@ -306,7 +313,7 @@ object RetrofitClient {
             request = request.newBuilder()
                 .cacheControl(CacheControl.FORCE_CACHE)
                 .build()
-            Log.d(TAG, "📴 Offline - serving from cache: ${request.url}")
+            timber.log.Timber.d("📴 Offline - serving from cache: ${request.url}")
         }
         
         chain.proceed(request)
@@ -333,7 +340,7 @@ object RetrofitClient {
                 // Server error (5xx) - retry
                 if (response.code >= 500 && attempt < MAX_RETRIES - 1) {
                     val delay = (1L shl attempt) * 1000  // Exponential: 1s, 2s, 4s
-                    Log.w(TAG, "⚠️ Server error ${response.code}, retry ${attempt + 1}/$MAX_RETRIES in ${delay}ms")
+                    timber.log.Timber.w("⚠️ Server error ${response.code}, retry ${attempt + 1}/$MAX_RETRIES in ${delay}ms")
                     Thread.sleep(delay)
                     continue
                 }
@@ -346,10 +353,10 @@ object RetrofitClient {
                 
                 if (attempt < MAX_RETRIES - 1) {
                     val delay = (1L shl attempt) * 1000
-                    Log.w(TAG, "⚠️ Network error, retry ${attempt + 1}/$MAX_RETRIES in ${delay}ms: ${e.message}")
+                    timber.log.Timber.w("⚠️ Network error, retry ${attempt + 1}/$MAX_RETRIES in ${delay}ms: ${e.message}")
                     Thread.sleep(delay)
                 } else {
-                    Log.e(TAG, "❌ All retries failed: ${e.message}")
+                    timber.log.Timber.e("❌ All retries failed: ${e.message}")
                     throw e
                 }
             }
@@ -375,13 +382,13 @@ object RetrofitClient {
                     try {
                         val refreshToken = getRefreshToken()
                         if (refreshToken != null) {
-                            Log.d(TAG, "🔄 Token expired, attempting refresh...")
+                            timber.log.Timber.d("🔄 Token expired, attempting refresh...")
                             
                             // Try to refresh token (synchronous call)
                             val refreshed = refreshTokenSync(refreshToken)
                             
                             if (refreshed) {
-                                Log.i(TAG, "✅ Token refreshed successfully")
+                                timber.log.Timber.i("✅ Token refreshed successfully")
                                 
                                 // Retry original request with new token
                                 response.close()
@@ -396,7 +403,7 @@ object RetrofitClient {
                             }
                         }
                         
-                        Log.w(TAG, "⚠️ Token refresh failed, user needs to re-login")
+                        timber.log.Timber.w("⚠️ Token refresh failed, user needs to re-login")
                         
                     } finally {
                         isRefreshing = false
@@ -411,6 +418,7 @@ object RetrofitClient {
     /**
      * Synchronous token refresh
      */
+    @Suppress("UNUSED_PARAMETER")
     private fun refreshTokenSync(refreshToken: String): Boolean {
         // TODO: Implement actual token refresh API call
         // For now, return false to force re-login
@@ -468,7 +476,7 @@ object RetrofitClient {
             
             Pair(sslContext.socketFactory, trustManager)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to create secure socket factory", e)
+            timber.log.Timber.e(e, "Failed to create secure socket factory")
             null
         }
     }
@@ -513,21 +521,31 @@ object RetrofitClient {
     
     /**
      * Optimized OkHttp client with SSL/TLS security
+     * 
+     * SCALABILITY OPTIMIZATIONS:
+     * - HTTP cache enabled for GET requests (reduces backend load)
+     * - Offline cache for better UX when network unavailable
+     * - Connection pooling for TCP reuse
+     * - HTTP/2 for multiplexing
+     * 
+     * FOR MILLIONS OF USERS:
+     * - Cache reduces API calls by 50-90%
+     * - Connection pool prevents TCP handshake overhead
+     * - Retry logic handles transient failures gracefully
      */
     private val okHttpClient: OkHttpClient by lazy {
         val builder = OkHttpClient.Builder()
-            // Connection pool
+            // Connection pool (SCALABILITY: reuse TCP connections)
             .connectionPool(connectionPool)
             
-            // Cache - DISABLED FOR DEBUG (uncomment .cache(cache) when working)
-            // .cache(cache)
+            // Cache enabled (SCALABILITY: reduces backend load)
+            .cache(cache)
             
             // Interceptors (order matters!)
-            // .addInterceptor(offlineCacheInterceptor)  // Handle offline first - DISABLED FOR DEBUG
+            .addInterceptor(offlineCacheInterceptor)  // Handle offline first
             .addInterceptor(authInterceptor)          // Add auth header
-            // .addInterceptor(retryInterceptor)         // Retry on failure - DISABLED FOR DEBUG
-            // .addNetworkInterceptor(cacheInterceptor)  // Cache responses - DISABLED FOR DEBUG
-            // .addNetworkInterceptor(responseSanitizerInterceptor) // DISABLED - causing gzip issues
+            .addInterceptor(retryInterceptor)         // Retry on failure (SCALABILITY: handles transient errors)
+            .addNetworkInterceptor(cacheInterceptor)  // Cache responses (SCALABILITY: HTTP cache)
             .addInterceptor(loggingInterceptor)       // Log requests/responses
             
             // Timeouts
@@ -535,10 +553,10 @@ object RetrofitClient {
             .readTimeout(READ_TIMEOUT, TimeUnit.SECONDS)
             .writeTimeout(WRITE_TIMEOUT, TimeUnit.SECONDS)
             
-            // Enable retries
+            // Enable retries (SCALABILITY: resilience)
             .retryOnConnectionFailure(true)
             
-            // Protocols - HTTP/2 for better performance
+            // Protocols - HTTP/2 for better performance (SCALABILITY: multiplexing)
             .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
             
             // Connection specs for TLS security
@@ -549,13 +567,13 @@ object RetrofitClient {
             // Certificate pinning (enable when you have real certs)
             if (Constants.API.ENABLE_CERTIFICATE_PINNING) {
                 builder.certificatePinner(certificatePinner)
-                Log.i(TAG, "🔒 Certificate pinning ENABLED")
+                timber.log.Timber.i("🔒 Certificate pinning ENABLED")
             }
             
             // Custom SSL socket factory with TLS 1.3
             createSecureSocketFactory()?.let { (sslFactory, trustManager) ->
                 builder.sslSocketFactory(sslFactory, trustManager)
-                Log.i(TAG, "🔒 TLS 1.3 enabled")
+                timber.log.Timber.i("🔒 TLS 1.3 enabled")
             }
             
             // Hostname verifier (strict by default)
@@ -565,9 +583,9 @@ object RetrofitClient {
                 hv.verify(hostname, session)
             }
             
-            Log.i(TAG, "🔒 HTTPS security configured for production")
+            timber.log.Timber.i("🔒 HTTPS security configured for production")
         } else {
-            Log.w(TAG, "⚠️ Running in development mode (HTTP allowed)")
+            timber.log.Timber.w("⚠️ Running in development mode (HTTP allowed)")
         }
         
         builder.build()
@@ -587,7 +605,7 @@ object RetrofitClient {
      * Retrofit instance
      */
     private val retrofit: Retrofit by lazy {
-        Log.i(TAG, "🌐 BASE_URL: ${Constants.API.BASE_URL}")
+        timber.log.Timber.i("🌐 BASE_URL: ${Constants.API.BASE_URL}")
         Retrofit.Builder()
             .baseUrl(Constants.API.BASE_URL)
             .client(okHttpClient)
@@ -638,6 +656,18 @@ object RetrofitClient {
     
     val transporterApi: com.weelo.logistics.data.api.TransporterApiService by lazy {
         retrofit.create(com.weelo.logistics.data.api.TransporterApiService::class.java)
+    }
+    
+    /**
+     * Tracking API - For real-time fleet and trip tracking
+     * 
+     * Endpoints:
+     * - GET /tracking/fleet       → Get all fleet driver locations
+     * - GET /tracking/{tripId}    → Get single trip location
+     * - POST /tracking/update     → Update driver location
+     */
+    val trackingApi: TrackingApiService by lazy {
+        retrofit.create(TrackingApiService::class.java)
     }
     
     // ============== Token Management ==============

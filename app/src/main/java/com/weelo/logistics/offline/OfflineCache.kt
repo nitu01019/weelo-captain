@@ -1,12 +1,14 @@
 package com.weelo.logistics.offline
 
 import android.content.Context
-import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.weelo.logistics.data.api.UserProfile
+import com.weelo.logistics.data.api.VehicleListData
+import com.weelo.logistics.data.api.DriverListData
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
@@ -91,9 +93,9 @@ class OfflineCache private constructor(
                 prefs[KEY_BROADCASTS] = json
                 prefs[KEY_BROADCASTS_TIMESTAMP] = System.currentTimeMillis()
             }
-            Log.d(TAG, "✅ Saved ${broadcasts.size} broadcasts to cache")
+            timber.log.Timber.d("✅ Saved ${broadcasts.size} broadcasts to cache")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save broadcasts: ${e.message}")
+            timber.log.Timber.e("Failed to save broadcasts: ${e.message}")
         }
     }
     
@@ -104,7 +106,7 @@ class OfflineCache private constructor(
         return dataStore.data
             .catch { e ->
                 if (e is IOException) {
-                    Log.e(TAG, "Error reading broadcasts cache: ${e.message}")
+                    timber.log.Timber.e("Error reading broadcasts cache: ${e.message}")
                     emit(emptyPreferences())
                 } else {
                     throw e
@@ -116,7 +118,7 @@ class OfflineCache private constructor(
                 
                 // Check TTL
                 if (System.currentTimeMillis() - timestamp > TTL_BROADCASTS) {
-                    Log.d(TAG, "Broadcasts cache expired")
+                    timber.log.Timber.d("Broadcasts cache expired")
                     return@map emptyList()
                 }
                 
@@ -124,7 +126,7 @@ class OfflineCache private constructor(
                     val type = object : TypeToken<List<Map<String, Any>>>() {}.type
                     gson.fromJson<List<Map<String, Any>>>(json, type) ?: emptyList()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse broadcasts: ${e.message}")
+                    timber.log.Timber.e("Failed to parse broadcasts: ${e.message}")
                     emptyList()
                 }
             }
@@ -151,9 +153,9 @@ class OfflineCache private constructor(
                 prefs[KEY_VEHICLES] = json
                 prefs[KEY_VEHICLES_TIMESTAMP] = System.currentTimeMillis()
             }
-            Log.d(TAG, "✅ Saved ${vehicles.size} vehicles to cache")
+            timber.log.Timber.d("✅ Saved ${vehicles.size} vehicles to cache")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save vehicles: ${e.message}")
+            timber.log.Timber.e("Failed to save vehicles: ${e.message}")
         }
     }
     
@@ -198,9 +200,9 @@ class OfflineCache private constructor(
                 prefs[KEY_DRIVERS] = json
                 prefs[KEY_DRIVERS_TIMESTAMP] = System.currentTimeMillis()
             }
-            Log.d(TAG, "✅ Saved ${drivers.size} drivers to cache")
+            timber.log.Timber.d("✅ Saved ${drivers.size} drivers to cache")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save drivers: ${e.message}")
+            timber.log.Timber.e("Failed to save drivers: ${e.message}")
         }
     }
     
@@ -245,9 +247,9 @@ class OfflineCache private constructor(
                 prefs[KEY_PROFILE] = json
                 prefs[KEY_PROFILE_TIMESTAMP] = System.currentTimeMillis()
             }
-            Log.d(TAG, "✅ Saved profile to cache")
+            timber.log.Timber.d("✅ Saved profile to cache")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save profile: ${e.message}")
+            timber.log.Timber.e("Failed to save profile: ${e.message}")
         }
     }
     
@@ -279,6 +281,127 @@ class OfflineCache private constructor(
     suspend fun getProfile(): Map<String, Any>? = getProfileFlow().first()
     
     // ===========================================================================
+    // DASHBOARD CACHE - Typed methods for fast dashboard loading
+    // ===========================================================================
+    
+    private val KEY_DASHBOARD_PROFILE = stringPreferencesKey("dashboard_profile")
+    private val KEY_DASHBOARD_VEHICLES = stringPreferencesKey("dashboard_vehicles")
+    private val KEY_DASHBOARD_DRIVERS = stringPreferencesKey("dashboard_drivers")
+    private val KEY_DASHBOARD_TIMESTAMP = longPreferencesKey("dashboard_timestamp")
+    
+    // Dashboard cache TTL - 10 minutes (show cached, refresh in background)
+    private val TTL_DASHBOARD = 10 * 60 * 1000L
+    
+    /**
+     * Save complete dashboard data atomically
+     */
+    suspend fun saveDashboardData(
+        profile: UserProfile?,
+        vehicleStats: VehicleListData?,
+        driverStats: DriverListData?
+    ) {
+        try {
+            dataStore.edit { prefs ->
+                profile?.let { prefs[KEY_DASHBOARD_PROFILE] = gson.toJson(it) }
+                vehicleStats?.let { prefs[KEY_DASHBOARD_VEHICLES] = gson.toJson(it) }
+                driverStats?.let { prefs[KEY_DASHBOARD_DRIVERS] = gson.toJson(it) }
+                prefs[KEY_DASHBOARD_TIMESTAMP] = System.currentTimeMillis()
+            }
+            timber.log.Timber.d("✅ Saved dashboard data to cache")
+        } catch (e: Exception) {
+            timber.log.Timber.e("Failed to save dashboard data: ${e.message}")
+        }
+    }
+    
+    /**
+     * Get cached dashboard profile (UserProfile)
+     */
+    suspend fun getDashboardProfile(): UserProfile? {
+        return try {
+            val prefs = dataStore.data.first()
+            val json = prefs[KEY_DASHBOARD_PROFILE] ?: return null
+            gson.fromJson(json, UserProfile::class.java)
+        } catch (e: Exception) {
+            timber.log.Timber.e("Failed to get cached profile: ${e.message}")
+            null
+        }
+    }
+    
+    /**
+     * Get cached vehicle stats (VehicleListData)
+     */
+    suspend fun getDashboardVehicleStats(): VehicleListData? {
+        return try {
+            val prefs = dataStore.data.first()
+            val json = prefs[KEY_DASHBOARD_VEHICLES] ?: return null
+            gson.fromJson(json, VehicleListData::class.java)
+        } catch (e: Exception) {
+            timber.log.Timber.e("Failed to get cached vehicles: ${e.message}")
+            null
+        }
+    }
+    
+    /**
+     * Get cached driver stats (DriverListData)
+     */
+    suspend fun getDashboardDriverStats(): DriverListData? {
+        return try {
+            val prefs = dataStore.data.first()
+            val json = prefs[KEY_DASHBOARD_DRIVERS] ?: return null
+            gson.fromJson(json, DriverListData::class.java)
+        } catch (e: Exception) {
+            timber.log.Timber.e("Failed to get cached drivers: ${e.message}")
+            null
+        }
+    }
+    
+    /**
+     * Check if dashboard cache is fresh (within TTL)
+     */
+    suspend fun isDashboardCacheFresh(): Boolean {
+        return try {
+            val prefs = dataStore.data.first()
+            val timestamp = prefs[KEY_DASHBOARD_TIMESTAMP] ?: 0L
+            System.currentTimeMillis() - timestamp < TTL_DASHBOARD
+        } catch (e: Exception) {
+            false
+        }
+    }
+    
+    /**
+     * Get all dashboard data at once (for initial load)
+     */
+    data class DashboardCacheData(
+        val profile: UserProfile?,
+        val vehicleStats: VehicleListData?,
+        val driverStats: DriverListData?,
+        val isFresh: Boolean
+    )
+    
+    suspend fun getDashboardCache(): DashboardCacheData {
+        return try {
+            val prefs = dataStore.data.first()
+            val timestamp = prefs[KEY_DASHBOARD_TIMESTAMP] ?: 0L
+            val isFresh = System.currentTimeMillis() - timestamp < TTL_DASHBOARD
+            
+            val profile = prefs[KEY_DASHBOARD_PROFILE]?.let {
+                gson.fromJson(it, UserProfile::class.java)
+            }
+            val vehicles = prefs[KEY_DASHBOARD_VEHICLES]?.let {
+                gson.fromJson(it, VehicleListData::class.java)
+            }
+            val drivers = prefs[KEY_DASHBOARD_DRIVERS]?.let {
+                gson.fromJson(it, DriverListData::class.java)
+            }
+            
+            DashboardCacheData(profile, vehicles, drivers, isFresh)
+        } catch (e: Exception) {
+            timber.log.Timber.e("Failed to get dashboard cache: ${e.message}")
+            DashboardCacheData(null, null, null, false)
+        }
+    }
+    
+    // ===========================================================================
     // ACTIVE TRIPS CACHE
     // ===========================================================================
     
@@ -292,9 +415,9 @@ class OfflineCache private constructor(
                 prefs[KEY_ACTIVE_TRIPS] = json
                 prefs[KEY_ACTIVE_TRIPS_TIMESTAMP] = System.currentTimeMillis()
             }
-            Log.d(TAG, "✅ Saved ${trips.size} active trips to cache")
+            timber.log.Timber.d("✅ Saved ${trips.size} active trips to cache")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to save active trips: ${e.message}")
+            timber.log.Timber.e("Failed to save active trips: ${e.message}")
         }
     }
     
@@ -335,9 +458,9 @@ class OfflineCache private constructor(
             dataStore.edit { prefs ->
                 prefs[KEY_PENDING_REQUESTS] = json
             }
-            Log.d(TAG, "✅ Added pending request: ${request.type} (total: ${current.size})")
+            timber.log.Timber.d("✅ Added pending request: ${request.type} (total: ${current.size})")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to add pending request: ${e.message}")
+            timber.log.Timber.e("Failed to add pending request: ${e.message}")
         }
     }
     
@@ -352,7 +475,7 @@ class OfflineCache private constructor(
                 val type = object : TypeToken<List<PendingRequest>>() {}.type
                 gson.fromJson<List<PendingRequest>>(json, type) ?: emptyList()
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to parse pending requests: ${e.message}")
+                timber.log.Timber.e("Failed to parse pending requests: ${e.message}")
                 emptyList()
             }
         }
@@ -370,9 +493,9 @@ class OfflineCache private constructor(
             dataStore.edit { prefs ->
                 prefs[KEY_PENDING_REQUESTS] = json
             }
-            Log.d(TAG, "✅ Removed pending request: $requestId (remaining: ${current.size})")
+            timber.log.Timber.d("✅ Removed pending request: $requestId (remaining: ${current.size})")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to remove pending request: ${e.message}")
+            timber.log.Timber.e("Failed to remove pending request: ${e.message}")
         }
     }
     
@@ -383,7 +506,7 @@ class OfflineCache private constructor(
         dataStore.edit { prefs ->
             prefs[KEY_PENDING_REQUESTS] = "[]"
         }
-        Log.d(TAG, "✅ Cleared all pending requests")
+        timber.log.Timber.d("✅ Cleared all pending requests")
     }
     
     // ===========================================================================
@@ -397,7 +520,7 @@ class OfflineCache private constructor(
         dataStore.edit { prefs ->
             prefs.clear()
         }
-        Log.i(TAG, "🗑️ Cleared all offline cache")
+        timber.log.Timber.i("🗑️ Cleared all offline cache")
     }
     
     /**

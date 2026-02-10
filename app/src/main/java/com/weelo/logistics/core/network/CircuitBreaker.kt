@@ -1,6 +1,5 @@
 package com.weelo.logistics.core.network
 
-import android.util.Log
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicInteger
@@ -94,7 +93,7 @@ class CircuitBreaker(
                         )
                     }
                 } else {
-                    Log.d(TAG, "[$name] Circuit OPEN - failing fast")
+                    timber.log.Timber.d("[$name] Circuit OPEN - failing fast")
                     CircuitBreakerResult.CircuitOpen(
                         "Service temporarily unavailable. Please try again in ${getRemainingResetTime() / 1000} seconds."
                     )
@@ -171,7 +170,7 @@ class CircuitBreaker(
             }
             State.CLOSED -> {
                 val failures = failureCount.incrementAndGet()
-                Log.w(TAG, "[$name] Failure #$failures: ${e.message}")
+                timber.log.Timber.w("[$name] Failure #$failures: ${e.message}")
                 
                 if (failures >= failureThreshold) {
                     stateMutex.withLock {
@@ -204,14 +203,14 @@ class CircuitBreaker(
     
     private fun transitionToOpen() {
         state = State.OPEN
-        Log.w(TAG, "[$name] Circuit OPENED after $failureThreshold failures")
+        timber.log.Timber.w("[$name] Circuit OPENED after $failureThreshold failures")
     }
     
     private fun transitionToHalfOpen() {
         state = State.HALF_OPEN
         halfOpenCallCount.set(0)
         successCount.set(0)
-        Log.i(TAG, "[$name] Circuit HALF-OPEN - testing recovery")
+        timber.log.Timber.i("[$name] Circuit HALF-OPEN - testing recovery")
     }
     
     private fun transitionToClosed() {
@@ -219,7 +218,7 @@ class CircuitBreaker(
         failureCount.set(0)
         successCount.set(0)
         halfOpenCallCount.set(0)
-        Log.i(TAG, "[$name] Circuit CLOSED - backend recovered")
+        timber.log.Timber.i("[$name] Circuit CLOSED - backend recovered")
     }
     
     /**
@@ -231,7 +230,7 @@ class CircuitBreaker(
         successCount.set(0)
         halfOpenCallCount.set(0)
         lastFailureTime.set(0)
-        Log.i(TAG, "[$name] Circuit manually reset")
+        timber.log.Timber.i("[$name] Circuit manually reset")
     }
     
     /**

@@ -1,6 +1,5 @@
 package com.weelo.logistics.ui.transporter
 
-import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -29,6 +28,7 @@ private const val TAG = "VehicleDetails"
  * 
  * Fetches from: GET /api/v1/vehicles/{vehicleId}
  */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun VehicleDetailsScreen(
     vehicleId: String,
@@ -51,7 +51,7 @@ fun VehicleDetailsScreen(
             errorMessage = null
             
             try {
-                Log.d(TAG, "Fetching vehicle: $vehicleId")
+                timber.log.Timber.d("Fetching vehicle: $vehicleId")
                 
                 val response = withContext(Dispatchers.IO) {
                     RetrofitClient.vehicleApi.getVehicleById(vehicleId)
@@ -59,12 +59,12 @@ fun VehicleDetailsScreen(
                 
                 if (response.isSuccessful && response.body()?.success == true) {
                     vehicle = response.body()?.data?.vehicle
-                    Log.d(TAG, "Loaded vehicle: ${vehicle?.vehicleNumber}")
+                    timber.log.Timber.d("Loaded vehicle: ${vehicle?.vehicleNumber}")
                 } else {
                     errorMessage = response.body()?.error?.message ?: "Failed to load vehicle"
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading vehicle", e)
+                timber.log.Timber.e(e, "Error loading vehicle")
                 errorMessage = e.localizedMessage ?: "Error loading vehicle"
             } finally {
                 isLoading = false
@@ -83,13 +83,13 @@ fun VehicleDetailsScreen(
                 }
                 
                 if (response.isSuccessful && response.body()?.success == true) {
-                    Log.d(TAG, "Vehicle deleted successfully")
+                    timber.log.Timber.d("Vehicle deleted successfully")
                     onNavigateBack()
                 } else {
                     errorMessage = response.body()?.error?.message ?: "Failed to delete vehicle"
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error deleting vehicle", e)
+                timber.log.Timber.e(e, "Error deleting vehicle")
                 errorMessage = e.localizedMessage ?: "Error deleting vehicle"
             } finally {
                 isDeleting = false

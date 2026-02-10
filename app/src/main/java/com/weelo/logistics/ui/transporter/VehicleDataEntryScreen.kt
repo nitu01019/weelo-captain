@@ -1,6 +1,5 @@
 package com.weelo.logistics.ui.transporter
 
-import android.util.Log
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -236,24 +235,31 @@ fun VehicleDataEntryScreen(
                                         
                                         try {
                                             val request = entry.toApiRequest()
-                                            Log.d(TAG, "Registering vehicle: ${request.vehicleNumber}")
+                                            timber.log.Timber.d("Saving vehicle (upsert): ${request.vehicleNumber}")
                                             
+                                            // Use UPSERT endpoint - creates new or updates existing
                                             val response = withContext(Dispatchers.IO) {
-                                                RetrofitClient.vehicleApi.registerVehicle(request)
+                                                RetrofitClient.vehicleApi.upsertVehicle(request)
                                             }
                                             
                                             if (response.isSuccessful && response.body()?.success == true) {
                                                 savedCount++
-                                                Log.d(TAG, "Vehicle ${request.vehicleNumber} saved successfully")
+                                                val action = if (response.body()?.data?.isNew == true) "registered" else "updated"
+                                                timber.log.Timber.d("Vehicle ${request.vehicleNumber} $action successfully")
                                             } else {
-                                                val errMsg = response.body()?.error?.message 
-                                                    ?: response.errorBody()?.string()
-                                                    ?: "Unknown error"
-                                                Log.e(TAG, "Failed to save ${request.vehicleNumber}: $errMsg")
+                                                // Only fails if vehicle is owned by someone else
+                                                val errorCode = response.body()?.error?.code
+                                                val errMsg = when (errorCode) {
+                                                    "VEHICLE_EXISTS" -> "Registered by another transporter"
+                                                    else -> response.body()?.error?.message 
+                                                        ?: response.errorBody()?.string()
+                                                        ?: "Unknown error"
+                                                }
+                                                timber.log.Timber.e("Failed to save ${request.vehicleNumber}: $errMsg")
                                                 failed.add("${request.vehicleNumber}: $errMsg")
                                             }
                                         } catch (e: Exception) {
-                                            Log.e(TAG, "Exception saving vehicle", e)
+                                            timber.log.Timber.e(e, "Exception saving vehicle")
                                             failed.add("${entry.vehicleNumber}: ${e.localizedMessage}")
                                         }
                                     }
@@ -271,7 +277,7 @@ fun VehicleDataEntryScreen(
                                         }
                                     }
                                 } catch (e: Exception) {
-                                    Log.e(TAG, "Error in save process", e)
+                                    timber.log.Timber.e(e, "Error in save process")
                                     errorMessage = e.localizedMessage ?: "Unknown error"
                                 } finally {
                                     isSubmitting = false

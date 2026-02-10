@@ -10,22 +10,21 @@ import com.weelo.logistics.data.model.EarningsSummary
 import com.weelo.logistics.data.model.DashNotificationType
 import com.weelo.logistics.data.model.PerformanceMetrics
 import com.weelo.logistics.data.model.TripProgressStatus
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlin.random.Random
 
 /**
  * DriverDashboardViewModel - Manages driver dashboard state and operations
  * 
- * Responsibilities:
- * - Load and refresh dashboard data
- * - Handle driver status changes (online/offline)
- * - Manage notifications
- * - Calculate real-time earnings
- * - Simulate active trip updates
+ * RAPIDO-STYLE CACHE-FIRST PATTERN:
+ * - Keeps last known data in memory
+ * - Only shows Loading on very first load (cache empty)
+ * - Never clears data - always shows cached while refreshing
+ * - Back navigation shows cached data instantly (0ms)
  * 
  * Backend Integration:
  * - Replace mock functions with repository API calls
@@ -33,83 +32,181 @@ import kotlin.random.Random
  */
 class DriverDashboardViewModel : ViewModel() {
 
-    // State
-    private val _dashboardState = MutableStateFlow<DriverDashboardState>(DriverDashboardState.Loading)
+    // State — starts as Idle (not Loading) to prevent skeleton flash on first frame.
+    // Loading is only set after 150ms grace period expires in loadDashboardData().
+    private val _dashboardState = MutableStateFlow<DriverDashboardState>(DriverDashboardState.Idle)
     val dashboardState: StateFlow<DriverDashboardState> = _dashboardState.asStateFlow()
 
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+    
+    // =========================================================================
+    // INITIAL LOAD TRACKING
+    // =========================================================================
+    // true  → first-ever load (cache empty) → show skeleton
+    // false → subsequent visits / cache exists → show content instantly
+    //
+    // SCALABILITY: O(1) boolean check, no allocation.
+    // MODULARITY: ViewModel owns this state; UI simply observes.
+    // =========================================================================
+    private val _isInitialLoad = MutableStateFlow(true)
+    val isInitialLoad: StateFlow<Boolean> = _isInitialLoad.asStateFlow()
+    
+    // =========================================================================
+    // RAPIDO-STYLE: Keep last known data for instant display on back navigation
+    // =========================================================================
+    private var cachedDashboardData: DashboardData? = null
+    private var lastFetchTime: Long = 0
+    private val STALE_TIME_MS = 60_000L // 60 seconds
 
     init {
-        // Don't auto-load - wait for backend connection
-        // Backend will trigger loadDashboardData() when connected
-        // No auto-refresh - use WebSocket/FCM for real-time updates
+        // Don't auto-load - wait for screen to trigger
+        // If we have cached data, show it instantly
+        cachedDashboardData?.let {
+            _dashboardState.value = DriverDashboardState.Success(it)
+            _isInitialLoad.value = false
+        }
     }
 
+    // =========================================================================
+    // SMART LOADING — 150ms Grace Period
+    // =========================================================================
+    // PROBLEM: If data resolves instantly (<150ms, e.g., mock/cache), showing
+    // a skeleton for 1-2 frames then fading it out looks like a "flash/flicker".
+    //
+    // SOLUTION (Industry Standard — used by Instagram, Uber, Rapido):
+    // 1. Start fetching data immediately
+    // 2. Start a parallel 150ms timer
+    // 3. If data arrives BEFORE timer → emit Success directly (no skeleton)
+    // 4. If timer fires BEFORE data → show Loading (skeleton)
+    //
+    // RESULT: Fast responses never show skeleton. Slow responses (>150ms)
+    // get a polished skeleton loading experience.
+    //
+    // SCALABILITY: Works on all devices — grace period adapts naturally.
+    // MODULARITY: Pure ViewModel logic — UI just observes state.
+    // =========================================================================
+    private var loadingGraceJob: Job? = null
+    
+    companion object {
+        private const val TAG = "DriverDashboardVM"
+        private const val LOADING_GRACE_MS = 150L // Show skeleton only after this
+    }
+    
     /**
-     * Load dashboard data from backend
+     * Load dashboard data - SMART LOADING + CACHE-FIRST
      * 
-     * BACKEND INTEGRATION POINT:
-     * Call this function when:
-     * 1. Screen opens
-     * 2. User pulls to refresh
-     * 3. WebSocket/FCM notification received
-     * 
-     * Replace the body with: repository.getDashboardData(driverId)
+     * - Cache exists + fresh → show instantly (0ms, no skeleton)
+     * - Cache exists + stale → show cache, refresh in background
+     * - No cache → 150ms grace → skeleton if still loading
      */
     fun loadDashboardData(driverId: String = "d1") {
+        // Cancel any pending grace timer
+        loadingGraceJob?.cancel()
+        
         viewModelScope.launch {
-            try {
-                _dashboardState.value = DriverDashboardState.Loading
+            // =========================================================================
+            // STEP 1: Check cache first (INSTANT - 0ms)
+            // =========================================================================
+            cachedDashboardData?.let { cached ->
+                timber.log.Timber.d("📦 Showing cached dashboard data (instant)")
+                _dashboardState.value = DriverDashboardState.Success(cached)
                 
+                // Skip fetch if data is fresh
+                if (System.currentTimeMillis() - lastFetchTime < STALE_TIME_MS) {
+                    timber.log.Timber.d("📦 Cache is fresh, skipping API call")
+                    return@launch
+                }
+            }
+            
+            // =========================================================================
+            // STEP 2: Smart Loading — only show skeleton after 150ms grace period
+            // =========================================================================
+            // If no cache, start a grace timer. If data arrives within 150ms,
+            // the user never sees a skeleton — it goes straight to content.
+            // =========================================================================
+            if (cachedDashboardData == null && _dashboardState.value !is DriverDashboardState.Loading) {
+                loadingGraceJob = viewModelScope.launch {
+                    delay(LOADING_GRACE_MS)
+                    // Grace period expired, data still not here → show skeleton
+                    val current = _dashboardState.value
+                    if (current !is DriverDashboardState.Success) {
+                        _dashboardState.value = DriverDashboardState.Loading
+                        timber.log.Timber.d("⏳ Grace period expired → showing skeleton")
+                    }
+                }
+            }
+            
+            try {
                 // TODO: Backend API Call
                 // val response = repository.getDashboardData(driverId)
+                // cachedDashboardData = response
+                // lastFetchTime = System.currentTimeMillis()
                 // _dashboardState.value = DriverDashboardState.Success(response)
                 
                 // FOR NOW: Show empty state (no mock data)
-                _dashboardState.value = DriverDashboardState.Success(
-                    DashboardData(
-                        driverId = driverId,
-                        earnings = EarningsSummary(
-                            today = 0.0,
-                            todayTrips = 0,
-                            weekly = 0.0,
-                            weeklyTrips = 0,
-                            monthly = 0.0,
-                            monthlyTrips = 0,
-                            pendingPayment = 0.0
-                        ),
-                        performance = PerformanceMetrics(
-                            rating = 0.0,
-                            totalRatings = 0,
-                            acceptanceRate = 0.0,
-                            onTimeDeliveryRate = 0.0,
-                            completionRate = 0.0,
-                            totalTrips = 0,
-                            totalDistance = 0.0
-                        ),
-                        activeTrip = null,
-                        recentTrips = emptyList(),
-                        notifications = emptyList(),
-                        isOnline = false,
-                        lastUpdated = System.currentTimeMillis()
-                    )
+                val dashboardData = DashboardData(
+                    driverId = driverId,
+                    earnings = EarningsSummary(
+                        today = 0.0,
+                        todayTrips = 0,
+                        weekly = 0.0,
+                        weeklyTrips = 0,
+                        monthly = 0.0,
+                        monthlyTrips = 0,
+                        pendingPayment = 0.0
+                    ),
+                    performance = PerformanceMetrics(
+                        rating = 0.0,
+                        totalRatings = 0,
+                        acceptanceRate = 0.0,
+                        onTimeDeliveryRate = 0.0,
+                        completionRate = 0.0,
+                        totalTrips = 0,
+                        totalDistance = 0.0
+                    ),
+                    activeTrip = null,
+                    recentTrips = emptyList(),
+                    notifications = emptyList(),
+                    isOnline = false,
+                    lastUpdated = System.currentTimeMillis()
                 )
+                
+                // Cancel grace timer — data arrived before skeleton was needed
+                loadingGraceJob?.cancel()
+                
+                // Cache the data for future instant display
+                cachedDashboardData = dashboardData
+                lastFetchTime = System.currentTimeMillis()
+                _dashboardState.value = DriverDashboardState.Success(dashboardData)
+                _isInitialLoad.value = false
+                
+                timber.log.Timber.d("✅ Dashboard data loaded (skeleton skipped: ${loadingGraceJob?.isCancelled})")
             } catch (e: Exception) {
-                _dashboardState.value = DriverDashboardState.Error(
-                    e.message ?: "Failed to load dashboard. Check your connection."
-                )
+                // Cancel grace timer on error too
+                loadingGraceJob?.cancel()
+                
+                // RAPIDO-STYLE: If we have cached data, keep showing it on error
+                if (cachedDashboardData != null) {
+                    timber.log.Timber.w("⚠️ API failed, showing cached data")
+                } else {
+                    _dashboardState.value = DriverDashboardState.Error(
+                        e.message ?: "Failed to load dashboard. Check your connection."
+                    )
+                }
             }
         }
     }
 
     /**
      * Refresh dashboard data (pull-to-refresh)
+     * 
+     * PERFORMANCE: Removed artificial delay(1000) for instant refresh
      */
     fun refresh(driverId: String = "d1") {
         viewModelScope.launch {
             _isRefreshing.value = true
-            delay(1000)
+            // PERFORMANCE: Removed delay(1000) - was causing 1s perceived lag
             loadDashboardData(driverId)
             _isRefreshing.value = false
         }
@@ -122,6 +219,7 @@ class DriverDashboardViewModel : ViewModel() {
      * API: POST /api/v1/driver/status
      * Body: { "driverId": "string", "status": "ONLINE|OFFLINE" }
      */
+    @Suppress("UNUSED_PARAMETER")
     fun toggleOnlineStatus(driverId: String = "d1") {
         viewModelScope.launch {
             val currentState = _dashboardState.value
@@ -235,7 +333,6 @@ class DriverDashboardViewModel : ViewModel() {
      * Called automatically when new trip arrives
      */
     private fun calculateEarnings(trips: List<CompletedTrip>): EarningsSummary {
-        val now = System.currentTimeMillis()
         val todayStart = getTodayStartTimestamp()
         val weekStart = getWeekStartTimestamp()
         val monthStart = getMonthStartTimestamp()
@@ -323,9 +420,24 @@ class DriverDashboardViewModel : ViewModel() {
 
 /**
  * Driver Dashboard UI State
+ * 
+ * STATE MACHINE:
+ *   Idle → Loading (after 150ms grace) → Success
+ *   Idle → Success (if data arrives within 150ms grace — no skeleton shown)
+ *   Success → Success (data update, no animation)
+ *   Loading/Idle → Error (on failure with no cache)
+ *   Error → Loading → Success (on retry)
+ *
+ * INDUSTRY STANDARD: Idle state prevents first-frame skeleton flash.
+ * Loading is only shown if data fetch genuinely takes > 150ms.
  */
 sealed class DriverDashboardState {
+    /** Initial state — before any data fetch. Shows skeleton in dashboard. */
+    object Idle : DriverDashboardState()
+    /** Data is loading and took > 150ms — show skeleton shimmer. */
     object Loading : DriverDashboardState()
+    /** Data loaded successfully — show dashboard content. */
     data class Success(val data: DashboardData) : DriverDashboardState()
+    /** Data fetch failed with no cache available — show error + retry. */
     data class Error(val message: String) : DriverDashboardState()
 }

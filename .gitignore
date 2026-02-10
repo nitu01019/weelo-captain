@@ -40,3 +40,13 @@ obj/
 # OS Files
 .DS_Store
 Thumbs.db
+
+# =============================================================================
+# SECURITY: Firebase config contains API keys and project identifiers
+# Add to .gitignore if repo is PUBLIC. For private repos, it's generally safe.
+# =============================================================================
+app/google-services.json
+
+# Signing keystores
+*.keystore
+*.jks

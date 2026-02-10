@@ -16,6 +16,7 @@ import com.weelo.logistics.data.model.Trip
 import com.weelo.logistics.data.model.TripStatus
 import com.weelo.logistics.data.repository.MockDataRepository
 import com.weelo.logistics.ui.components.*
+import com.weelo.logistics.ui.components.responsiveHorizontalPadding
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -38,6 +39,9 @@ fun TripDetailsScreen(
         }
     }
     
+    // Responsive layout
+    val horizontalPadding = responsiveHorizontalPadding()
+    
     Column(Modifier.fillMaxSize().background(Surface)) {
         PrimaryTopBar(title = "Trip Details", onBackClick = onNavigateBack)
         
@@ -50,7 +54,7 @@ fun TripDetailsScreen(
                 Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
+                    .padding(horizontal = horizontalPadding, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(if (t.status == TripStatus.IN_PROGRESS) PrimaryLight else White)) {

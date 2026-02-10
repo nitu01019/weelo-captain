@@ -1,7 +1,6 @@
 package com.weelo.logistics.offline
 
 import android.content.Context
-import android.util.Log
 import com.weelo.logistics.data.remote.RetrofitClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -71,20 +70,20 @@ class OfflineSyncService private constructor(
             // Monitor network changes
             networkMonitor.isOnline.collect { isOnline ->
                 if (isOnline) {
-                    Log.i(TAG, "📶 Network available - scheduling sync")
+                    timber.log.Timber.i("📶 Network available - scheduling sync")
                     // Debounce to avoid rapid sync attempts
                     delay(SYNC_DEBOUNCE_MS)
                     if (networkMonitor.isCurrentlyOnline()) {
                         syncPendingRequests()
                     }
                 } else {
-                    Log.w(TAG, "📵 Network unavailable - sync paused")
+                    timber.log.Timber.w("📵 Network unavailable - sync paused")
                     _syncState.value = SyncState.Offline
                 }
             }
         }
         
-        Log.i(TAG, "🔄 Offline sync service started")
+        timber.log.Timber.i("🔄 Offline sync service started")
     }
     
     /**
@@ -93,7 +92,7 @@ class OfflineSyncService private constructor(
     fun stopMonitoring() {
         isMonitoring = false
         syncJob?.cancel()
-        Log.i(TAG, "⏹️ Offline sync service stopped")
+        timber.log.Timber.i("⏹️ Offline sync service stopped")
     }
     
     /**
@@ -101,12 +100,12 @@ class OfflineSyncService private constructor(
      */
     suspend fun syncPendingRequests(): SyncResult {
         if (_syncState.value == SyncState.Syncing) {
-            Log.d(TAG, "Sync already in progress")
+            timber.log.Timber.d("Sync already in progress")
             return SyncResult(0, 0, "Already syncing")
         }
         
         if (!networkMonitor.isCurrentlyOnline()) {
-            Log.w(TAG, "Cannot sync - offline")
+            timber.log.Timber.w("Cannot sync - offline")
             return SyncResult(0, 0, "Offline")
         }
         
@@ -114,12 +113,12 @@ class OfflineSyncService private constructor(
         
         val pendingRequests = offlineCache.getPendingRequests()
         if (pendingRequests.isEmpty()) {
-            Log.d(TAG, "No pending requests to sync")
+            timber.log.Timber.d("No pending requests to sync")
             _syncState.value = SyncState.Idle
             return SyncResult(0, 0, "No pending requests")
         }
         
-        Log.i(TAG, "🔄 Syncing ${pendingRequests.size} pending requests...")
+        timber.log.Timber.i("🔄 Syncing ${pendingRequests.size} pending requests...")
         
         var successCount = 0
         var failCount = 0
@@ -130,7 +129,7 @@ class OfflineSyncService private constructor(
                 if (success) {
                     offlineCache.removePendingRequest(request.id)
                     successCount++
-                    Log.d(TAG, "✅ Synced: ${request.type}")
+                    timber.log.Timber.d("✅ Synced: ${request.type}")
                 } else {
                     failCount++
                     // Update retry count
@@ -140,11 +139,11 @@ class OfflineSyncService private constructor(
                     } else {
                         // Max retries reached - remove
                         offlineCache.removePendingRequest(request.id)
-                        Log.w(TAG, "❌ Max retries reached for: ${request.type}")
+                        timber.log.Timber.w("❌ Max retries reached for: ${request.type}")
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Sync error for ${request.type}: ${e.message}")
+                timber.log.Timber.e("Sync error for ${request.type}: ${e.message}")
                 failCount++
             }
             
@@ -155,7 +154,7 @@ class OfflineSyncService private constructor(
         updatePendingCount()
         _syncState.value = if (failCount > 0) SyncState.Error("$failCount failed") else SyncState.Idle
         
-        Log.i(TAG, "🔄 Sync complete: $successCount success, $failCount failed")
+        timber.log.Timber.i("🔄 Sync complete: $successCount success, $failCount failed")
         return SyncResult(successCount, failCount, "Sync complete")
     }
     
@@ -172,7 +171,7 @@ class OfflineSyncService private constructor(
                 RequestType.OTHER -> syncGenericRequest(request)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to sync ${request.type}: ${e.message}")
+            timber.log.Timber.e("Failed to sync ${request.type}: ${e.message}")
             false
         }
     }
@@ -195,6 +194,7 @@ class OfflineSyncService private constructor(
         return request.body != null
     }
     
+    @Suppress("UNUSED_PARAMETER")
     private suspend fun syncGenericRequest(request: PendingRequest): Boolean {
         return true
     }
@@ -239,7 +239,7 @@ class OfflineSyncService private constructor(
      */
     suspend fun refreshAllData() {
         if (!networkMonitor.isCurrentlyOnline()) {
-            Log.w(TAG, "Cannot refresh - offline")
+            timber.log.Timber.w("Cannot refresh - offline")
             return
         }
         
@@ -251,10 +251,10 @@ class OfflineSyncService private constructor(
             // Refresh drivers
             // Refresh profile
             
-            Log.i(TAG, "✅ All data refreshed")
+            timber.log.Timber.i("✅ All data refreshed")
             _syncState.value = SyncState.Idle
         } catch (e: Exception) {
-            Log.e(TAG, "Refresh failed: ${e.message}")
+            timber.log.Timber.e("Refresh failed: ${e.message}")
             _syncState.value = SyncState.Error(e.message ?: "Refresh failed")
         }
     }

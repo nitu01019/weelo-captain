@@ -5,7 +5,6 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
-import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -90,24 +89,24 @@ class NetworkMonitor private constructor(
     private fun startMonitoring() {
         val networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                Log.i(TAG, "🌐 Network AVAILABLE")
+                timber.log.Timber.i("🌐 Network AVAILABLE")
                 _networkState.value = NetworkState.Available
                 _isOnline.value = true
             }
             
             override fun onLosing(network: Network, maxMsToLive: Int) {
-                Log.w(TAG, "🌐 Network LOSING (${maxMsToLive}ms)")
+                timber.log.Timber.w("🌐 Network LOSING (${maxMsToLive}ms)")
                 _networkState.value = NetworkState.Losing
             }
             
             override fun onLost(network: Network) {
-                Log.w(TAG, "🌐 Network LOST")
+                timber.log.Timber.w("🌐 Network LOST")
                 _networkState.value = NetworkState.Lost
                 _isOnline.value = false
             }
             
             override fun onUnavailable() {
-                Log.w(TAG, "🌐 Network UNAVAILABLE")
+                timber.log.Timber.w("🌐 Network UNAVAILABLE")
                 _networkState.value = NetworkState.Unavailable
                 _isOnline.value = false
             }
@@ -123,7 +122,7 @@ class NetworkMonitor private constructor(
                 val nowOnline = hasInternet && isValidated
                 
                 if (wasOnline != nowOnline) {
-                    Log.i(TAG, "🌐 Network capabilities changed: online=$nowOnline")
+                    timber.log.Timber.i("🌐 Network capabilities changed: online=$nowOnline")
                     _isOnline.value = nowOnline
                     _networkState.value = if (nowOnline) NetworkState.Available else NetworkState.Unavailable
                 }
@@ -136,9 +135,9 @@ class NetworkMonitor private constructor(
         
         try {
             connectivityManager.registerNetworkCallback(networkRequest, networkCallback)
-            Log.i(TAG, "🌐 Network monitoring started (initial: ${if (_isOnline.value) "ONLINE" else "OFFLINE"})")
+            timber.log.Timber.i("🌐 Network monitoring started (initial: ${if (_isOnline.value) "ONLINE" else "OFFLINE"})")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to register network callback: ${e.message}")
+            timber.log.Timber.e("Failed to register network callback: ${e.message}")
         }
     }
     

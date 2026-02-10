@@ -1,12 +1,59 @@
 package com.weelo.logistics.ui.navigation
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
-import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import timber.log.Timber
 import com.weelo.logistics.ui.auth.*
+import com.weelo.logistics.ui.driver.DriverProfileViewModel
+import com.weelo.logistics.ui.driver.DriverProfileScreenWithPhotos
+
+/**
+ * ============================================================================
+ * NAVIGATION HELPERS - Smooth & Scalable Navigation
+ * ============================================================================
+ *
+ * SCALABILITY:
+ * - launchSingleTop prevents duplicate destinations
+ * - restoreState keeps screen state across back/forward
+ * - saveState avoids reloading screens (smooth like Instagram)
+ *
+ * MODULARITY:
+ * - Centralized navigation options
+ * - Easy to reuse across driver + transporter flows
+ *
+ * CODING STANDARDS:
+ * - Clear naming
+ * - Documented behavior
+ * ============================================================================
+ */
+private fun NavHostController.navigateSmooth(
+    route: String,
+    popUpToRoute: String? = null,
+    inclusive: Boolean = false,
+    restoreState: Boolean = true
+) {
+    navigate(route) {
+        launchSingleTop = true
+        this.restoreState = restoreState
+        if (popUpToRoute != null) {
+            popUpTo(popUpToRoute) {
+                saveState = true
+                this.inclusive = inclusive
+            }
+        }
+    }
+}
 
 /**
  * Main Navigation component
@@ -22,11 +69,16 @@ fun WeeloNavigation(
     userRole: String? = null
 ) {
     // Determine start destination based on login status
+    // CRITICAL: Drivers ALWAYS go through onboarding check first
+    // to ensure language is selected. Never skip to dashboard directly.
     val startDestination = if (isLoggedIn && userRole != null) {
         if (userRole.uppercase() == "TRANSPORTER") {
             Screen.TransporterDashboard.route
         } else {
-            Screen.DriverDashboard.route
+            // DRIVER: Always check language/profile status first
+            // driver_onboarding_check will redirect to dashboard if complete,
+            // or force language selection if not set
+            "driver_onboarding_check"
         }
     } else {
         Screen.RoleSelection.route
@@ -52,7 +104,7 @@ fun WeeloNavigation(
             RoleSelectionScreen(
                 onRoleSelected = { role ->
                     // Navigate to login screen for selected role
-                    navController.navigate("${Screen.Login.route}/$role")
+                    navController.navigateSmooth("${Screen.Login.route}/$role")
                 }
             )
         }
@@ -62,10 +114,10 @@ fun WeeloNavigation(
             LoginScreen(
                 role = role,
                 onNavigateToSignup = {
-                    navController.navigate("${Screen.Signup.route}/$role")
+                    navController.navigateSmooth("${Screen.Signup.route}/$role")
                 },
                 onNavigateToOTP = { mobile, selectedRole ->
-                    navController.navigate("otp_verification/$mobile/$selectedRole/login")
+                    navController.navigateSmooth("otp_verification/$mobile/$selectedRole/login")
                 },
                 onNavigateBack = {
                     navController.popBackStack()
@@ -86,19 +138,26 @@ fun WeeloNavigation(
                 onVerifySuccess = {
                     if (type == "signup") {
                         // Continue to name/location steps (handled in SignupScreen)
-                        navController.navigate("${Screen.Signup.route}/$role/step2") {
-                            popUpTo("otp_verification/{mobile}/{role}/{type}") { inclusive = true }
-                        }
+                        navController.navigateSmooth(
+                            route = "${Screen.Signup.route}/$role/step2",
+                            popUpToRoute = "otp_verification/{mobile}/{role}/{type}",
+                            inclusive = true
+                        )
                     } else {
-                        // Login - go to dashboard
-                        val destination = if (role == "TRANSPORTER") {
-                            Screen.TransporterDashboard.route
+                        // Login - check driver onboarding status
+                        if (role == "TRANSPORTER") {
+                            navController.navigateSmooth(
+                                route = Screen.TransporterDashboard.route,
+                                popUpToRoute = Screen.RoleSelection.route,
+                                inclusive = false
+                            )
                         } else {
-                            Screen.DriverDashboard.route
-                        }
-                        navController.navigate(destination) {
-                            // Clear auth stack, but keep RoleSelection as back target
-                            popUpTo(Screen.RoleSelection.route) { inclusive = false }
+                            // Driver: Check if language/profile setup needed
+                            navController.navigateSmooth(
+                                route = "driver_onboarding_check",
+                                popUpToRoute = Screen.RoleSelection.route,
+                                inclusive = false
+                            )
                         }
                     }
                 }
@@ -110,13 +169,15 @@ fun WeeloNavigation(
             SignupScreen(
                 role = role,
                 onNavigateToLogin = {
-                    navController.navigate("${Screen.Login.route}/$role") {
-                        popUpTo(Screen.RoleSelection.route) { inclusive = false }
-                    }
+                    navController.navigateSmooth(
+                        route = "${Screen.Login.route}/$role",
+                        popUpToRoute = Screen.RoleSelection.route,
+                        inclusive = false
+                    )
                 },
                 onNavigateToOTP = { mobile, selectedRole, isSignup ->
                     val type = if (isSignup) "signup" else "login"
-                    navController.navigate("otp_verification/$mobile/$selectedRole/$type")
+                    navController.navigateSmooth("otp_verification/$mobile/$selectedRole/$type")
                 },
                 onNavigateBack = {
                     navController.popBackStack()
@@ -127,20 +188,24 @@ fun WeeloNavigation(
         // Transporter Dashboard
         composable(Screen.TransporterDashboard.route) {
             com.weelo.logistics.ui.transporter.TransporterDashboardScreen(
-                onNavigateToFleet = { navController.navigate(Screen.FleetList.route) },
-                onNavigateToDrivers = { navController.navigate(Screen.DriverList.route) },
-                onNavigateToTrips = { navController.navigate(Screen.TripList.route) },
-                onNavigateToAddVehicle = { navController.navigate(Screen.AddVehicle.route) },
-                onNavigateToAddDriver = { navController.navigate(Screen.AddDriver.route) },
-                onNavigateToCreateTrip = { navController.navigate(Screen.CreateTrip.route) },
-                onNavigateToProfile = { navController.navigate("transporter_profile") },
-                onNavigateToBroadcasts = { navController.navigate(Screen.BroadcastList.route) },
-                onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
+                onNavigateToFleet = { navController.navigateSmooth(Screen.FleetList.route) },
+                onNavigateToDrivers = { navController.navigateSmooth(Screen.DriverList.route) },
+                onNavigateToTrips = { navController.navigateSmooth(Screen.TripList.route) },
+                onNavigateToAddVehicle = { navController.navigateSmooth(Screen.AddVehicle.route) },
+                onNavigateToAddDriver = { navController.navigateSmooth(Screen.AddDriver.route) },
+                onNavigateToCreateTrip = { navController.navigateSmooth(Screen.CreateTrip.route) },
+                onNavigateToProfile = { navController.navigateSmooth("transporter_profile") },
+                // BroadcastList removed - using overlay only
+                onNavigateToBroadcasts = { /* Broadcasts shown via overlay, no separate screen */ },
+                onNavigateToSettings = { navController.navigateSmooth(Screen.Settings.route) },
                 onLogout = {
                     // Back button or logout goes to role selection
-                    navController.navigate(Screen.RoleSelection.route) {
-                        popUpTo(Screen.Splash.route) { inclusive = true }
-                    }
+                    navController.navigateSmooth(
+                        route = Screen.RoleSelection.route,
+                        popUpToRoute = null,
+                        inclusive = true,
+                        restoreState = false
+                    )
                 }
             )
         }
@@ -153,29 +218,8 @@ fun WeeloNavigation(
             )
         }
         
-        // Broadcast List Screen - Shows customer booking requests
-        composable(Screen.BroadcastList.route) {
-            com.weelo.logistics.ui.transporter.BroadcastListScreen(
-                onNavigateBack = { navController.popBackStack() },
-                onNavigateToBroadcastDetails = { params ->
-                    // params format: "orderId|vehicleType|vehicleSubtype|quantity"
-                    val parts = params.split("|")
-                    if (parts.size >= 4) {
-                        val orderId = parts[0]
-                        val vehicleType = parts[1]
-                        val vehicleSubtype = parts[2]
-                        val quantity = parts[3].toIntOrNull() ?: 1
-                        navController.navigate(Screen.TruckHoldConfirm.createRoute(orderId, vehicleType, vehicleSubtype, quantity))
-                    } else {
-                        // Fallback to old flow
-                        navController.navigate(Screen.TruckSelection.createRoute(params))
-                    }
-                },
-                onNavigateToSoundSettings = {
-                    navController.navigate(Screen.BroadcastSoundSettings.route)
-                }
-            )
-        }
+        // BroadcastListScreen REMOVED - Broadcasts are shown via overlay only
+        // BroadcastOverlayScreen in MainActivity handles all broadcast display
         
         // Broadcast Sound Settings
         composable(Screen.BroadcastSoundSettings.route) {
@@ -196,11 +240,12 @@ fun WeeloNavigation(
                 vehicleType = vehicleType,
                 vehicleSubtype = vehicleSubtype,
                 quantity = quantity,
-                onConfirmed = { holdId, truckIds ->
+                onConfirmed = { _, truckIds ->
                     // Navigate to driver assignment
-                    navController.navigate(Screen.DriverAssignment.createRoute(orderId, truckIds.joinToString(","))) {
-                        popUpTo(Screen.BroadcastList.route)
-                    }
+                    navController.navigateSmooth(
+                        route = Screen.DriverAssignment.createRoute(orderId, truckIds.joinToString(",")),
+                        popUpToRoute = Screen.TransporterDashboard.route
+                    )
                 },
                 onCancelled = {
                     navController.popBackStack()
@@ -217,7 +262,7 @@ fun WeeloNavigation(
                 onNavigateToDriverAssignment = { bId, vehicleIds ->
                     // Encode vehicle IDs as comma-separated string
                     val vehicleIdsParam = vehicleIds.joinToString(",")
-                    navController.navigate(Screen.DriverAssignment.createRoute(bId, vehicleIdsParam))
+                    navController.navigateSmooth(Screen.DriverAssignment.createRoute(bId, vehicleIdsParam))
                 }
             )
         }
@@ -233,7 +278,11 @@ fun WeeloNavigation(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToTracking = {
                     // Navigate back to dashboard after successful assignment
-                    navController.popBackStack(Screen.TransporterDashboard.route, inclusive = false)
+                    navController.navigateSmooth(
+                        route = Screen.TransporterDashboard.route,
+                        popUpToRoute = Screen.TransporterDashboard.route,
+                        inclusive = false
+                    )
                 }
             )
         }
@@ -242,9 +291,9 @@ fun WeeloNavigation(
         composable(Screen.FleetList.route) {
             com.weelo.logistics.ui.transporter.FleetListScreen(
                 onNavigateBack = { navController.popBackStack() },
-                onNavigateToAddVehicle = { navController.navigate(Screen.AddVehicle.route) },
+                onNavigateToAddVehicle = { navController.navigateSmooth(Screen.AddVehicle.route) },
                 onNavigateToVehicleDetails = { vehicleId ->
-                    navController.navigate(Screen.VehicleDetails.createRoute(vehicleId))
+                    navController.navigateSmooth(Screen.VehicleDetails.createRoute(vehicleId))
                 }
             )
         }
@@ -253,7 +302,11 @@ fun WeeloNavigation(
             com.weelo.logistics.ui.transporter.AddVehicleScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onVehicleAdded = {
-                    navController.popBackStack(Screen.FleetList.route, inclusive = false)
+                    navController.navigateSmooth(
+                        route = Screen.FleetList.route,
+                        popUpToRoute = Screen.FleetList.route,
+                        inclusive = false
+                    )
                 }
             )
         }
@@ -271,9 +324,9 @@ fun WeeloNavigation(
         composable(Screen.DriverList.route) {
             com.weelo.logistics.ui.transporter.DriverListScreen(
                 onNavigateBack = { navController.popBackStack() },
-                onNavigateToAddDriver = { navController.navigate(Screen.AddDriver.route) },
+                onNavigateToAddDriver = { navController.navigateSmooth(Screen.AddDriver.route) },
                 onNavigateToDriverDetails = { driverId ->
-                    navController.navigate(Screen.DriverDetails.createRoute(driverId))
+                    navController.navigateSmooth(Screen.DriverDetails.createRoute(driverId))
                 }
             )
         }
@@ -283,7 +336,11 @@ fun WeeloNavigation(
                 transporterId = "TRP-001", // TODO: Get from user session
                 onNavigateBack = { navController.popBackStack() },
                 onDriverAdded = {
-                    navController.popBackStack(Screen.DriverList.route, inclusive = false)
+                    navController.navigateSmooth(
+                        route = Screen.DriverList.route,
+                        popUpToRoute = Screen.DriverList.route,
+                        inclusive = false
+                    )
                 }
             )
         }
@@ -294,10 +351,10 @@ fun WeeloNavigation(
                 driverId = driverId,
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToPerformance = { id ->
-                    navController.navigate(Screen.DriverPerformance.createRoute(id))
+                    navController.navigateSmooth(Screen.DriverPerformance.createRoute(id))
                 },
                 onNavigateToEarnings = { id ->
-                    navController.navigate(Screen.DriverEarnings.createRoute(id))
+                    navController.navigateSmooth(Screen.DriverEarnings.createRoute(id))
                 }
             )
         }
@@ -306,9 +363,9 @@ fun WeeloNavigation(
         composable(Screen.TripList.route) {
             com.weelo.logistics.ui.transporter.TripListScreen(
                 onNavigateBack = { navController.popBackStack() },
-                onNavigateToCreateTrip = { navController.navigate(Screen.CreateTrip.route) },
+                onNavigateToCreateTrip = { navController.navigateSmooth(Screen.CreateTrip.route) },
                 onNavigateToTripDetails = { tripId ->
-                    navController.navigate(Screen.TripDetails.createRoute(tripId))
+                    navController.navigateSmooth(Screen.TripDetails.createRoute(tripId))
                 }
             )
         }
@@ -317,7 +374,11 @@ fun WeeloNavigation(
             com.weelo.logistics.ui.transporter.CreateTripScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onTripCreated = {
-                    navController.popBackStack(Screen.TripList.route, inclusive = false)
+                    navController.navigateSmooth(
+                        route = Screen.TripList.route,
+                        popUpToRoute = Screen.TripList.route,
+                        inclusive = false
+                    )
                 }
             )
         }
@@ -330,29 +391,192 @@ fun WeeloNavigation(
             )
         }
         
-        // Driver Dashboard
-        composable(Screen.DriverDashboard.route) {
-            com.weelo.logistics.ui.driver.DriverDashboardScreen(
-                onNavigateToNotifications = { /* TODO: Implement */ },
-                onNavigateToTripHistory = { /* TODO: Implement */ },
-                onNavigateToProfile = { navController.navigate("driver_profile") },
-                onOpenFullMap = { tripId -> /* TODO: Implement */ },
-                onLogout = {
-                    // Clear tokens and logout
-                    com.weelo.logistics.data.remote.RetrofitClient.clearAllData()
-                    // Back button or logout goes to role selection
-                    navController.navigate(Screen.RoleSelection.route) {
-                        popUpTo(Screen.Splash.route) { inclusive = true }
+        // =====================================================================
+        // DRIVER ONBOARDING FLOW (Language → Profile → Dashboard)
+        // =====================================================================
+        
+        // =====================================================================
+        // STRICT SECURITY: Driver Onboarding Check
+        // BLOCKS dashboard access without language selection
+        //
+        // CRITICAL FIX: Uses suspend getLanguageSync() + isProfileCompletedSync()
+        // instead of collectAsState(initial=...) to avoid race conditions.
+        //
+        // WHY: collectAsState emits `initial` value BEFORE DataStore loads,
+        // which can trigger navigation to wrong screen. By using
+        // withContext(IO) + first(), we wait for actual persisted values.
+        //
+        // SCALABILITY: O(1) read, no network call, sub-10ms on any device.
+        // =====================================================================
+        composable("driver_onboarding_check") {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val driverPrefs = remember { 
+                com.weelo.logistics.data.preferences.DriverPreferences.getInstance(context) 
+            }
+            
+            // STRICT: Read actual persisted values (not initial/default)
+            // LaunchedEffect(Unit) runs ONCE, waits for DataStore to load
+            LaunchedEffect(Unit) {
+                val savedLanguage = withContext(Dispatchers.IO) {
+                    driverPrefs.getLanguageSync()
+                }
+                val profileDone = withContext(Dispatchers.IO) {
+                    driverPrefs.isProfileCompletedSync()
+                }
+                
+                Timber.i(
+                    "🔒 Onboarding check: language='$savedLanguage', profileDone=$profileDone"
+                )
+                
+                when {
+                    savedLanguage.isEmpty() -> {
+                        // NO LANGUAGE → MUST select language (STRICT SECURITY)
+                        Timber.i("🔒 Language not selected → forcing language screen")
+                        navController.navigateSmooth(
+                            route = "driver_language_selection",
+                            popUpToRoute = "driver_onboarding_check",
+                            inclusive = true
+                        )
+                    }
+                    !profileDone -> {
+                        // Language done, but profile not complete
+                        Timber.i("🔒 Profile incomplete → forcing profile screen")
+                        navController.navigateSmooth(
+                            route = "driver_profile_completion",
+                            popUpToRoute = "driver_onboarding_check",
+                            inclusive = true
+                        )
+                    }
+                    else -> {
+                        // Everything done: go to dashboard
+                        Timber.i("✅ Onboarding complete → dashboard")
+                        navController.navigateSmooth(
+                            route = Screen.DriverDashboard.route,
+                            popUpToRoute = "driver_onboarding_check",
+                            inclusive = true
+                        )
+                    }
+                }
+            }
+            
+            // =========================================================
+            // POLISHED SKELETON instead of bare CircularProgressIndicator
+            // =========================================================
+            // Shows shimmer placeholder (~50-200ms) while DataStore prefs
+            // load. Makes the OTP → dashboard transition feel seamless.
+            //
+            // SCALABILITY: Pure composable, no state, no network calls.
+            // MODULARITY: Uses OnboardingCheckSkeleton from SkeletonLoading.kt
+            // =========================================================
+            com.weelo.logistics.ui.components.OnboardingCheckSkeleton()
+        }
+        
+        // Language Selection Screen
+        composable("driver_language_selection") {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val driverPrefs = remember { 
+                com.weelo.logistics.data.preferences.DriverPreferences.getInstance(context) 
+            }
+            
+            val coroutineScope = rememberCoroutineScope()
+            
+            // STRICT: Cannot navigate back from language selection
+            BackHandler(enabled = true) {
+                // Block back button - must select language
+            }
+            
+            com.weelo.logistics.ui.driver.LanguageSelectionScreen(
+                onLanguageSelected = { languageCode ->
+                    // SECURITY: Save language (enables dashboard access)
+                    coroutineScope.launch {
+                        driverPrefs.saveLanguage(languageCode)
+                        // Navigate to profile completion (on main thread)
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            navController.navigateSmooth(
+                                route = "driver_profile_completion",
+                                popUpToRoute = "driver_language_selection",
+                                inclusive = true
+                            )
+                        }
                     }
                 }
             )
         }
         
-        // Driver Profile Screen
+        // Profile Completion Screen
+        composable("driver_profile_completion") {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val driverPrefs = remember { 
+                com.weelo.logistics.data.preferences.DriverPreferences.getInstance(context) 
+            }
+            
+            val coroutineScope = rememberCoroutineScope()
+            
+            com.weelo.logistics.ui.driver.DriverProfileCompletionScreen(
+                onProfileComplete = { _ ->
+                    // TODO: Upload profile data to backend
+                    // For now, just mark as complete and navigate
+                    coroutineScope.launch {
+                        driverPrefs.markProfileCompleted()
+                        // Navigate to dashboard (on main thread)
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            navController.navigateSmooth(
+                                route = Screen.DriverDashboard.route,
+                                popUpToRoute = "driver_profile_completion",
+                                inclusive = true
+                            )
+                        }
+                    }
+                }
+            )
+        }
+        
+        // Driver Dashboard
+        // SMOOTH TRANSITION: Uses fade instead of slide when entering from
+        // onboarding check — both screens have similar skeleton layouts,
+        // so a fade creates a seamless visual bridge. Other navigation
+        // (from profile, settings, etc.) also benefits from the smooth fade.
+        composable(
+            route = Screen.DriverDashboard.route,
+            enterTransition = { NavAnimations.fadeIn },
+            exitTransition = { NavAnimations.fadeOut },
+            popEnterTransition = { NavAnimations.fadeIn },
+            popExitTransition = { NavAnimations.fadeOut }
+        ) {
+            com.weelo.logistics.ui.driver.DriverDashboardScreen(
+                onNavigateToNotifications = { /* TODO: Implement */ },
+                onNavigateToTripHistory = { /* TODO: Implement */ },
+                onNavigateToProfile = { navController.navigateSmooth("driver_profile") },
+                onOpenFullMap = { _ -> /* TODO: Implement */ },
+                onLogout = {
+                    // Clear tokens AND driver preferences (language, profile status)
+                    // CRITICAL: Must clear DriverPreferences so re-login checks
+                    // backend state instead of stale local state
+                    com.weelo.logistics.data.remote.RetrofitClient.clearAllData()
+                    val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences
+                        .getInstance(navController.context)
+                    kotlinx.coroutines.MainScope().launch {
+                        driverPrefs.clearAll()
+                    }
+                    // Back button or logout goes to role selection
+                    navController.navigateSmooth(
+                        route = Screen.RoleSelection.route,
+                        popUpToRoute = null,
+                        inclusive = true,
+                        restoreState = false
+                    )
+                }
+            )
+        }
+        
+        // Driver Profile Screen (with photo display and update)
         composable("driver_profile") {
-            com.weelo.logistics.ui.driver.DriverProfileScreen(
-                onNavigateBack = { navController.popBackStack() },
-                onProfileUpdated = { /* Refresh will happen automatically */ }
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val viewModel = remember { DriverProfileViewModel(context) }
+            
+            com.weelo.logistics.ui.driver.DriverProfileScreenWithPhotos(
+                viewModel = viewModel,
+                onNavigateBack = { navController.popBackStack() }
             )
         }
         
@@ -397,10 +621,16 @@ fun WeeloNavigation(
         composable(Screen.DriverSettings.route) {
             com.weelo.logistics.ui.driver.DriverSettingsScreen(
                 onNavigateBack = { navController.popBackStack() },
+                onChangeLanguage = { 
+                    navController.navigateSmooth("driver_language_selection") 
+                },
                 onLogout = {
-                    navController.navigate(Screen.Login.route) {
-                        popUpTo(Screen.Splash.route) { inclusive = true }
-                    }
+                    navController.navigateSmooth(
+                        route = Screen.RoleSelection.route,
+                        popUpToRoute = null,
+                        inclusive = true,
+                        restoreState = false
+                    )
                 }
             )
         }

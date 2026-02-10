@@ -20,19 +20,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.weelo.logistics.ui.theme.Primary
-import com.weelo.logistics.ui.theme.Surface
-import com.weelo.logistics.ui.theme.TextPrimary
-import com.weelo.logistics.ui.theme.TextSecondary
+import com.weelo.logistics.ui.theme.*
 
-/**
- * =============================================================================
- * LOADING STATES - Polished Loading & Empty States
- * =============================================================================
- * 
- * Provides consistent loading, error, and empty states across the app.
- * =============================================================================
- */
+// =============================================================================
+// WEELO CAPTAIN - PREMIUM LOADING & STATE COMPONENTS
+// =============================================================================
+// Polished loading, error, and empty states with Saffron Yellow theme
+// Smooth animations for professional user experience
+// =============================================================================
 
 // =============================================================================
 // FULL SCREEN LOADING
@@ -276,12 +271,17 @@ fun EmptyState(
             
             Button(
                 onClick = onAction,
-                colors = ButtonDefaults.buttonColors(containerColor = Primary),
-                shape = RoundedCornerShape(12.dp)
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Primary,
+                    contentColor = OnPrimary
+                ),
+                shape = RoundedCornerShape(14.dp),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
             ) {
                 Text(
                     text = actionLabel,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp
                 )
             }
         }
@@ -375,19 +375,19 @@ fun ErrorState(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // Error icon
+        // Error icon with theme colors
         Box(
             modifier = Modifier
                 .size(80.dp)
                 .clip(CircleShape)
-                .background(Color(0xFFFFEBEE)),
+                .background(ErrorLight),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = Icons.Default.ErrorOutline,
                 contentDescription = null,
                 modifier = Modifier.size(40.dp),
-                tint = Color(0xFFE53935)
+                tint = Error
             )
         }
         
@@ -452,7 +452,7 @@ fun NetworkErrorState(
 // =============================================================================
 
 /**
- * Button with loading state
+ * Premium Loading Button with theme colors
  */
 @Composable
 fun LoadingButton(
@@ -466,11 +466,17 @@ fun LoadingButton(
     Button(
         onClick = onClick,
         enabled = enabled && !isLoading,
-        modifier = modifier.height(52.dp),
-        shape = RoundedCornerShape(12.dp),
+        modifier = modifier.height(56.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = Primary,
-            disabledContainerColor = Primary.copy(alpha = 0.6f)
+            contentColor = OnPrimary,
+            disabledContainerColor = Primary.copy(alpha = 0.4f),
+            disabledContentColor = OnPrimary.copy(alpha = 0.6f)
+        ),
+        elevation = ButtonDefaults.buttonElevation(
+            defaultElevation = 4.dp,
+            pressedElevation = 8.dp
         )
     ) {
         AnimatedContent(
@@ -484,8 +490,8 @@ fun LoadingButton(
             if (loading) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(24.dp),
-                    color = Color.White,
-                    strokeWidth = 2.dp
+                    color = OnPrimary,
+                    strokeWidth = 2.5.dp
                 )
             } else {
                 Row(
@@ -502,8 +508,9 @@ fun LoadingButton(
                     }
                     Text(
                         text = text,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 16.sp
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        letterSpacing = 0.5.sp
                     )
                 }
             }

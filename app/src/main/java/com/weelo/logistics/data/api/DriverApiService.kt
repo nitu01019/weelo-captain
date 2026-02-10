@@ -11,12 +11,51 @@ import retrofit2.http.*
  */
 interface DriverApiService {
     
-    // ============== TRANSPORTER - MANAGE DRIVERS ==============
+    // ============== DRIVER ONBOARDING WITH OTP VERIFICATION ==============
     
     /**
-     * Create a new driver (Transporter only)
-     * POST /api/v1/driver/create
+     * Step 1: Initiate driver onboarding - sends OTP to DRIVER's phone
+     * POST /api/v1/driver/onboard/initiate
+     * 
+     * FLOW:
+     * 1. Transporter enters driver's phone, name, license
+     * 2. OTP is sent to DRIVER's phone (not transporter's!)
+     * 3. Driver shares OTP with transporter
+     * 4. Transporter enters OTP to verify
      */
+    @POST("driver/onboard/initiate")
+    suspend fun initiateDriverOnboarding(
+        @Body request: InitiateDriverOnboardingRequest
+    ): Response<InitiateDriverOnboardingResponse>
+    
+    /**
+     * Step 2: Verify OTP and add driver to fleet
+     * POST /api/v1/driver/onboard/verify
+     */
+    @POST("driver/onboard/verify")
+    suspend fun verifyDriverOnboarding(
+        @Body request: VerifyDriverOnboardingRequest
+    ): Response<VerifyDriverOnboardingResponse>
+    
+    /**
+     * Resend OTP to driver's phone
+     * POST /api/v1/driver/onboard/resend
+     */
+    @POST("driver/onboard/resend")
+    suspend fun resendDriverOnboardingOtp(
+        @Body request: ResendDriverOtpRequest
+    ): Response<ResendDriverOtpResponse>
+    
+    // ============== LEGACY: CREATE DRIVER WITHOUT OTP (DEPRECATED) ==============
+    
+    /**
+     * Create a new driver WITHOUT OTP verification (Transporter only)
+     * POST /api/v1/driver/create
+     * 
+     * @deprecated Use initiateDriverOnboarding + verifyDriverOnboarding instead
+     */
+    @Suppress("DEPRECATION")
+    @Deprecated("Use driver-onboarding endpoints with OTP verification")
     @POST("driver/create")
     suspend fun createDriver(
         @Body request: CreateDriverRequest
@@ -92,12 +131,102 @@ interface DriverApiService {
 
 /**
  * Create Driver Request (Transporter creates driver)
+ * @deprecated Use driver-onboarding endpoints with OTP verification
  */
+@Deprecated("Use InitiateDriverOnboardingRequest + VerifyDriverOnboardingRequest")
 data class CreateDriverRequest(
     val phone: String,          // 10-digit phone number
     val name: String,
     val licenseNumber: String? = null
 )
+
+// =============================================================================
+// DRIVER ONBOARDING WITH OTP VERIFICATION (NEW - RECOMMENDED)
+// =============================================================================
+
+/**
+ * Step 1: Initiate Driver Onboarding Request
+ * Sends OTP to driver's phone for verification
+ */
+data class InitiateDriverOnboardingRequest(
+    val phone: String,           // Driver's phone number (10 digits)
+    val name: String,            // Driver's full name
+    val licenseNumber: String,   // Driving license number
+    val licensePhoto: String? = null,  // DL photo (Base64 or URL)
+    val email: String? = null    // Optional email
+)
+
+/**
+ * Step 1: Initiate Driver Onboarding Response
+ */
+data class InitiateDriverOnboardingResponse(
+    val success: Boolean,
+    val data: InitiateOnboardingData? = null,
+    val message: String? = null,
+    val error: ApiError? = null
+)
+
+data class InitiateOnboardingData(
+    val message: String = "",
+    val driverPhoneMasked: String = "",   // e.g., "98****3210"
+    val expiresInMinutes: Int = 10
+)
+
+/**
+ * Step 2: Verify OTP and Add Driver Request
+ */
+data class VerifyDriverOnboardingRequest(
+    val phone: String,   // Driver's phone number
+    val otp: String      // OTP received by driver
+)
+
+/**
+ * Step 2: Verify OTP and Add Driver Response
+ */
+data class VerifyDriverOnboardingResponse(
+    val success: Boolean,
+    val data: VerifyOnboardingData? = null,
+    val message: String? = null,
+    val error: ApiError? = null
+)
+
+data class VerifyOnboardingData(
+    val driver: OnboardedDriverInfo? = null
+)
+
+data class OnboardedDriverInfo(
+    val id: String,
+    val name: String,
+    val phone: String,
+    val licenseNumber: String? = null,
+    val isVerified: Boolean = true
+)
+
+/**
+ * Resend OTP Request
+ */
+data class ResendDriverOtpRequest(
+    val phone: String   // Driver's phone number
+)
+
+/**
+ * Resend OTP Response
+ */
+data class ResendDriverOtpResponse(
+    val success: Boolean,
+    val data: ResendOtpData? = null,
+    val message: String? = null,
+    val error: ApiError? = null
+)
+
+data class ResendOtpData(
+    val message: String = "",
+    val expiresInMinutes: Int = 10
+)
+
+// =============================================================================
+// OTHER REQUEST/RESPONSE MODELS
+// =============================================================================
 
 /**
  * Update Availability Request
@@ -154,6 +283,7 @@ data class DriverData(
     val phone: String,
     val name: String? = null,
     val email: String? = null,
+    val profilePhotoUrl: String? = null, // Driver profile photo (visible to transporter)
     val licenseNumber: String? = null,
     val licenseExpiry: String? = null,
     val isOnline: Boolean = false,

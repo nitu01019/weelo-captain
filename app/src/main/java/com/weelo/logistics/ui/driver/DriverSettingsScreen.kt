@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.ui.components.PrimaryTopBar
 import com.weelo.logistics.ui.components.SectionCard
+import com.weelo.logistics.ui.components.responsiveHorizontalPadding
 import com.weelo.logistics.ui.theme.*
 
 /**
@@ -26,12 +27,21 @@ import com.weelo.logistics.ui.theme.*
 @Composable
 fun DriverSettingsScreen(
     onNavigateBack: () -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onChangeLanguage: () -> Unit = {}
 ) {
-    // val context = LocalContext.current  // Reserved for future use
+    val context = LocalContext.current
     var notificationsEnabled by remember { mutableStateOf(true) }
     var showLogoutDialog by remember { mutableStateOf(false) }
-    // Language selection removed - app is English only
+    
+    // Get current language
+    val preferencesRepo = remember { 
+        com.weelo.logistics.data.repository.UserPreferencesRepository(context) 
+    }
+    val currentLanguage by preferencesRepo.preferredLanguage.collectAsState(initial = "en")
+    
+    // Responsive layout
+    val horizontalPadding = responsiveHorizontalPadding()
     
     Column(Modifier.fillMaxSize().background(Surface)) {
         PrimaryTopBar(title = "Settings", onBackClick = onNavigateBack)
@@ -40,7 +50,7 @@ fun DriverSettingsScreen(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+                .padding(horizontal = horizontalPadding, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             SectionCard("Notifications") {
@@ -59,7 +69,13 @@ fun DriverSettingsScreen(
             }
             
             SectionCard("Preferences") {
-                // Language selection removed - app is English only
+                SettingRow(
+                    icon = Icons.Default.Language,
+                    title = "Language",
+                    subtitle = getLanguageName(currentLanguage ?: "en"),
+                    onClick = onChangeLanguage
+                )
+                Divider()
                 SettingRow(
                     icon = Icons.Default.DarkMode,
                     title = "Theme",
@@ -180,5 +196,26 @@ fun SettingRow(
         } else if (onClick != null) {
             Icon(Icons.Default.ChevronRight, null, tint = TextSecondary)
         }
+    }
+}
+
+/**
+ * Get display name for language code
+ */
+private fun getLanguageName(code: String): String {
+    return when (code) {
+        "en" -> "English"
+        "hi" -> "हिन्दी (Hindi)"
+        "ta" -> "தமிழ் (Tamil)"
+        "te" -> "తెలుగు (Telugu)"
+        "ml" -> "മലയാളം (Malayalam)"
+        "kn" -> "ಕನ್ನಡ (Kannada)"
+        "mr" -> "मराठी (Marathi)"
+        "gu" -> "ગુજરાતી (Gujarati)"
+        "bn" -> "বাংলা (Bengali)"
+        "pa" -> "ਪੰਜਾਬੀ (Punjabi)"
+        "or" -> "ଓଡ଼ିଆ (Odia)"
+        "raj" -> "राजस्थानी (Rajasthani)"
+        else -> "English"
     }
 }

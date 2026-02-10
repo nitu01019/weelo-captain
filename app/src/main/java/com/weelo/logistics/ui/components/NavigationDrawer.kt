@@ -1,5 +1,12 @@
 package com.weelo.logistics.ui.components
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -117,6 +125,7 @@ fun DrawerContentInternal(
 }
 
 @Composable
+@Suppress("UNUSED_PARAMETER")
 private fun DrawerContent(
     userProfile: DrawerUserProfile?,
     isLoading: Boolean,
@@ -171,6 +180,40 @@ private fun DrawerContent(
     }
 }
 
+// =============================================================================
+// DRAWER HEADER SHIMMER BRUSH
+// =============================================================================
+// Creates a smooth shimmer animation for the drawer header loading state.
+// Uses the same infinite transition pattern as SkeletonLoading.kt but with
+// white-on-gold colors to match the drawer's gradient background.
+//
+// PERFORMANCE: Single shared transition for all shimmer elements.
+// MODULARITY: Private to this file — not exposed outside NavigationDrawer.
+// =============================================================================
+
+@Composable
+private fun drawerShimmerBrush(): Brush {
+    val shimmerTransition = rememberInfiniteTransition(label = "drawer_shimmer")
+    val shimmerOffset by shimmerTransition.animateFloat(
+        initialValue = -300f,
+        targetValue = 600f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "drawer_shimmer_offset"
+    )
+    return Brush.linearGradient(
+        colors = listOf(
+            Color.White.copy(alpha = 0.15f),
+            Color.White.copy(alpha = 0.40f),
+            Color.White.copy(alpha = 0.15f)
+        ),
+        start = Offset(shimmerOffset, 0f),
+        end = Offset(shimmerOffset + 300f, 100f)
+    )
+}
+
 @Composable
 private fun DrawerHeader(
     userProfile: DrawerUserProfile?,
@@ -182,20 +225,34 @@ private fun DrawerHeader(
             .fillMaxWidth()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(Primary, Primary.copy(alpha = 0.8f))
+                    colors = listOf(Primary, PrimaryDark)
                 )
             )
             .clickable { onProfileClick() }
             .padding(24.dp)
     ) {
-        if (isLoading) {
-            // Loading state
+        // =====================================================================
+        // SMOOTH CROSSFADE between loading → loaded states (300ms)
+        // Prevents the abrupt "flicker" when dashboard state transitions
+        // from Loading → Success.
+        //
+        // PERFORMANCE: Crossfade uses hardware-accelerated alpha blending.
+        // =====================================================================
+        Crossfade(
+            targetState = if (isLoading) "loading" else if (userProfile != null) "profile" else "empty",
+            animationSpec = tween(durationMillis = 300),
+            label = "drawer_header_crossfade"
+        ) { state ->
+        when (state) {
+        "loading" -> {
+            // Shimmer loading state — smooth animated gradient instead of static grey
+            val shimmerBrush = drawerShimmerBrush()
             Column {
                 Box(
                     modifier = Modifier
                         .size(72.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.3f))
+                        .background(shimmerBrush)
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Box(
@@ -203,7 +260,7 @@ private fun DrawerHeader(
                         .width(150.dp)
                         .height(20.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(Color.White.copy(alpha = 0.3f))
+                        .background(shimmerBrush)
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Box(
@@ -211,10 +268,13 @@ private fun DrawerHeader(
                         .width(100.dp)
                         .height(16.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(Color.White.copy(alpha = 0.3f))
+                        .background(shimmerBrush)
                 )
             }
-        } else if (userProfile != null) {
+        }
+        "profile" -> {
+            // Profile loaded — show real data
+            if (userProfile != null) {
             Column {
                 // Profile Avatar
                 Box(
@@ -232,7 +292,7 @@ private fun DrawerHeader(
                         text = initial,
                         style = MaterialTheme.typography.headlineLarge,
                         fontWeight = FontWeight.Bold,
-                        color = Primary
+                        color = Secondary
                     )
                 }
                 
@@ -345,8 +405,10 @@ private fun DrawerHeader(
                     )
                 }
             }
-        } else {
-            // No profile - prompt to login
+            } // end if (userProfile != null)
+        }
+        else -> {
+            // "empty" — No profile data, not loading
             Column {
                 Icon(
                     imageVector = Icons.Default.AccountCircle,
@@ -363,6 +425,8 @@ private fun DrawerHeader(
                 )
             }
         }
+        } // end when
+        } // end Crossfade
     }
 }
 
@@ -377,7 +441,7 @@ private fun DrawerMenuItemRow(
             .padding(horizontal = 12.dp, vertical = 2.dp)
             .clickable { item.onClick() },
         shape = RoundedCornerShape(12.dp),
-        color = if (isSelected) Primary.copy(alpha = 0.1f) else Color.Transparent
+        color = if (isSelected) PrimaryLight else Color.Transparent
     ) {
         Row(
             modifier = Modifier
@@ -388,7 +452,7 @@ private fun DrawerMenuItemRow(
             Icon(
                 imageVector = if (isSelected) item.selectedIcon else item.icon,
                 contentDescription = item.title,
-                tint = if (isSelected) Primary else TextSecondary,
+                tint = if (isSelected) Secondary else TextSecondary,
                 modifier = Modifier.size(24.dp)
             )
             
@@ -398,7 +462,7 @@ private fun DrawerMenuItemRow(
                 text = item.title,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (isSelected) Primary else TextPrimary,
+                color = if (isSelected) Secondary else TextPrimary,
                 modifier = Modifier.weight(1f)
             )
             
@@ -406,13 +470,13 @@ private fun DrawerMenuItemRow(
             if (item.badgeCount > 0) {
                 Surface(
                     shape = CircleShape,
-                    color = Error
+                    color = Primary
                 ) {
                     Text(
                         text = if (item.badgeCount > 99) "99+" else item.badgeCount.toString(),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White,
+                        color = OnPrimary,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
@@ -457,13 +521,15 @@ private fun DrawerLogoutButton(onLogout: () -> Unit) {
 
 /**
  * Helper function to create transporter menu items
+ * NOTE: Broadcasts menu removed - broadcasts shown via overlay only
  */
+@Suppress("UNUSED_PARAMETER")
 fun createTransporterMenuItems(
     onDashboard: () -> Unit,
     onFleet: () -> Unit,
     onDrivers: () -> Unit,
     onTrips: () -> Unit,
-    onBroadcasts: () -> Unit,
+    onBroadcasts: () -> Unit,  // Kept for compatibility, but not used
     onSettings: () -> Unit,
     notificationCount: Int = 0
 ): List<DrawerMenuItem> = listOf(
@@ -495,14 +561,7 @@ fun createTransporterMenuItems(
         selectedIcon = Icons.Filled.Route,
         onClick = onTrips
     ),
-    DrawerMenuItem(
-        id = "broadcasts",
-        title = "Broadcasts",
-        icon = Icons.Outlined.Campaign,
-        selectedIcon = Icons.Filled.Campaign,
-        badgeCount = notificationCount,
-        onClick = onBroadcasts
-    ),
+    // Broadcasts menu item REMOVED - broadcasts shown via overlay
     DrawerMenuItem(
         id = "settings",
         title = "Settings",
@@ -515,6 +574,7 @@ fun createTransporterMenuItems(
 /**
  * Helper function to create driver menu items
  */
+@Suppress("UNUSED_PARAMETER")
 fun createDriverMenuItems(
     onDashboard: () -> Unit,
     onTripHistory: () -> Unit,

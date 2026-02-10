@@ -13,7 +13,6 @@ import android.location.Location
 import android.os.Build
 import android.os.IBinder
 import android.os.Looper
-import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.location.*
@@ -145,7 +144,7 @@ class GPSTrackingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "🚀 GPSTrackingService created")
+        timber.log.Timber.i("🚀 GPSTrackingService created")
         
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         createNotificationChannel()
@@ -153,13 +152,13 @@ class GPSTrackingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.i(TAG, "📍 GPSTrackingService started")
+        timber.log.Timber.i("📍 GPSTrackingService started")
         
         tripId = intent?.getStringExtra(EXTRA_TRIP_ID) ?: ""
         driverId = intent?.getStringExtra(EXTRA_DRIVER_ID) ?: ""
         
         if (tripId.isEmpty()) {
-            Log.e(TAG, "❌ No trip ID provided, stopping service")
+            timber.log.Timber.e("❌ No trip ID provided, stopping service")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -180,7 +179,7 @@ class GPSTrackingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.i(TAG, "🛑 GPSTrackingService destroyed")
+        timber.log.Timber.i("🛑 GPSTrackingService destroyed")
         
         stopLocationUpdates()
         flushLocationBatch() // Send any remaining locations
@@ -251,7 +250,7 @@ class GPSTrackingService : Service() {
         // Check permissions
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) 
             != PackageManager.PERMISSION_GRANTED) {
-            Log.e(TAG, "❌ Location permission not granted")
+            timber.log.Timber.e("❌ Location permission not granted")
             _trackingError.value = "Location permission required"
             stopSelf()
             return
@@ -274,9 +273,9 @@ class GPSTrackingService : Service() {
                 locationCallback,
                 Looper.getMainLooper()
             )
-            Log.i(TAG, "✅ Location updates started for trip: $tripId")
+            timber.log.Timber.i("✅ Location updates started for trip: $tripId")
         } catch (e: SecurityException) {
-            Log.e(TAG, "❌ Security exception starting location updates", e)
+            timber.log.Timber.e(e, "❌ Security exception starting location updates")
             _trackingError.value = "Location access denied"
             stopSelf()
         }
@@ -288,9 +287,9 @@ class GPSTrackingService : Service() {
     private fun stopLocationUpdates() {
         try {
             fusedLocationClient.removeLocationUpdates(locationCallback)
-            Log.i(TAG, "📍 Location updates stopped")
+            timber.log.Timber.i("📍 Location updates stopped")
         } catch (e: Exception) {
-            Log.e(TAG, "Error stopping location updates", e)
+            timber.log.Timber.e(e, "Error stopping location updates")
         }
     }
 
@@ -300,7 +299,7 @@ class GPSTrackingService : Service() {
     private fun handleNewLocation(location: Location) {
         // Filter out inaccurate locations
         if (location.accuracy > ACCURACY_THRESHOLD) {
-            Log.d(TAG, "📍 Skipping inaccurate location: ${location.accuracy}m")
+            timber.log.Timber.d("📍 Skipping inaccurate location: ${location.accuracy}m")
             return
         }
         
@@ -337,7 +336,7 @@ class GPSTrackingService : Service() {
             flushLocationBatch()
         }
         
-        Log.d(TAG, "📍 Location: ${location.latitude}, ${location.longitude} | Speed: ${lastSpeed}m/s | Accuracy: ${location.accuracy}m")
+        timber.log.Timber.d("📍 Location: ${location.latitude}, ${location.longitude} | Speed: ${lastSpeed}m/s | Accuracy: ${location.accuracy}m")
     }
 
     /**
@@ -369,7 +368,7 @@ class GPSTrackingService : Service() {
                     Looper.getMainLooper()
                 )
                 
-                Log.d(TAG, "🔄 Update interval changed to ${newInterval}ms (${if (isMoving) "moving" else "stationary"})")
+                timber.log.Timber.d("🔄 Update interval changed to ${newInterval}ms (${if (isMoving) "moving" else "stationary"})")
             }
         }
     }
@@ -412,13 +411,13 @@ class GPSTrackingService : Service() {
             try {
                 // Send batch to API
                 // This will be implemented with the tracking API
-                Log.d(TAG, "📤 Sending location batch: ${batchToSend.size} points")
+                timber.log.Timber.d("📤 Sending location batch: ${batchToSend.size} points")
                 
                 // TODO: Implement API call when tracking endpoint is ready
                 // RetrofitClient.trackingApi.sendLocationBatch(batchToSend)
                 
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Failed to send location batch", e)
+                timber.log.Timber.e(e, "❌ Failed to send location batch")
                 // Re-add to batch for retry
                 locationBatch.addAll(0, batchToSend)
             }

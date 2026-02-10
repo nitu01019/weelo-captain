@@ -16,6 +16,7 @@ import com.weelo.logistics.data.model.Trip
 import com.weelo.logistics.data.model.TripStatus
 import com.weelo.logistics.data.repository.MockDataRepository
 import com.weelo.logistics.ui.components.*
+import com.weelo.logistics.ui.components.responsiveHorizontalPadding
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -60,6 +61,9 @@ fun DriverTripHistoryScreen(
         matchesSearch && matchesFilter
     }
     
+    // Responsive layout
+    val horizontalPadding = responsiveHorizontalPadding()
+    
     Column(Modifier.fillMaxSize().background(Surface)) {
         PrimaryTopBar(
             title = "Trip History",
@@ -72,7 +76,7 @@ fun DriverTripHistoryScreen(
         )
         
         // Search & Filter
-        Column(Modifier.fillMaxWidth().background(White).padding(16.dp)) {
+        Column(Modifier.fillMaxWidth().background(White).padding(horizontal = horizontalPadding, vertical = 16.dp)) {
             SearchTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it.trim() },
@@ -121,7 +125,7 @@ fun DriverTripHistoryScreen(
         } else {
             LazyColumn(
                 Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
+                contentPadding = PaddingValues(horizontal = horizontalPadding, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Summary Card

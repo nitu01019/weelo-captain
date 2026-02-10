@@ -192,7 +192,7 @@ class VehicleRepository private constructor(
                 }
             } catch (e: com.google.gson.JsonSyntaxException) {
                 // JSON parsing error - server returned invalid/empty response
-                android.util.Log.e("VehicleRepository", "JSON parse error: ${e.message}")
+                timber.log.Timber.e("JSON parse error: ${e.message}")
                 val staleCache = cachedVehicles?.copy(isStale = true)
                 if (staleCache != null) {
                     _vehiclesState.value = VehicleResult.Success(staleCache)
@@ -201,7 +201,7 @@ class VehicleRepository private constructor(
                 VehicleResult.Error("Server returned invalid response. Please check your connection.")
             } catch (e: java.net.ConnectException) {
                 // Connection refused - server not running
-                android.util.Log.e("VehicleRepository", "Connection error: ${e.message}")
+                timber.log.Timber.e("Connection error: ${e.message}")
                 val staleCache = cachedVehicles?.copy(isStale = true)
                 if (staleCache != null) {
                     _vehiclesState.value = VehicleResult.Success(staleCache)
@@ -210,7 +210,7 @@ class VehicleRepository private constructor(
                 VehicleResult.Error("Cannot connect to server. Is the backend running?")
             } catch (e: java.net.SocketTimeoutException) {
                 // Timeout
-                android.util.Log.e("VehicleRepository", "Timeout error: ${e.message}")
+                timber.log.Timber.e("Timeout error: ${e.message}")
                 val staleCache = cachedVehicles?.copy(isStale = true)
                 if (staleCache != null) {
                     _vehiclesState.value = VehicleResult.Success(staleCache)
@@ -219,7 +219,7 @@ class VehicleRepository private constructor(
                 VehicleResult.Error("Connection timed out. Please try again.")
             } catch (e: Exception) {
                 // Return stale cache if available
-                android.util.Log.e("VehicleRepository", "Fetch error: ${e.message}", e)
+                timber.log.Timber.e(e, "Fetch error: ${e.message}")
                 val staleCache = cachedVehicles?.copy(isStale = true)
                 if (staleCache != null) {
                     _vehiclesState.value = VehicleResult.Success(staleCache)
@@ -252,13 +252,18 @@ class VehicleRepository private constructor(
     // =========================================================================
     
     /**
-     * Register multiple vehicles in batch
+     * Register multiple vehicles in batch using UPSERT
+     * 
+     * Uses the upsert endpoint which:
+     * - Creates new vehicles if they don't exist
+     * - Updates existing vehicles if you own them
+     * - Returns error only if vehicle is owned by someone else
      * 
      * Flow:
      * 1. Convert UI entries to API request format
-     * 2. Send batch request to backend
+     * 2. Send upsert request for each vehicle
      * 3. Invalidate cache on success
-     * 4. Return registered vehicles
+     * 4. Return registered/updated vehicles
      * 
      * @param entries List of vehicle entries from UI
      */
@@ -282,36 +287,42 @@ class VehicleRepository private constructor(
                 )
             }
             
-            // Register vehicles one by one (backend may not support batch yet)
-            // TODO: Replace with batch endpoint when available
-            val registeredVehicles = mutableListOf<VehicleData>()
+            // Use UPSERT endpoint - creates if new, updates if exists
+            val savedVehicles = mutableListOf<VehicleData>()
             val failedVehicles = mutableListOf<FailedVehicle>()
             
             for (request in requests) {
                 try {
-                    val response = vehicleApi.registerVehicle(request)
+                    // Use upsert instead of register - handles existing vehicles gracefully
+                    val response = vehicleApi.upsertVehicle(request)
+                    
                     if (response.isSuccessful && response.body()?.success == true) {
-                        response.body()?.data?.vehicle?.let { registeredVehicles.add(it) }
+                        response.body()?.data?.vehicle?.let { vehicle ->
+                            savedVehicles.add(vehicle)
+                            val action = if (response.body()?.data?.isNew == true) "registered" else "updated"
+                            timber.log.Timber.i("Vehicle ${vehicle.vehicleNumber} $action successfully")
+                        }
                     } else {
                         // Handle unsuccessful response
+                        val errorCode = response.body()?.error?.code
                         val errorMsg = when {
+                            errorCode == "VEHICLE_EXISTS" -> "Vehicle registered by another transporter"
                             response.body()?.error?.message != null -> response.body()?.error?.message
                             response.code() == 401 -> "Session expired. Please login again."
                             response.code() == 403 -> "Access denied."
-                            response.code() == 409 -> "Vehicle already registered."
+                            response.code() == 409 -> "Vehicle registered by another transporter."
                             response.code() >= 500 -> "Server error. Please try again."
-                            else -> "Registration failed (${response.code()})"
+                            else -> "Save failed (${response.code()})"
                         }
                         failedVehicles.add(
                             FailedVehicle(
                                 vehicleNumber = request.vehicleNumber,
-                                reason = errorMsg ?: "Registration failed"
+                                reason = errorMsg ?: "Save failed"
                             )
                         )
                     }
                 } catch (e: com.google.gson.JsonSyntaxException) {
-                    // JSON parsing error - server returned unexpected response
-                    android.util.Log.e("VehicleRepository", "JSON parse error for ${request.vehicleNumber}: ${e.message}")
+                    timber.log.Timber.e("JSON parse error for ${request.vehicleNumber}: ${e.message}")
                     failedVehicles.add(
                         FailedVehicle(
                             vehicleNumber = request.vehicleNumber,
@@ -319,7 +330,7 @@ class VehicleRepository private constructor(
                         )
                     )
                 } catch (e: java.net.ConnectException) {
-                    android.util.Log.e("VehicleRepository", "Connection error: ${e.message}")
+                    timber.log.Timber.e("Connection error: ${e.message}")
                     failedVehicles.add(
                         FailedVehicle(
                             vehicleNumber = request.vehicleNumber,
@@ -327,7 +338,7 @@ class VehicleRepository private constructor(
                         )
                     )
                 } catch (e: java.net.SocketTimeoutException) {
-                    android.util.Log.e("VehicleRepository", "Timeout error: ${e.message}")
+                    timber.log.Timber.e("Timeout error: ${e.message}")
                     failedVehicles.add(
                         FailedVehicle(
                             vehicleNumber = request.vehicleNumber,
@@ -335,7 +346,7 @@ class VehicleRepository private constructor(
                         )
                     )
                 } catch (e: Exception) {
-                    android.util.Log.e("VehicleRepository", "Registration error: ${e.message}", e)
+                    timber.log.Timber.e(e, "Save error: ${e.message}")
                     failedVehicles.add(
                         FailedVehicle(
                             vehicleNumber = request.vehicleNumber,
@@ -348,20 +359,30 @@ class VehicleRepository private constructor(
             // Invalidate cache after registration
             invalidateCache()
             
-            if (registeredVehicles.isNotEmpty()) {
-                VehicleResult.Success(registeredVehicles)
+            if (savedVehicles.isNotEmpty()) {
+                if (failedVehicles.isNotEmpty()) {
+                    // Some succeeded, some failed - return partial success
+                    timber.log.Timber.w(
+                        "Partial success: ${savedVehicles.size} saved, ${failedVehicles.size} failed")
+                }
+                VehicleResult.Success(savedVehicles)
             } else if (failedVehicles.isNotEmpty()) {
-                VehicleResult.Error("Failed to register vehicles: ${failedVehicles.first().reason}")
+                VehicleResult.Error("Failed to save vehicles: ${failedVehicles.first().reason}")
             } else {
-                VehicleResult.Error("No vehicles were registered")
+                VehicleResult.Error("No vehicles were saved")
             }
         } catch (e: Exception) {
-            VehicleResult.Error(e.message ?: "Registration failed")
+            VehicleResult.Error(e.message ?: "Save failed")
         }
     }
     
     /**
-     * Register a single vehicle
+     * Register or update a single vehicle using UPSERT
+     * 
+     * Uses upsert endpoint which:
+     * - Creates new vehicle if it doesn't exist
+     * - Updates existing vehicle if you own it
+     * - Returns error only if vehicle is owned by someone else
      */
     suspend fun registerVehicle(
         entry: VehicleRegistrationEntry
@@ -371,46 +392,50 @@ class VehicleRepository private constructor(
                 vehicleNumber = entry.vehicleNumber.uppercase().trim(),
                 vehicleType = entry.category,
                 vehicleSubtype = entry.subtypeName,
-                model = entry.model ?: entry.manufacturer, // Use manufacturer as model fallback
+                model = entry.model ?: entry.manufacturer,
                 year = entry.year,
                 capacity = "${entry.capacityTons} MT"
             )
             
-            val response = vehicleApi.registerVehicle(request)
+            // Use upsert - handles both new and existing vehicles
+            val response = vehicleApi.upsertVehicle(request)
             
             if (response.isSuccessful && response.body()?.success == true) {
                 val vehicle = response.body()?.data?.vehicle
                 if (vehicle != null) {
                     invalidateCache()
+                    val action = if (response.body()?.data?.isNew == true) "registered" else "updated"
+                    timber.log.Timber.i("Vehicle ${vehicle.vehicleNumber} $action")
                     VehicleResult.Success(vehicle)
                 } else {
                     VehicleResult.Error("Invalid response from server")
                 }
             } else {
-                // Handle error responses with specific messages
+                // Handle error responses
+                val errorCode = response.body()?.error?.code
                 val errorMsg = when {
+                    errorCode == "VEHICLE_EXISTS" -> "Vehicle registered by another transporter."
                     response.body()?.error?.message != null -> response.body()?.error?.message
                     response.code() == 401 -> "Session expired. Please login again."
                     response.code() == 403 -> "Access denied. Only transporters can register vehicles."
-                    response.code() == 409 -> "Vehicle with this number already exists."
+                    response.code() == 409 -> "Vehicle registered by another transporter."
                     response.code() >= 500 -> "Server error. Please try again later."
-                    else -> "Failed to register vehicle (${response.code()})"
+                    else -> "Failed to save vehicle (${response.code()})"
                 }
-                VehicleResult.Error(errorMsg ?: "Registration failed", response.code())
+                VehicleResult.Error(errorMsg ?: "Save failed", response.code())
             }
         } catch (e: com.google.gson.JsonSyntaxException) {
-            // JSON parsing error - server returned unexpected response
-            android.util.Log.e("VehicleRepository", "JSON parse error: ${e.message}")
+            timber.log.Timber.e("JSON parse error: ${e.message}")
             VehicleResult.Error("Server returned invalid response. Please try again.")
         } catch (e: java.net.ConnectException) {
-            android.util.Log.e("VehicleRepository", "Connection error: ${e.message}")
+            timber.log.Timber.e("Connection error: ${e.message}")
             VehicleResult.Error("Cannot connect to server. Please check your connection.")
         } catch (e: java.net.SocketTimeoutException) {
-            android.util.Log.e("VehicleRepository", "Timeout error: ${e.message}")
+            timber.log.Timber.e("Timeout error: ${e.message}")
             VehicleResult.Error("Connection timed out. Please try again.")
         } catch (e: Exception) {
-            android.util.Log.e("VehicleRepository", "Registration error: ${e.message}", e)
-            VehicleResult.Error(e.message ?: "Registration failed")
+            timber.log.Timber.e(e, "Save error: ${e.message}")
+            VehicleResult.Error(e.message ?: "Save failed")
         }
     }
     

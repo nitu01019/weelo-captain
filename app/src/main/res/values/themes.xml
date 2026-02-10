@@ -5,13 +5,4 @@
         <item name="android:statusBarColor">@color/white</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>
-    
-    <!-- ⚡ Splash Screen Theme - INSTANT like Rapido -->
-    <style name="Theme.WeeloLogistics.Splash" parent="android:Theme.Material.Light.NoActionBar">
-        <!-- Window background shows circle INSTANTLY -->
-        <item name="android:windowBackground">@drawable/splash_full_background</item>
-        <item name="android:statusBarColor">@color/splashBackground</item>
-        <item name="android:navigationBarColor">@color/splashBackground</item>
-        <item name="android:windowLightStatusBar">false</item>
-    </style>
 </resources>

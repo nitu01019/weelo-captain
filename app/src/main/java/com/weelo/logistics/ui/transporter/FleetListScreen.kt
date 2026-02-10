@@ -1,10 +1,15 @@
 package com.weelo.logistics.ui.transporter
 
-import android.util.Log
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -12,9 +17,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.api.VehicleData
+import com.weelo.logistics.data.cache.AppCache
+import com.weelo.logistics.data.cache.VehicleStats
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
@@ -27,8 +36,12 @@ private const val TAG = "FleetListScreen"
 /**
  * FleetListScreen - Shows all vehicles from backend
  * 
+ * RAPIDO-STYLE INSTANT NAVIGATION:
+ * - Observes AppCache (shows cached data instantly)
+ * - Background refresh (no blocking on navigation)
+ * - Back button shows cached data (no reload)
+ * 
  * Fetches from: GET /api/v1/vehicles/list
- * Clean rewrite with proper error handling
  */
 @Composable
 fun FleetListScreen(
@@ -38,86 +51,77 @@ fun FleetListScreen(
 ) {
     val scope = rememberCoroutineScope()
     
-    // State
-    var vehicles by remember { mutableStateOf<List<VehicleData>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    // =========================================================================
+    // RAPIDO-STYLE: Observe cached data (instant display)
+    // =========================================================================
+    val vehicles by AppCache.vehicles.collectAsState()
+    val isLoading by AppCache.vehiclesLoading.collectAsState()
+    val errorMessage by AppCache.vehiclesError.collectAsState()
+    val stats by AppCache.vehicleStats.collectAsState()
     
-    // Stats
-    var totalCount by remember { mutableStateOf(0) }
-    var availableCount by remember { mutableStateOf(0) }
-    var inTransitCount by remember { mutableStateOf(0) }
-    var maintenanceCount by remember { mutableStateOf(0) }
-    
-    // Filter
+    // Filter state (local - doesn't need caching)
     var selectedFilter by remember { mutableStateOf("All") }
     
-    // Load vehicles
-    fun loadVehicles() {
+    // Background refresh function
+    fun refreshVehicles(forceRefresh: Boolean = false) {
+        // Skip if we have data and it's fresh (unless forced)
+        if (!forceRefresh && AppCache.hasVehicleData() && !AppCache.shouldRefreshVehicles()) {
+            timber.log.Timber.d("📦 Using cached data (fresh)")
+            return
+        }
+        
         scope.launch {
-            isLoading = true
-            errorMessage = null
+            AppCache.setVehiclesLoading(true)
             
             try {
-                Log.d(TAG, "Fetching vehicles from backend...")
+                timber.log.Timber.d("🔄 Refreshing vehicles in background...")
                 
                 val response = withContext(Dispatchers.IO) {
                     RetrofitClient.vehicleApi.getVehicles()
                 }
                 
-                Log.d(TAG, "Response code: ${response.code()}")
-                
                 if (response.isSuccessful) {
                     val body = response.body()
-                    Log.d(TAG, "Response body: $body")
-                    
                     if (body?.success == true && body.data != null) {
-                        vehicles = body.data.vehicles
-                        totalCount = body.data.total
-                        availableCount = body.data.available
-                        inTransitCount = body.data.inTransit
-                        maintenanceCount = body.data.maintenance
-                        
-                        Log.d(TAG, "Loaded ${vehicles.size} vehicles")
+                        AppCache.setVehicles(
+                            vehicles = body.data.vehicles,
+                            stats = VehicleStats(
+                                total = body.data.total,
+                                available = body.data.available,
+                                inTransit = body.data.inTransit,
+                                maintenance = body.data.maintenance
+                            )
+                        )
+                        timber.log.Timber.d("✅ Cached ${body.data.vehicles.size} vehicles")
                     } else {
-                        // Success false or no data
-                        val errMsg = body?.error?.message ?: "No vehicles data returned"
-                        Log.e(TAG, "API returned error: $errMsg")
-                        errorMessage = errMsg
+                        AppCache.setVehiclesError(body?.error?.message ?: "No data")
                     }
                 } else {
-                    // HTTP error
-                    val errBody = response.errorBody()?.string()
-                    Log.e(TAG, "HTTP ${response.code()}: $errBody")
-                    
-                    errorMessage = when (response.code()) {
-                        401 -> "Session expired. Please login again."
-                        403 -> "Access denied. Transporter account required."
-                        404 -> "Vehicle service not available."
-                        500 -> "Server error. Please try again."
-                        else -> "Error ${response.code()}: Unable to load vehicles"
-                    }
+                    AppCache.setVehiclesError("Error ${response.code()}")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Exception loading vehicles", e)
-                errorMessage = when (e) {
-                    is java.net.ConnectException -> "Cannot connect to server. Check your connection."
-                    is java.net.SocketTimeoutException -> "Connection timed out. Try again."
-                    is java.net.UnknownHostException -> "No internet connection."
-                    else -> "Error: ${e.localizedMessage ?: "Unknown error"}"
+                timber.log.Timber.e(e, "❌ Refresh failed")
+                // Only show error if no cached data
+                if (!AppCache.hasVehicleData()) {
+                    AppCache.setVehiclesError(e.message ?: "Network error")
                 }
             } finally {
-                isLoading = false
+                AppCache.setVehiclesLoading(false)
             }
         }
     }
     
-    // Initial load
+    // =========================================================================
+    // RAPIDO-STYLE: Only refresh if stale or empty
+    // NOT on every screen open!
+    // =========================================================================
     LaunchedEffect(Unit) {
-        loadVehicles()
+        if (AppCache.shouldRefreshVehicles()) {
+            refreshVehicles()
+        }
     }
     
-    // Filtered vehicles
+    // Filtered vehicles (computed from cache)
     val filteredVehicles = remember(vehicles, selectedFilter) {
         when (selectedFilter) {
             "Available" -> vehicles.filter { it.status == "available" }
@@ -136,12 +140,12 @@ fun FleetListScreen(
         ) {
             // Top Bar
             PrimaryTopBar(
-                title = "My Fleet ($totalCount)",
+                title = "My Fleet (${stats.total})",
                 onBackClick = onNavigateBack
             )
             
-            // Stats Row
-            if (!isLoading && errorMessage == null && vehicles.isNotEmpty()) {
+            // Stats Row - RAPIDO-STYLE: Always show if we have cached data
+            if (vehicles.isNotEmpty() || stats.total > 0) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -151,24 +155,24 @@ fun FleetListScreen(
                 ) {
                     StatChip(
                         label = "Available",
-                        count = availableCount,
+                        count = stats.available,
                         color = Success
                     )
                     StatChip(
                         label = "In Transit",
-                        count = inTransitCount,
+                        count = stats.inTransit,
                         color = Primary
                     )
                     StatChip(
                         label = "Maintenance",
-                        count = maintenanceCount,
+                        count = stats.maintenance,
                         color = Warning
                     )
                 }
             }
             
-            // Filter Chips
-            if (!isLoading && errorMessage == null) {
+            // Filter Chips - RAPIDO-STYLE: Always show if we have data
+            if (vehicles.isNotEmpty() || stats.total > 0) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -188,10 +192,11 @@ fun FleetListScreen(
                 Divider(color = Divider)
             }
             
-            // Content
+            // Content - RAPIDO-STYLE: Show cached data during refresh
             when {
-                isLoading -> {
-                    // Loading State
+                // Only show spinner if loading AND no cached data
+                isLoading && vehicles.isEmpty() -> {
+                    // First load - show spinner
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
@@ -208,8 +213,9 @@ fun FleetListScreen(
                     }
                 }
                 
-                errorMessage != null -> {
-                    // Error State
+                // Only show error if no cached data available
+                errorMessage != null && vehicles.isEmpty() -> {
+                    // Error State - only show if we have NO cached data
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
@@ -231,7 +237,7 @@ fun FleetListScreen(
                                 color = TextSecondary
                             )
                             Spacer(Modifier.height(24.dp))
-                            OutlinedButton(onClick = { loadVehicles() }) {
+                            OutlinedButton(onClick = { refreshVehicles(forceRefresh = true) }) {
                                 Icon(Icons.Default.Refresh, null)
                                 Spacer(Modifier.width(8.dp))
                                 Text("Retry")
@@ -273,24 +279,34 @@ fun FleetListScreen(
                 }
                 
                 else -> {
-                    // Vehicle List
+                    // Vehicle List - OPTIMIZED for smooth scrolling
+                    val listState = rememberLazyListState()
+                    
                     LazyColumn(
+                        state = listState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        // Prefetch more items for smoother scrolling
+                        userScrollEnabled = true
                     ) {
                         items(
                             items = filteredVehicles,
-                            key = { it.id }
+                            key = { it.id },
+                            // Content type optimization - all items same type
+                            contentType = { "vehicle_card" }
                         ) { vehicle ->
-                            FleetVehicleCard(
-                                vehicle = vehicle,
-                                onClick = { onNavigateToVehicleDetails(vehicle.id) }
-                            )
+                            // Stable composition - prevents recomposition during scroll
+                            key(vehicle.id) {
+                                FleetVehicleCard(
+                                    vehicle = vehicle,
+                                    onClick = { onNavigateToVehicleDetails(vehicle.id) }
+                                )
+                            }
                         }
                         
                         // Bottom spacing for FAB
-                        item { Spacer(Modifier.height(72.dp)) }
+                        item(key = "bottom_spacer") { Spacer(Modifier.height(72.dp)) }
                     }
                 }
             }
@@ -334,17 +350,37 @@ private fun StatChip(
 }
 
 /**
- * Vehicle Card - Clean design
+ * Vehicle Card - OPTIMIZED for smooth scrolling
+ * Uses remember for computed values to prevent recomposition
  */
 @Composable
 fun FleetVehicleCard(
     vehicle: VehicleData,
     onClick: () -> Unit
 ) {
+    // Pre-compute values to avoid recalculation during scroll
+    val vehicleTypeDisplay = remember(vehicle.vehicleType, vehicle.vehicleSubtype) {
+        "${vehicle.vehicleType.replaceFirstChar { it.uppercase() }} • ${vehicle.vehicleSubtype}"
+    }
+    
+    val (statusText, statusColor) = remember(vehicle.status) {
+        when (vehicle.status) {
+            "available" -> "Available" to Success
+            "in_transit" -> "In Transit" to Primary
+            "maintenance" -> "Maintenance" to Warning
+            else -> "Inactive" to TextDisabled
+        }
+    }
+    
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                // Hardware acceleration for smoother rendering
+                clip = true
+            },
         onClick = onClick,
-        elevation = CardDefaults.cardElevation(2.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp, pressedElevation = 4.dp),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(White)
     ) {
@@ -354,7 +390,7 @@ fun FleetVehicleCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Icon
+            // Icon - simplified for performance
             Box(
                 modifier = Modifier
                     .size(56.dp)
@@ -371,36 +407,32 @@ fun FleetVehicleCard(
             
             Spacer(Modifier.width(16.dp))
             
-            // Info
+            // Info - use weight for flexible layout
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = vehicle.vehicleNumber,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    color = TextPrimary,
+                    maxLines = 1
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "${vehicle.vehicleType.replaceFirstChar { it.uppercase() }} • ${vehicle.vehicleSubtype}",
+                    text = vehicleTypeDisplay,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary
+                    color = TextSecondary,
+                    maxLines = 1
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = vehicle.capacity,
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
+                    color = TextSecondary,
+                    maxLines = 1
                 )
             }
             
-            // Status Badge
-            val (statusText, statusColor) = when (vehicle.status) {
-                "available" -> "Available" to Success
-                "in_transit" -> "In Transit" to Primary
-                "maintenance" -> "Maintenance" to Warning
-                else -> "Inactive" to TextDisabled
-            }
-            
+            // Status Badge - pre-computed colors
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = statusColor.copy(alpha = 0.1f)
@@ -410,7 +442,8 @@ fun FleetVehicleCard(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Medium,
-                    color = statusColor
+                    color = statusColor,
+                    maxLines = 1
                 )
             }
         }
