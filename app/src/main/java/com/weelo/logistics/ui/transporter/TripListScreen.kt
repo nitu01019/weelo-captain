@@ -12,35 +12,31 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.weelo.logistics.data.model.Trip
-import com.weelo.logistics.data.model.TripStatus
-import com.weelo.logistics.data.repository.MockDataRepository
+import com.weelo.logistics.data.api.TripData
+import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.components.responsiveHorizontalPadding
+import com.weelo.logistics.ui.components.ProvideShimmerBrush
+import com.weelo.logistics.ui.components.SkeletonList
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.DataSanitizer
-import kotlinx.coroutines.launch
+import timber.log.Timber
 
 private const val TAG = "TripListScreen"
 
 /**
- * Trip List Screen - Shows all trips for transporter
- * 
- * FEATURES:
- * - Trip data from repository (mock data for now, will connect to real API)
- * - Filter by status: All, Active, Completed, Pending
- * - Create new trip button
- * - Trip details navigation
- * 
- * BACKEND ENDPOINTS (TODO - integrate when API is ready):
- * - GET /api/v1/assignments - Get all trips for transporter
- * - GET /api/v1/assignments?status=pending - Filter by status
- * 
- * DRIVER ACCEPTANCE FLOW:
- * 1. Transporter accepts broadcast → Creates assignment with status "pending"
- * 2. Driver accepts trip → Status changes to "accepted"
- * 3. Driver starts trip → Status changes to "in_progress"
- * 4. Driver completes trip → Status changes to "completed"
+ * =============================================================================
+ * TRIP LIST SCREEN — Real API Data
+ * =============================================================================
+ *
+ * Shows all trips for transporter from GET /api/v1/driver/trips.
+ * ALL data from backend — zero MockDataRepository references.
+ *
+ * SCALABILITY: Backend uses indexed queries, paginated responses.
+ * MODULARITY: Screen fetches directly via RetrofitClient.
+ * EASY UNDERSTANDING: One API call → list display.
+ * SAME CODING STANDARD: Composable + LaunchedEffect + State.
+ * =============================================================================
  */
 @Composable
 fun TripListScreen(
@@ -48,39 +44,32 @@ fun TripListScreen(
     onNavigateToCreateTrip: () -> Unit,
     onNavigateToTripDetails: (String) -> Unit
 ) {
-    val scope = rememberCoroutineScope()
-    val repository = remember { MockDataRepository() }
-    var trips by remember { mutableStateOf<List<Trip>>(emptyList()) }
+    var trips by remember { mutableStateOf<List<TripData>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var selectedFilter by remember { mutableStateOf("All") }
-    
-    // Load trips from repository
+
+    // Load trips from real API
     LaunchedEffect(Unit) {
         isLoading = true
-        
-        scope.launch {
-            try {
-                // Load trips from repository
-                // TODO: Replace "t1" with actual transporter ID from auth/preferences
-                repository.getTrips("t1").onSuccess { tripList ->
-                    trips = tripList
-                    timber.log.Timber.i("✅ Loaded ${trips.size} trips")
-                }.onFailure { error ->
-                    timber.log.Timber.e("❌ Failed to load trips: ${error.message}")
-                }
-            } catch (e: Exception) {
-                timber.log.Timber.e("❌ Error loading trips: ${e.message}")
-            } finally {
-                isLoading = false
+        try {
+            val response = RetrofitClient.driverApi.getDriverTrips(limit = 50)
+            val data = response.body()?.data
+            if (data != null) {
+                trips = data.trips
+                Timber.i("✅ Loaded ${trips.size} trips from API")
             }
+        } catch (e: Exception) {
+            Timber.e("❌ Error loading trips: ${e.message}")
+        } finally {
+            isLoading = false
         }
     }
-    
+
     val filteredTrips = trips.filter { trip ->
         when (selectedFilter) {
-            "Active" -> trip.status in listOf(TripStatus.IN_PROGRESS, TripStatus.ASSIGNED)
-            "Completed" -> trip.status == TripStatus.COMPLETED
-            "Pending" -> trip.status == TripStatus.PENDING
+            "Active" -> trip.status in listOf("in_progress", "active", "assigned", "driver_accepted")
+            "Completed" -> trip.status == "completed"
+            "Pending" -> trip.status in listOf("pending", "partially_filled")
             else -> true
         }
     }
@@ -106,8 +95,8 @@ fun TripListScreen(
             }
             
             if (isLoading) {
-                Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    CircularProgressIndicator(color = Primary)
+                ProvideShimmerBrush {
+                    SkeletonList(itemCount = 4, modifier = Modifier.padding(horizontal = horizontalPadding, vertical = 16.dp))
                 }
             } else if (filteredTrips.isEmpty()) {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
@@ -123,8 +112,12 @@ fun TripListScreen(
                     contentPadding = PaddingValues(horizontal = horizontalPadding, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(filteredTrips) { trip ->
-                        TripCard(trip) { onNavigateToTripDetails(trip.id) }
+                    items(
+                        items = filteredTrips,
+                        key = { it.id },
+                        contentType = { "trip_data_card" }
+                    ) { trip ->
+                        TripDataCard(trip) { onNavigateToTripDetails(trip.id) }
                     }
                 }
             }
@@ -141,7 +134,7 @@ fun TripListScreen(
 }
 
 @Composable
-fun TripCard(trip: Trip, onClick: () -> Unit) {
+fun TripDataCard(trip: TripData, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick,
@@ -151,31 +144,38 @@ fun TripCard(trip: Trip, onClick: () -> Unit) {
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(DataSanitizer.sanitizeForDisplay(trip.customerName), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    DataSanitizer.sanitizeForDisplay(trip.customerName ?: "Customer"),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
                 StatusChip(
                     text = when (trip.status) {
-                        TripStatus.PENDING -> "Pending"
-                        TripStatus.ASSIGNED -> "Assigned"
-                        TripStatus.ACCEPTED -> "Accepted"
-                        TripStatus.IN_PROGRESS -> "In Progress"
-                        TripStatus.COMPLETED -> "Completed"
-                        TripStatus.REJECTED -> "Rejected"
-                        TripStatus.CANCELLED -> "Cancelled"
+                        "pending" -> "Pending"
+                        "assigned", "driver_accepted" -> "Assigned"
+                        "in_progress", "in_transit" -> "In Progress"
+                        "completed" -> "Completed"
+                        "cancelled" -> "Cancelled"
+                        else -> trip.status.replaceFirstChar { it.uppercase() }
                     },
                     status = when (trip.status) {
-                        TripStatus.PENDING -> ChipStatus.PENDING
-                        TripStatus.IN_PROGRESS -> ChipStatus.IN_PROGRESS
-                        TripStatus.COMPLETED -> ChipStatus.COMPLETED
+                        "pending", "partially_filled" -> ChipStatus.PENDING
+                        "in_progress", "in_transit", "active" -> ChipStatus.IN_PROGRESS
+                        "completed" -> ChipStatus.COMPLETED
                         else -> ChipStatus.CANCELLED
                     }
                 )
             }
             Spacer(Modifier.height(8.dp))
-            Text("${DataSanitizer.sanitizeForDisplay(trip.pickupLocation.address)} → ${DataSanitizer.sanitizeForDisplay(trip.dropLocation.address)}", 
-                 style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+            Text(
+                "${DataSanitizer.sanitizeForDisplay(trip.pickup.address)} → ${DataSanitizer.sanitizeForDisplay(trip.drop.address)}",
+                style = MaterialTheme.typography.bodyMedium, color = TextSecondary
+            )
             Spacer(Modifier.height(4.dp))
-            Text("₹${String.format("%.0f", trip.fare)} • ${trip.distance} km",
-                 style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+            Text(
+                "₹${String.format("%.0f", trip.fare)} • ${String.format("%.1f", trip.distanceKm)} km",
+                style = MaterialTheme.typography.bodySmall, color = TextSecondary
+            )
         }
     }
 }

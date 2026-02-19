@@ -14,9 +14,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.weelo.logistics.R
 import com.weelo.logistics.ui.theme.*
 import kotlin.math.roundToInt
 
@@ -218,17 +220,17 @@ fun MapPreviewCard(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Map,
-                        contentDescription = "Map",
+                        contentDescription = stringResource(R.string.cd_map),
                         modifier = Modifier.size(48.dp),
                         tint = Secondary
                     )
                     Text(
-                        text = "Map View",
+                        text = stringResource(R.string.map_view),
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary
                     )
                     Text(
-                        text = "Tap to open full map",
+                        text = stringResource(R.string.tap_to_open_map),
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
@@ -249,7 +251,7 @@ fun MapPreviewCard(
             ) {
                 MapAddressRow(
                     icon = Icons.Default.LocationOn,
-                    label = "Pickup",
+                    label = stringResource(R.string.pickup_label),
                     address = pickupAddress,
                     color = Success
                 )
@@ -258,7 +260,7 @@ fun MapPreviewCard(
                 
                 MapAddressRow(
                     icon = Icons.Default.Place,
-                    label = "Drop",
+                    label = stringResource(R.string.drop_label),
                     address = dropAddress,
                     color = Error
                 )
@@ -304,14 +306,22 @@ private fun MapAddressRow(
 /**
  * Online Status Toggle - Driver availability switch
  * 
+ * SPAM PROTECTION:
+ *   - `isToggling` disables switch during 2s UI cooldown (ViewModel controls)
+ *   - Backend enforces 5s cooldown + 10/5min rate limit + distributed lock
+ *   - Switch is visually dimmed + shows "Switching..." during cooldown
+ *   - Prevents visual spam even if backend handles it
+ * 
  * @param isOnline Current online status
  * @param onToggle Callback when status is toggled
+ * @param isToggling Whether a toggle is currently in progress (2s cooldown)
  */
 @Composable
 fun OnlineStatusToggle(
     isOnline: Boolean,
     onToggle: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isToggling: Boolean = false
 ) {
     Card(
         modifier = modifier,
@@ -335,17 +345,29 @@ fun OnlineStatusToggle(
                     modifier = Modifier
                         .size(12.dp)
                         .clip(CircleShape)
-                        .background(if (isOnline) Success else TextDisabled)
+                        .background(
+                            if (isToggling) Warning
+                            else if (isOnline) Success 
+                            else TextDisabled
+                        )
                 )
                 
                 Column {
                     Text(
-                        text = if (isOnline) "You're Online" else "You're Offline",
+                        text = when {
+                            isToggling -> stringResource(R.string.switching_status)
+                            isOnline -> stringResource(R.string.you_are_online)
+                            else -> stringResource(R.string.you_are_offline)
+                        },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = if (isOnline) "Accepting trip requests" else "Not accepting trips",
+                        text = when {
+                            isToggling -> stringResource(R.string.please_wait)
+                            isOnline -> stringResource(R.string.accepting_trip_requests)
+                            else -> stringResource(R.string.not_accepting_trips)
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
@@ -354,7 +376,8 @@ fun OnlineStatusToggle(
             
             Switch(
                 checked = isOnline,
-                onCheckedChange = { onToggle() },
+                onCheckedChange = { if (!isToggling) onToggle() },
+                enabled = !isToggling,
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Success,
                     checkedTrackColor = Success.copy(alpha = 0.5f)

@@ -7,6 +7,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -203,10 +204,9 @@ fun responsiveCardWidth(): Dp {
 /**
  * Modifier extension for landscape-specific padding
  */
-@Composable
-fun Modifier.landscapePadding(): Modifier {
+fun Modifier.landscapePadding(): Modifier = composed {
     val screenConfig = rememberScreenConfig()
-    return if (screenConfig.isLandscape) {
+    if (screenConfig.isLandscape) {
         this.padding(horizontal = 24.dp)
     } else {
         this

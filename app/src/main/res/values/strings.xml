@@ -75,4 +75,253 @@
     <string name="error_loading_profile">Failed to load profile</string>
     <string name="error_saving_language">Failed to save language preference</string>
     <string name="error_network">Network error. Please check your connection.</string>
+    <string name="error_loading_earnings">Failed to load earnings</string>
+    <string name="error_loading_performance">Failed to load performance data</string>
+    <string name="error_loading_notifications">Failed to load notifications</string>
+    <string name="error_loading_trips">Failed to load trip history</string>
+    <string name="error_generic">Something went wrong. Please try again.</string>
+    
+    <!-- ================================================================== -->
+    <!-- PHASE 1: Dashboard Localization — New String Keys                   -->
+    <!-- ================================================================== -->
+    
+    <!-- Dashboard — Top Bar & Greeting -->
+    <string name="welcome_format">Welcome, %1$s!</string>
+    <string name="good_morning">Good Morning</string>
+    <string name="good_afternoon">Good Afternoon</string>
+    <string name="good_evening">Good Evening</string>
+    <string name="menu">Menu</string>
+    
+    <!-- Dashboard — Earnings Card -->
+    <string name="your_earnings">Your Earnings</string>
+    <string name="today">Today</string>
+    <string name="this_week">This Week</string>
+    <string name="this_month">This Month</string>
+    <string name="trips_count">%1$d trips</string>
+    <string name="pending_payment">Pending Payment</string>
+    <string name="start_accepting_trips">Start accepting trips to earn!</string>
+    <string name="earnings_auto_calculated">Your earnings will be calculated automatically</string>
+    
+    <!-- Dashboard — Active Trip -->
+    <string name="active_trip">Active Trip</string>
+    <string name="time_elapsed_format">Time Elapsed: %1$d mins</string>
+    <string name="eta_format">ETA: %1$d mins</string>
+    
+    <!-- Dashboard — Stats Grid -->
+    <string name="quick_stats">Quick Stats</string>
+    <string name="total_trips">Total Trips</string>
+    <string name="distance_label">Distance</string>
+    <string name="rating_label">Rating</string>
+    <string name="on_time_label">On-Time</string>
+    
+    <!-- Dashboard — Performance -->
+    <string name="performance">Performance</string>
+    <string name="no_performance_data">No Performance Data</string>
+    <string name="complete_trips_performance">Complete trips to build your performance metrics</string>
+    <string name="acceptance_rate">Acceptance\nRate</string>
+    <string name="on_time_delivery">On-Time\nDelivery</string>
+    <string name="rating_format">Rating\n%1$s⭐</string>
+    
+    <!-- Dashboard — Recent Trips -->
+    <string name="recent_trips">Recent Trips</string>
+    <string name="view_all">View All</string>
+    <string name="no_trips_yet">No Trips Yet</string>
+    <string name="no_trips_message">Your completed trips will appear here. Start accepting trips from transporters!</string>
+    
+    <!-- Dashboard — Notifications -->
+    <string name="recent_notifications">Recent Notifications</string>
+    <string name="no_notifications">No Notifications</string>
+    <string name="no_notifications_message">You\'re all caught up! New trip requests and updates will appear here.</string>
+    
+    <!-- Dashboard — Error State -->
+    <string name="oops_something_wrong">Oops! Something went wrong</string>
+    
+    <!-- Trip Status -->
+    <string name="heading_to_pickup">Heading to Pickup</string>
+    <string name="at_pickup_location">At Pickup Location</string>
+    <string name="in_transit_status">In Transit</string>
+    <string name="at_drop_location">At Drop Location</string>
+    <string name="completed_status">Completed</string>
+    
+    <!-- Trip Status Labels (Transporter) -->
+    <string name="status_pending">Pending</string>
+    <string name="status_assigned">Assigned</string>
+    <string name="status_accepted">Accepted</string>
+    <string name="status_at_pickup">At Pickup</string>
+    <string name="status_loaded">Loaded</string>
+    <string name="status_in_progress">In Progress</string>
+    <string name="status_completed">Completed</string>
+    <string name="status_rejected">Rejected</string>
+    <string name="status_cancelled">Cancelled</string>
+    
+    <!-- Time Ago -->
+    <string name="just_now">Just now</string>
+    <string name="min_ago_format">%1$d min ago</string>
+    <string name="hour_ago_format">%1$d hour ago</string>
+    <string name="hours_ago_format">%1$d hours ago</string>
+    <string name="day_ago_format">%1$d day ago</string>
+    <string name="days_ago_format">%1$d days ago</string>
+    
+    <!-- Navigation Drawer -->
+    <string name="trip_history">Trip History</string>
+    <string name="earnings_menu">Earnings</string>
+    <string name="documents_menu">Documents</string>
+    <string name="my_fleet">My Fleet</string>
+    <string name="my_drivers">My Drivers</string>
+    <string name="trips_menu">Trips</string>
+    <string name="not_logged_in">Not logged in</string>
+    <string name="tap_edit_profile">Tap to edit profile</string>
+    <string name="set_your_name">Set your name</string>
+    <string name="app_version_format">Weelo Captain v%1$s</string>
+    
+    <!-- Settings — Descriptions -->
+    <string name="push_notifications_desc">Receive trip and payment notifications</string>
+    <string name="receive_driver_notifications">Receive trip and driver notifications</string>
+    <string name="change_language">Change Language</string>
+    <string name="theme_light">Light</string>
+    <string name="privacy_policy_desc">View our privacy policy</string>
+    <string name="terms_desc">View terms of service</string>
+    <string name="help_support_desc">Get help or contact us</string>
+    <string name="about_version_format">Version %1$s</string>
+    <string name="logout_confirmation_title">Logout</string>
+    <string name="logout_subtitle">Sign out from your account</string>
+    
+    <!-- Online/Offline Toggle -->
+    <string name="online">Online</string>
+    <string name="offline">Offline</string>
+    <string name="you_are_online">You\'re Online</string>
+    <string name="you_are_offline">You\'re Offline</string>
+    <string name="switching_status">Switching…</string>
+    <string name="please_wait">Please wait</string>
+    <string name="accepting_trip_requests">Accepting trip requests</string>
+    <string name="not_accepting_trips">Not accepting trips</string>
+    <string name="receiving_booking_requests">Receiving booking requests</string>
+    <string name="not_receiving_requests">Not receiving requests</string>
+    <string name="no_internet_connection">No internet connection</string>
+    <string name="offline_banner_message">You\'re offline. Some features may not work.</string>
+    <string name="no_network">No network</string>
+    
+    <!-- Map & Components -->
+    <string name="pickup_label">Pickup</string>
+    <string name="drop_label">Drop</string>
+    <string name="map_view">Map View</string>
+    <string name="tap_to_open_map">Tap to open full map</string>
+    <string name="search_placeholder">Search…</string>
+    <string name="clear">Clear</string>
+    <string name="profile">Profile</string>
+    
+    <!-- Transporter Dashboard -->
+    <string name="total_vehicles">Total Vehicles</string>
+    <string name="total_drivers">Total Drivers</string>
+    <string name="quick_actions">Quick Actions</string>
+    <string name="add_vehicle">Add Vehicle</string>
+    <string name="add_driver">Add Driver</string>
+    <string name="cannot_connect_backend">Cannot connect to backend</string>
+    <string name="order_cancelled">Order cancelled</string>
+    <string name="trucks_released_format">%1$d truck(s) released</string>
+    <string name="call_action">Call</string>
+    
+    <!-- Content Descriptions -->
+    <string name="cd_notifications">Notifications</string>
+    <string name="cd_profile">Profile</string>
+    <string name="cd_menu">Menu</string>
+    <string name="cd_back">Back</string>
+    <string name="cd_clear">Clear</string>
+    <string name="cd_verified">Verified</string>
+    <string name="cd_map">Map</string>
+    <string name="cd_logout">Logout</string>
+    <string name="cd_download">Download</string>
+    <string name="cd_refresh">Refresh</string>
+    <string name="cd_edit">Edit</string>
+    <string name="cd_search">Search</string>
+    
+    <!-- ================================================================== -->
+    <!-- PHASE 2: Remaining Screens Localization — New String Keys           -->
+    <!-- ================================================================== -->
+    
+    <!-- Earnings Screen -->
+    <string name="earnings_title">Earnings</string>
+    <string name="period_today">Today</string>
+    <string name="period_week">Week</string>
+    <string name="period_month">Month</string>
+    <string name="total_earnings_format">Total Earnings (%1$s)</string>
+    <string name="trips_label">Trips</string>
+    <string name="avg_per_trip">Avg/Trip</string>
+    <string name="pending_payments">Pending Payments</string>
+    <string name="pending_amount">Pending Amount</string>
+    <string name="request_payment">Request</string>
+    <string name="trip_wise_breakdown">Trip-wise Breakdown</string>
+    <string name="status_paid">Paid</string>
+    
+    <!-- Performance Screen -->
+    <string name="performance_title">Performance</string>
+    <string name="overall_rating">Overall Rating</string>
+    <string name="based_on_trips_format">Based on %1$d trips</string>
+    <string name="trip_statistics">Trip Statistics</string>
+    <string name="total_label">Total</string>
+    <string name="completed_label">Completed</string>
+    <string name="cancelled_label">Cancelled</string>
+    <string name="performance_metrics">Performance Metrics</string>
+    <string name="on_time_delivery_rate">On-Time Delivery</string>
+    <string name="acceptance_rate_label">Acceptance Rate</string>
+    <string name="distance_covered">Distance Covered</string>
+    <string name="completion_rate">Completion Rate</string>
+    <string name="monthly_trends">Monthly Trends</string>
+    <string name="last_months_format">Last %1$d Months</string>
+    <string name="recent_trips_label">Recent Trips</string>
+    
+    <!-- Notifications Screen -->
+    <string name="notifications_title">Notifications</string>
+    <string name="filter_all">All</string>
+    <string name="filter_unread">Unread</string>
+    <string name="filter_trips">Trips</string>
+    <string name="filter_payments">Payments</string>
+    <string name="no_notifications_label">No notifications</string>
+    <string name="time_m_ago_format">%1$dm ago</string>
+    <string name="time_h_ago_format">%1$dh ago</string>
+    <string name="time_d_ago_format">%1$dd ago</string>
+    
+    <!-- Trip History Screen -->
+    <string name="trip_history_title">Trip History</string>
+    <string name="search_customer_location">Search by customer or location</string>
+    <string name="filter_completed">Completed</string>
+    <string name="filter_cancelled">Cancelled</string>
+    <string name="no_trip_history">No trip history yet</string>
+    <string name="no_trips_found">No trips found</string>
+    <string name="total_summary">Total</string>
+    <string name="earned_label">Earned</string>
+    <string name="in_progress_label">In Progress</string>
+    <string name="km_format">%1$s km</string>
+    
+    <!-- Profile Screen -->
+    <string name="profile_photo_label">Profile Photo</string>
+    <string name="visible_to_transporter">Visible to transporter</string>
+    <string name="only_visible_to_you">Only visible to you</string>
+    <string name="update_photo">Update Photo</string>
+    <string name="choose_photo_method">Choose how to update your photo:</string>
+    <string name="take_photo">Take Photo</string>
+    <string name="use_camera">Use camera</string>
+    <string name="choose_from_gallery">Choose from Gallery</string>
+    <string name="select_existing_photo">Select existing photo</string>
+    <string name="uploading_photo">Uploading photo…</string>
+    <string name="front_label">Front</string>
+    <string name="back_label">Back</string>
+    <string name="license_format">License %1$s</string>
+    
+    <!-- Documents Screen -->
+    <string name="my_documents">My Documents</string>
+    <string name="upload_documents_info">Upload clear photos of your documents for verification</string>
+    <string name="driving_license">Driving License</string>
+    <string name="aadhar_card">Aadhar Card</string>
+    <string name="pan_card">PAN Card</string>
+    <string name="vehicle_rc_optional">Vehicle RC (Optional)</string>
+    <string name="vehicle_insurance_optional">Vehicle Insurance (Optional)</string>
+    <string name="doc_verified">Verified</string>
+    <string name="doc_pending">Pending</string>
+    <string name="doc_not_uploaded">Not Uploaded</string>
+    <string name="view_button">View</string>
+    <string name="upload_button">Upload</string>
+    <string name="reupload_button">Re-upload</string>
+    <string name="documents_note">Note: Required documents must be verified before you can start taking trips.</string>
+    <string name="valid_till_format">Valid till: %1$s</string>
 </resources>

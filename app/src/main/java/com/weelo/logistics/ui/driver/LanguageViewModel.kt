@@ -22,9 +22,11 @@ import kotlinx.coroutines.launch
  */
 class LanguageViewModel(application: Application) : AndroidViewModel(application) {
 
-    // MODULARITY: Uses DriverPreferences — same store that navigation reads from.
-    // Previously used UserPreferencesRepository which caused desync.
-    private val driverPrefs = DriverPreferences(application)
+    // MODULARITY: Uses DriverPreferences SINGLETON — same instance that
+    // navigation, settings, and onboarding check all read from.
+    // CRITICAL: Must use getInstance(), NOT constructor. Using constructor
+    // creates a second DataStore instance → potential data corruption.
+    private val driverPrefs = DriverPreferences.getInstance(application)
     private val profileApi = com.weelo.logistics.data.remote.RetrofitClient.profileApi
 
     private val _isLoading = MutableStateFlow(false)

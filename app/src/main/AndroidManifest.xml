@@ -19,11 +19,12 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     
-    <!-- SMS Auto-Read for OTP (Google Play Services SMS Retriever API) -->
-    <!-- No runtime permission needed - works automatically with SMS Retriever API -->
-    <uses-permission android:name="android.permission.RECEIVE_SMS" />
-    <uses-permission android:name="android.permission.READ_SMS" />
-    <uses-permission android:name="com.google.android.gms.permission.RECEIVE_SMS" />
+    <!-- SMS Auto-Read for OTP uses Google SMS Retriever API -->
+    <!-- ZERO permissions needed — SMS Retriever works without RECEIVE_SMS/READ_SMS -->
+    <!-- Removing dangerous permissions improves Play Store approval -->
+
+    <!-- Telephony feature declaration (not required, supports non-phone devices) -->
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <application
         android:name=".WeeloApp"

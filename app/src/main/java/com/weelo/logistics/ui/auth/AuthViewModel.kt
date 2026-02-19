@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 /**
  * =============================================================================
@@ -94,15 +95,19 @@ class AuthViewModel : ViewModel() {
                             driverName = data?.driverName
                         )
                     } else {
-                        val errorMsg = response.body()?.error?.message 
-                            ?: response.body()?.message
-                            ?: response.errorBody()?.string() 
-                            ?: "Failed to send OTP. Driver not found or not registered."
+                        val errorMsg = response.body()?.error?.message
+                            ?.takeIf { !it.startsWith("{") }
+                            ?: extractFriendlyError(response, "Failed to send OTP. Driver not found or not registered.")
                         _authState.value = AuthState.Error(errorMsg)
                     }
                 } catch (e: Exception) {
                     _authState.value = AuthState.Error(
-                        "Network error: ${e.message ?: "Cannot connect to server"}"
+                        when {
+                            e.message?.contains("timeout", true) == true -> "Connection timed out. Please check your internet and try again."
+                            e.message?.contains("Unable to resolve", true) == true -> "No internet connection. Please check your network."
+                            e.message?.contains("Connection refused", true) == true -> "Server is not reachable. Please try again later."
+                            else -> "Something went wrong. Please check your internet connection and try again."
+                        }
                     )
                 }
             }
@@ -158,14 +163,19 @@ class AuthViewModel : ViewModel() {
                             message = response.body()?.data?.message ?: "OTP sent successfully"
                         )
                     } else {
-                        val errorMsg = response.body()?.error?.message 
-                            ?: response.errorBody()?.string() 
-                            ?: "Failed to send OTP"
+                        val errorMsg = response.body()?.error?.message
+                            ?.takeIf { !it.startsWith("{") }
+                            ?: extractFriendlyError(response, "Failed to send OTP. Please try again.")
                         _authState.value = AuthState.Error(errorMsg)
                     }
                 } catch (e: Exception) {
                     _authState.value = AuthState.Error(
-                        "Network error: ${e.message ?: "Cannot connect to server"}"
+                        when {
+                            e.message?.contains("timeout", true) == true -> "Connection timed out. Please check your internet and try again."
+                            e.message?.contains("Unable to resolve", true) == true -> "No internet connection. Please check your network."
+                            e.message?.contains("Connection refused", true) == true -> "Server is not reachable. Please try again later."
+                            else -> "Something went wrong. Please check your internet connection and try again."
+                        }
                     )
                 }
             }
@@ -212,7 +222,7 @@ class AuthViewModel : ViewModel() {
                         // SCALABILITY: Restore language preference from backend
                         // in one shot — no extra API call needed
                         WeeloApp.getInstance()?.applicationContext?.let { ctx ->
-                            val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences(ctx)
+                            val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences.getInstance(ctx)
                             driverPrefs.restoreLanguageIfNeeded(data?.driver?.preferredLanguage)
                         }
                         
@@ -231,13 +241,18 @@ class AuthViewModel : ViewModel() {
                         )
                     } else {
                         val errorMsg = response.body()?.error?.message
-                            ?: response.body()?.message
-                            ?: "Invalid OTP. Please try again."
+                            ?.takeIf { !it.startsWith("{") }
+                            ?: extractFriendlyError(response, "Invalid OTP. Please check and try again.")
                         _authState.value = AuthState.Error(errorMsg)
                     }
                 } catch (e: Exception) {
                     _authState.value = AuthState.Error(
-                        "Network error: ${e.message ?: "Cannot connect to server"}"
+                        when {
+                            e.message?.contains("timeout", true) == true -> "Connection timed out. Please check your internet and try again."
+                            e.message?.contains("Unable to resolve", true) == true -> "No internet connection. Please check your network."
+                            e.message?.contains("Connection refused", true) == true -> "Server is not reachable. Please try again later."
+                            else -> "Something went wrong. Please check your internet connection and try again."
+                        }
                     )
                 }
             }
@@ -288,7 +303,7 @@ class AuthViewModel : ViewModel() {
                         
                         // SCALABILITY: Restore language from backend on login
                         WeeloApp.getInstance()?.applicationContext?.let { ctx ->
-                            val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences(ctx)
+                            val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences.getInstance(ctx)
                             driverPrefs.restoreLanguageIfNeeded(data?.preferredLanguage)
                         }
                         
@@ -305,12 +320,18 @@ class AuthViewModel : ViewModel() {
                         )
                     } else {
                         val errorMsg = response.body()?.error?.message
-                            ?: "Invalid OTP. Please try again."
+                            ?.takeIf { !it.startsWith("{") }
+                            ?: extractFriendlyError(response, "Invalid OTP. Please check and try again.")
                         _authState.value = AuthState.Error(errorMsg)
                     }
                 } catch (e: Exception) {
                     _authState.value = AuthState.Error(
-                        "Network error: ${e.message ?: "Cannot connect to server"}"
+                        when {
+                            e.message?.contains("timeout", true) == true -> "Connection timed out. Please check your internet and try again."
+                            e.message?.contains("Unable to resolve", true) == true -> "No internet connection. Please check your network."
+                            e.message?.contains("Connection refused", true) == true -> "Server is not reachable. Please try again later."
+                            else -> "Something went wrong. Please check your internet connection and try again."
+                        }
                     )
                 }
             }
@@ -350,14 +371,26 @@ class AuthViewModel : ViewModel() {
      */
     fun logout() {
         viewModelScope.launch(Dispatchers.IO) {
+            // Step 1: Go offline FIRST — removes driver from Redis presence + transporter set
+            // This ensures the driver is IMMEDIATELY invisible to transporters.
+            // If this fails (network issue), Redis TTL (35s) will auto-expire anyway.
             try {
-                // Call logout API
+                RetrofitClient.driverApi.updateAvailability(
+                    com.weelo.logistics.data.api.UpdateAvailabilityRequest(isOnline = false)
+                )
+                timber.log.Timber.i("✅ Driver went offline before logout")
+            } catch (_: Exception) {
+                timber.log.Timber.w("⚠️ goOffline failed during logout (TTL will handle cleanup)")
+            }
+            
+            // Step 2: Call logout API
+            try {
                 RetrofitClient.authApi.logout(RetrofitClient.getAuthHeader())
             } catch (_: Exception) {
                 // Ignore errors, still clear local data
             }
             
-            // Disconnect WebSocket
+            // Step 3: Disconnect WebSocket (heartbeat stops here too)
             WeeloApp.getInstance()?.disconnectWebSocket()
             
             // Clear stored tokens and user data
@@ -366,7 +399,7 @@ class AuthViewModel : ViewModel() {
             // Clear DriverPreferences (language, etc.)
             // On next login, language will be restored from backend response
             WeeloApp.getInstance()?.applicationContext?.let { ctx ->
-                val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences(ctx)
+                val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences.getInstance(ctx)
                 driverPrefs.clearAll()
             }
             
@@ -374,6 +407,95 @@ class AuthViewModel : ViewModel() {
         }
     }
     
+    // =========================================================================
+    // FRIENDLY ERROR MESSAGE PARSER
+    // =========================================================================
+    // 
+    // Converts raw API error responses into plain English messages.
+    // Handles three cases:
+    //   1. response.body()?.error?.message — server returned a message field
+    //   2. response.errorBody() — non-2xx response with JSON body
+    //   3. Fallback default message
+    //
+    // Error codes are mapped to user-friendly messages so users never see
+    // raw JSON or technical error codes on screen.
+    // =========================================================================
+    
+    /**
+     * Extracts a clean, plain English error message from an API response.
+     * Never returns raw JSON — always a human-readable string.
+     */
+    private fun extractFriendlyError(response: retrofit2.Response<*>, defaultMsg: String): String {
+        // Parse error body JSON
+        try {
+            val errorBodyStr = response.errorBody()?.string()
+            if (!errorBodyStr.isNullOrBlank()) {
+                val json = JSONObject(errorBodyStr)
+                
+                // Extract error code and message
+                val errorObj = json.optJSONObject("error")
+                val code = errorObj?.optString("code", "") ?: ""
+                val message = errorObj?.optString("message", "") ?: ""
+                
+                // Map error codes to friendly messages
+                return mapErrorCodeToFriendlyMessage(code, message, defaultMsg)
+            }
+        } catch (_: Exception) {}
+        
+        return defaultMsg
+    }
+    
+    /**
+     * Maps backend error codes to plain English messages.
+     * Users should never see codes like "OTP_RATE_LIMIT_EXCEEDED" —
+     * instead they see "Too many attempts. Please try again in 10 minutes."
+     */
+    private fun mapErrorCodeToFriendlyMessage(code: String, serverMessage: String, defaultMsg: String): String {
+        return when (code) {
+            // OTP Rate Limiting
+            "OTP_RATE_LIMIT_EXCEEDED" -> "Too many OTP attempts. Please try again in 2 minutes."
+            "RATE_LIMIT_EXCEEDED" -> "Too many requests. Please wait a moment and try again."
+            "TOO_MANY_REQUESTS" -> "Too many requests. Please wait a moment and try again."
+            
+            // OTP Errors
+            "OTP_EXPIRED" -> "OTP has expired. Please request a new one."
+            "INVALID_OTP" -> "Incorrect OTP. Please check and try again."
+            "OTP_ALREADY_VERIFIED" -> "This OTP has already been used. Please request a new one."
+            "OTP_MAX_ATTEMPTS" -> "Too many incorrect attempts. Please request a new OTP."
+            "OTP_SEND_FAILED" -> "Could not send OTP. Please check your number and try again."
+            
+            // User/Account Errors
+            "USER_NOT_FOUND" -> "No account found with this phone number."
+            "DRIVER_NOT_FOUND" -> "Driver not found. Please check your phone number or contact your transporter."
+            "TRANSPORTER_NOT_FOUND" -> "Transporter account not found."
+            "ACCOUNT_DISABLED" -> "Your account has been disabled. Please contact support."
+            "ACCOUNT_SUSPENDED" -> "Your account is suspended. Please contact support."
+            "UNAUTHORIZED" -> "Session expired. Please log in again."
+            "FORBIDDEN" -> "You don't have permission for this action."
+            
+            // Network/Server Errors
+            "SERVICE_UNAVAILABLE" -> "Service is temporarily unavailable. Please try again shortly."
+            "INTERNAL_ERROR" -> "Something went wrong. Please try again."
+            "SERVER_ERROR" -> "Something went wrong on our end. Please try again."
+            "TIMEOUT" -> "Request timed out. Please check your connection and try again."
+            
+            // Validation Errors
+            "INVALID_PHONE" -> "Please enter a valid 10-digit phone number."
+            "INVALID_REQUEST" -> "Something went wrong. Please try again."
+            "VALIDATION_ERROR" -> serverMessage.ifBlank { "Please check your input and try again." }
+            
+            // If code is unknown but server sent a message, use that message
+            // (but clean it — remove any JSON-like syntax)
+            else -> {
+                if (serverMessage.isNotBlank() && !serverMessage.startsWith("{")) {
+                    serverMessage
+                } else {
+                    defaultMsg
+                }
+            }
+        }
+    }
+
     /**
      * Reset state to idle
      */

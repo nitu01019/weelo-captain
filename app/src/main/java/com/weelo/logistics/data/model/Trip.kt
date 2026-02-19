@@ -25,16 +25,27 @@ data class Trip(
 )
 
 /**
- * Trip Status
+ * Trip Status — Full lifecycle from assignment to delivery
+ *
+ * STATUS FLOW:
+ *   PENDING → ASSIGNED → ACCEPTED → AT_PICKUP → LOADING_COMPLETE → IN_PROGRESS → COMPLETED
+ *
+ * Each transition triggers:
+ *   1. Backend status update (PUT /tracking/trip/{tripId}/status)
+ *   2. WebSocket broadcast to customer booking room
+ *   3. FCM push notification to customer (even if app closed)
+ *   4. Customer sees: banner + truck card update + marker color change
  */
 enum class TripStatus {
-    PENDING,        // Created, waiting for driver assignment/acceptance
-    ASSIGNED,       // Assigned to driver
-    ACCEPTED,       // Driver accepted
-    REJECTED,       // Driver rejected
-    IN_PROGRESS,    // Trip started
-    COMPLETED,      // Trip completed
-    CANCELLED       // Trip cancelled
+    PENDING,           // Created, waiting for driver assignment/acceptance
+    ASSIGNED,          // Assigned to driver by transporter
+    ACCEPTED,          // Driver accepted (heading to pickup)
+    AT_PICKUP,         // Driver arrived at pickup location
+    LOADING_COMPLETE,  // Goods loaded, ready to start
+    REJECTED,          // Driver rejected
+    IN_PROGRESS,       // Trip started, GPS tracking active
+    COMPLETED,         // Trip completed, goods delivered
+    CANCELLED          // Trip cancelled
 }
 
 /**

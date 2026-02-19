@@ -1,5 +1,6 @@
 package com.weelo.logistics.data.repository
 
+import android.annotation.SuppressLint
 import android.content.Context
 import com.weelo.logistics.data.api.AcceptBroadcastRequest
 import com.weelo.logistics.data.api.AcceptBroadcastResponse
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 // =============================================================================
 // BROADCAST REPOSITORY - Real-time Booking Broadcast Management
@@ -54,7 +56,11 @@ import kotlinx.coroutines.withContext
  */
 sealed class BroadcastResult<out T> {
     data class Success<T>(val data: T) : BroadcastResult<T>()
-    data class Error(val message: String, val code: Int? = null) : BroadcastResult<Nothing>()
+    data class Error(
+        val message: String,
+        val code: Int? = null,
+        val apiCode: String? = null
+    ) : BroadcastResult<Nothing>()
     object Loading : BroadcastResult<Nothing>()
 }
 
@@ -99,6 +105,7 @@ class BroadcastRepository private constructor(
     // Track accepted broadcasts locally for immediate UI feedback
     private val acceptedBroadcastIds = mutableSetOf<String>()
     
+    @SuppressLint("StaticFieldLeak")
     companion object {
         private const val TAG = "BroadcastRepository"
         
@@ -294,7 +301,8 @@ class BroadcastRepository private constructor(
         vehicleId: String,
         driverId: String? = null,
         estimatedArrival: String? = null,
-        notes: String? = null
+        notes: String? = null,
+        idempotencyKey: String? = null
     ): BroadcastResult<AcceptBroadcastResponse> = withContext(Dispatchers.IO) {
         try {
             val token = RetrofitClient.getAccessToken()
@@ -315,6 +323,7 @@ class BroadcastRepository private constructor(
             
             val response = broadcastApi.acceptBroadcast(
                 token = "Bearer $token",
+                idempotencyKey = idempotencyKey,
                 broadcastId = broadcastId,
                 request = request
             )
@@ -332,17 +341,38 @@ class BroadcastRepository private constructor(
                 
                 return@withContext BroadcastResult.Success(body)
             } else {
-                val errorMsg = response.errorBody()?.string() 
-                    ?: response.body()?.error
-                    ?: "Failed to accept broadcast"
-                timber.log.Timber.e("❌ Accept broadcast failed: $errorMsg")
-                return@withContext BroadcastResult.Error(errorMsg, response.code())
+                val (errorMsg, apiCode) = parseApiError(
+                    response.errorBody()?.string(),
+                    response.body()?.error
+                )
+                timber.log.Timber.e("❌ Accept broadcast failed: code=${apiCode ?: "unknown"} msg=$errorMsg")
+                return@withContext BroadcastResult.Error(errorMsg, response.code(), apiCode)
             }
             
         } catch (e: Exception) {
             timber.log.Timber.e(e, "❌ Network error accepting broadcast")
             return@withContext BroadcastResult.Error(e.message ?: "Network error")
         }
+    }
+
+    private fun parseApiError(rawErrorBody: String?, fallbackMessage: String?): Pair<String, String?> {
+        if (!rawErrorBody.isNullOrBlank()) {
+            try {
+                val json = JSONObject(rawErrorBody)
+                val error = json.optJSONObject("error")
+                val code = error?.optString("code")?.takeIf { it.isNotBlank() }
+                val message = error?.optString("message")?.takeIf { it.isNotBlank() }
+                    ?: json.optString("message").takeIf { it.isNotBlank() }
+                if (!message.isNullOrBlank()) {
+                    return message to code
+                }
+            } catch (_: Exception) {
+                // Fall through to fallback parsing below.
+            }
+        }
+
+        val fallback = fallbackMessage?.takeIf { it.isNotBlank() } ?: "Failed to accept broadcast"
+        return fallback to null
     }
     
     /**
@@ -592,9 +622,17 @@ class BroadcastRepository private constructor(
     private fun parseTimestamp(timestamp: String?): Long {
         if (timestamp == null) return System.currentTimeMillis()
         return try {
-            java.time.Instant.parse(timestamp).toEpochMilli()
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }.parse(timestamp)?.time ?: System.currentTimeMillis()
         } catch (e: Exception) {
-            System.currentTimeMillis()
+            try {
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }.parse(timestamp)?.time ?: System.currentTimeMillis()
+            } catch (e2: Exception) {
+                System.currentTimeMillis()
+            }
         }
     }
     

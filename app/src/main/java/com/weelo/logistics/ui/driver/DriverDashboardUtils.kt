@@ -1,7 +1,9 @@
 package com.weelo.logistics.ui.driver
 
+import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import com.weelo.logistics.R
 import com.weelo.logistics.data.model.DashNotificationType
 import com.weelo.logistics.data.model.TripProgressStatus
 import com.weelo.logistics.ui.theme.*
@@ -13,30 +15,33 @@ import java.util.*
  * 
  * Extracted from DriverDashboardScreen.kt for better modularity.
  * These are pure utility functions with no side effects.
+ * 
+ * Functions that return user-visible strings take a Context parameter
+ * so that they can resolve localized string resources.
  */
 
 /**
  * Get greeting based on current time of day
  */
-fun getCurrentGreeting(): String {
+fun getCurrentGreeting(context: Context): String {
     val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
     return when (hour) {
-        in 0..11 -> "Good Morning"
-        in 12..16 -> "Good Afternoon"
-        else -> "Good Evening"
+        in 0..11 -> context.getString(R.string.good_morning)
+        in 12..16 -> context.getString(R.string.good_afternoon)
+        else -> context.getString(R.string.good_evening)
     }
 }
 
 /**
  * Get human-readable status text for trip progress
  */
-fun getStatusText(status: TripProgressStatus): String {
+fun getStatusText(context: Context, status: TripProgressStatus): String {
     return when (status) {
-        TripProgressStatus.EN_ROUTE_TO_PICKUP -> "Heading to Pickup"
-        TripProgressStatus.AT_PICKUP -> "At Pickup Location"
-        TripProgressStatus.IN_TRANSIT -> "In Transit"
-        TripProgressStatus.AT_DROP -> "At Drop Location"
-        TripProgressStatus.COMPLETED -> "Completed"
+        TripProgressStatus.EN_ROUTE_TO_PICKUP -> context.getString(R.string.heading_to_pickup)
+        TripProgressStatus.AT_PICKUP -> context.getString(R.string.at_pickup_location)
+        TripProgressStatus.IN_TRANSIT -> context.getString(R.string.in_transit_status)
+        TripProgressStatus.AT_DROP -> context.getString(R.string.at_drop_location)
+        TripProgressStatus.COMPLETED -> context.getString(R.string.completed_status)
     }
 }
 
@@ -81,17 +86,17 @@ fun formatTripDate(timestamp: Long): String {
 /**
  * Format timestamp as relative time (e.g., "5 min ago")
  */
-fun formatTimeAgo(timestamp: Long): String {
+fun formatTimeAgo(context: Context, timestamp: Long): String {
     val diff = System.currentTimeMillis() - timestamp
     val minutes = diff / 60000
     val hours = minutes / 60
     val days = hours / 24
     
     return when {
-        minutes < 1 -> "Just now"
-        minutes < 60 -> "$minutes min ago"
-        hours < 24 -> "$hours hour${if (hours > 1) "s" else ""} ago"
-        days < 7 -> "$days day${if (days > 1) "s" else ""} ago"
+        minutes < 1 -> context.getString(R.string.just_now)
+        minutes < 60 -> context.getString(R.string.min_ago_format, minutes)
+        hours < 24 -> if (hours > 1) context.getString(R.string.hours_ago_format, hours) else context.getString(R.string.hour_ago_format, hours)
+        days < 7 -> if (days > 1) context.getString(R.string.days_ago_format, days) else context.getString(R.string.day_ago_format, days)
         else -> formatTripDate(timestamp)
     }
 }

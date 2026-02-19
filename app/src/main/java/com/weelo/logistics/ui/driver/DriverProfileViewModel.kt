@@ -4,13 +4,15 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.weelo.logistics.data.api.DriverPhotos
 import com.weelo.logistics.data.api.DriverProfileWithPhotos
 import com.weelo.logistics.data.remote.RetrofitClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
@@ -77,8 +79,12 @@ sealed class PhotoUpdateState {
 }
 
 class DriverProfileViewModel(
-    private val context: Context
+    context: Context
 ) : ViewModel() {
+
+    // Use applicationContext to prevent Activity context leak.
+    // ViewModel outlives the Activity — holding Activity context causes memory leak.
+    private val appContext: Context = context.applicationContext
 
     private val _profileState = MutableStateFlow<ProfileState>(ProfileState.Loading)
     val profileState: StateFlow<ProfileState> = _profileState.asStateFlow()
@@ -104,11 +110,33 @@ class DriverProfileViewModel(
     // For millions of users: reduces backend load by 90%+
     private var cachedProfile: DriverProfileWithPhotos? = null
     private var cacheTimestamp: Long = 0
-    private val CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes
+    private val cacheTtlMs = 10 * 60 * 1000L // 10 minutes
 
     init {
         loadProfile()
-        // TODO: Setup WebSocket listeners for real-time updates
+        listenForWebSocketUpdates()
+    }
+    
+    /**
+     * Listen for real-time WebSocket profile updates.
+     *
+     * When the backend emits a driver_updated event (e.g., transporter updates
+     * driver photo, or another device changes the profile), this triggers a
+     * profile reload to stay in sync.
+     *
+     * Uses SocketIOService.driversUpdated SharedFlow which fires on
+     * driver_updated, driver_deleted, driver_status_changed, drivers_updated events.
+     */
+    private fun listenForWebSocketUpdates() {
+        viewModelScope.launch {
+            com.weelo.logistics.data.remote.SocketIOService.driversUpdated.collect { event ->
+                // Reload profile when any driver update event arrives
+                // This covers profile photo changes, license updates, etc.
+                timber.log.Timber.d("🔄 Driver update event received (${event.action}), refreshing profile")
+                clearCache()
+                loadProfile()
+            }
+        }
     }
 
     /**
@@ -118,7 +146,7 @@ class DriverProfileViewModel(
      * Easy to understand: Simple time-based check
      */
     private fun isCacheValid(): Boolean {
-        return cachedProfile != null && (System.currentTimeMillis() - cacheTimestamp) < CACHE_TTL_MS
+        return cachedProfile != null && (System.currentTimeMillis() - cacheTimestamp) < cacheTtlMs
     }
 
     /**
@@ -183,8 +211,7 @@ class DriverProfileViewModel(
                 }
 
             } catch (e: Exception) {
-                timber.log.Timber.e("Exception loading profile: ${e.message}")
-                e.printStackTrace()
+                timber.log.Timber.e(e, "Exception loading profile: ${e.message}")
                 _profileState.value = ProfileState.Error(
                     e.message ?: "Network error occurred"
                 )
@@ -222,8 +249,10 @@ class DriverProfileViewModel(
             try {
                 _photoUpdateState.value = PhotoUpdateState.Uploading
 
-                // Convert URI to MultipartBody.Part
-                val part = uriToMultipartPart(uri, "photo")
+                // Convert URI to MultipartBody.Part (on IO thread to avoid main thread I/O)
+                val part = withContext(Dispatchers.IO) {
+                    uriToMultipartPart(uri, "photo")
+                }
 
                 // Upload to backend
                 val response = RetrofitClient.profileApi.updateProfilePhoto(part)
@@ -237,7 +266,7 @@ class DriverProfileViewModel(
                     loadProfile(forceRefresh = true)
 
                     // Reset state after 2 seconds
-                    kotlinx.coroutines.delay(2000)
+                    delay(2000)
                     _photoUpdateState.value = PhotoUpdateState.Idle
 
                 } else {
@@ -250,7 +279,7 @@ class DriverProfileViewModel(
                     e.message ?: "Upload failed"
                 )
             } finally {
-                cleanupTempFiles()
+                withContext(Dispatchers.IO) { cleanupTempFiles() }
             }
         }
     }
@@ -269,10 +298,12 @@ class DriverProfileViewModel(
             try {
                 _photoUpdateState.value = PhotoUpdateState.Uploading
 
-                // Convert URI to MultipartBody.Part
-                val part = uriToMultipartPart(uri, 
-                    if (photoType == PhotoType.LICENSE_FRONT) "licenseFront" else "licenseBack"
-                )
+                // Convert URI to MultipartBody.Part (on IO thread to avoid main thread I/O)
+                val part = withContext(Dispatchers.IO) {
+                    uriToMultipartPart(uri, 
+                        if (photoType == PhotoType.LICENSE_FRONT) "licenseFront" else "licenseBack"
+                    )
+                }
 
                 // Upload to backend (send only the photo being updated)
                 val response = if (photoType == PhotoType.LICENSE_FRONT) {
@@ -290,7 +321,7 @@ class DriverProfileViewModel(
                     loadProfile(forceRefresh = true)
 
                     // Reset state after 2 seconds
-                    kotlinx.coroutines.delay(2000)
+                    delay(2000)
                     _photoUpdateState.value = PhotoUpdateState.Idle
 
                 } else {
@@ -303,7 +334,7 @@ class DriverProfileViewModel(
                     e.message ?: "Upload failed"
                 )
             } finally {
-                cleanupTempFiles()
+                withContext(Dispatchers.IO) { cleanupTempFiles() }
             }
         }
     }
@@ -327,54 +358,6 @@ class DriverProfileViewModel(
     }
 
     /**
-     * Update profile photo from WebSocket event
-     * 
-     * Called when real-time update received from server
-     * 
-     * @param photoUrl New photo URL from S3
-     */
-    fun onProfilePhotoUpdated(photoUrl: String) {
-        val currentState = _profileState.value
-        if (currentState is ProfileState.Success) {
-            val updatedProfile = currentState.profile.copy(
-                photos = currentState.profile.photos?.copy(
-                    profilePhoto = photoUrl
-                ) ?: DriverPhotos(
-                    profilePhoto = photoUrl,
-                    licenseFront = null,
-                    licenseBack = null
-                )
-            )
-            _profileState.value = ProfileState.Success(updatedProfile)
-        }
-    }
-
-    /**
-     * Update license photos from WebSocket event
-     * 
-     * Called when real-time update received from server
-     * 
-     * @param licenseFrontUrl New license front URL (optional)
-     * @param licenseBackUrl New license back URL (optional)
-     */
-    fun onLicensePhotosUpdated(licenseFrontUrl: String?, licenseBackUrl: String?) {
-        val currentState = _profileState.value
-        if (currentState is ProfileState.Success) {
-            val currentPhotos = currentState.profile.photos
-            val updatedPhotos = currentPhotos?.copy(
-                licenseFront = licenseFrontUrl ?: currentPhotos.licenseFront,
-                licenseBack = licenseBackUrl ?: currentPhotos.licenseBack
-            ) ?: DriverPhotos(
-                profilePhoto = null,
-                licenseFront = licenseFrontUrl,
-                licenseBack = licenseBackUrl
-            )
-            val updatedProfile = currentState.profile.copy(photos = updatedPhotos)
-            _profileState.value = ProfileState.Success(updatedProfile)
-        }
-    }
-
-    /**
      * Convert URI to MultipartBody.Part for API upload
      * 
      * Memory-efficient: Uses streaming
@@ -386,10 +369,10 @@ class DriverProfileViewModel(
      */
     private fun uriToMultipartPart(uri: Uri, fieldName: String): MultipartBody.Part {
         // Create temporary file
-        val file = File(context.cacheDir, "upload_${System.currentTimeMillis()}.jpg")
+        val file = File(appContext.cacheDir, "upload_${System.currentTimeMillis()}.jpg")
 
         // Copy URI content to file
-        context.contentResolver.openInputStream(uri)?.use { inputStream ->
+        appContext.contentResolver.openInputStream(uri)?.use { inputStream ->
             FileOutputStream(file).use { outputStream ->
                 inputStream.copyTo(outputStream)
             }
@@ -413,7 +396,7 @@ class DriverProfileViewModel(
      * Scalable: Prevents cache bloat
      */
     private fun cleanupTempFiles() {
-        context.cacheDir.listFiles()?.forEach { file ->
+        appContext.cacheDir.listFiles()?.forEach { file ->
             if (file.name.startsWith("upload_")) {
                 file.delete()
             }

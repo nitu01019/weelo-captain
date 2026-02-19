@@ -1,5 +1,6 @@
 package com.weelo.logistics.data.repository
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
 import com.weelo.logistics.data.api.*
@@ -123,6 +124,7 @@ class VehicleRepository private constructor(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
     
+    @SuppressLint("StaticFieldLeak")
     companion object {
         @Volatile
         private var instance: VehicleRepository? = null

@@ -16,13 +16,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
 import com.weelo.logistics.data.model.*
-import com.weelo.logistics.data.repository.MockDataRepository
+import com.weelo.logistics.data.remote.SocketIOService
+import com.weelo.logistics.data.repository.AssignmentRepository
+import com.weelo.logistics.data.repository.BroadcastResult
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.ClickDebouncer
 import com.weelo.logistics.utils.DataSanitizer
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -55,9 +59,9 @@ fun TripAcceptDeclineScreen(
     onNavigateToTracking: (String) -> Unit  // assignmentId
 ) {
     val scope = rememberCoroutineScope()
-    val repository = remember { MockDataRepository() }
+    val context = LocalContext.current
+    val repository = remember { AssignmentRepository.getInstance(context) }
     val clickDebouncer = remember { ClickDebouncer(500L) }
-    // TODO: Connect to real repository from backend
     
     var notification by remember { mutableStateOf<DriverTripNotification?>(null) }
     var assignmentDetails by remember { mutableStateOf<TripAssignment?>(null) }
@@ -66,14 +70,101 @@ fun TripAcceptDeclineScreen(
     var showDeclineDialog by remember { mutableStateOf(false) }
     var showAcceptDialog by remember { mutableStateOf(false) }
     var showSuccessDialog by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
     
-    // BACKEND: Fetch notification and assignment details
+    // =========================================================================
+    // ORDER CANCELLATION — Auto-dismiss if customer cancels while deciding
+    // =========================================================================
+    // If driver is on this screen and customer cancels, we auto-dismiss
+    // with a dialog explaining "Customer cancelled this order"
+    // =========================================================================
+    var showCancelledDialog by remember { mutableStateOf(false) }
+    var cancelReason by remember { mutableStateOf("") }
+    var cancelCustomerName by remember { mutableStateOf("") }
+    var cancelCustomerPhone by remember { mutableStateOf("") }
+    var cancelPickupAddress by remember { mutableStateOf("") }
+    var cancelDropAddress by remember { mutableStateOf("") }
+    
+    LaunchedEffect(Unit) {
+        SocketIOService.orderCancelled.collect { notification ->
+            val currentOrderId = assignmentDetails?.broadcastId ?: notificationId
+            if (notification.orderId == currentOrderId) {
+                cancelReason = notification.reason
+                cancelCustomerName = notification.customerName
+                cancelCustomerPhone = notification.customerPhone
+                cancelPickupAddress = notification.pickupAddress
+                cancelDropAddress = notification.dropAddress
+                showCancelledDialog = true
+                timber.log.Timber.w("🚫 Order cancelled while on accept/decline screen: ${notification.reason}")
+            }
+        }
+    }
+    
+    // Cancelled dialog with customer contact info + Call button
+    if (showCancelledDialog) {
+        AlertDialog(
+            onDismissRequest = { },  // Non-dismissable
+            title = { Text("🚫 Order Cancelled", fontWeight = FontWeight.Bold, color = androidx.compose.ui.graphics.Color(0xFFD32F2F)) },
+            text = { 
+                Column {
+                    Text("Customer has cancelled this order.", fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Reason: $cancelReason")
+                    if (cancelCustomerName.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Customer: $cancelCustomerName", fontWeight = FontWeight.Medium)
+                    }
+                    if (cancelCustomerPhone.isNotBlank()) {
+                        Text("📞 $cancelCustomerPhone", color = androidx.compose.ui.graphics.Color(0xFF1976D2))
+                    }
+                    if (cancelPickupAddress.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("📍 $cancelPickupAddress", fontSize = 13.sp, color = androidx.compose.ui.graphics.Color.Gray)
+                    }
+                    if (cancelDropAddress.isNotBlank()) {
+                        Text("📌 $cancelDropAddress", fontSize = 13.sp, color = androidx.compose.ui.graphics.Color.Gray)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { 
+                    showCancelledDialog = false
+                    onNavigateBack()
+                }) {
+                    Text("Go to Dashboard")
+                }
+            },
+            dismissButton = {
+                if (cancelCustomerPhone.isNotBlank()) {
+                    TextButton(onClick = {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
+                            data = android.net.Uri.parse("tel:$cancelCustomerPhone")
+                        }
+                        context.startActivity(intent)
+                    }) {
+                        Text("📞 Call Customer", color = androidx.compose.ui.graphics.Color(0xFF1976D2))
+                    }
+                }
+            }
+        )
+    }
+    
+    // Fetch assignment details from backend
     LaunchedEffect(notificationId) {
         scope.launch {
-            // Mock - Replace with: repository.getNotificationDetails(notificationId)
-            notification = repository.getMockNotificationById(notificationId)
-            assignmentDetails = repository.getMockAssignmentDetails(notificationId)
-            isLoading = false
+            when (val result = repository.getAssignmentById(notificationId)) {
+                is BroadcastResult.Success -> {
+                    notification = result.data.notification
+                    assignmentDetails = result.data.assignment
+                    isLoading = false
+                }
+                is BroadcastResult.Error -> {
+                    isLoading = false
+                    errorMessage = result.message
+                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                }
+                is BroadcastResult.Loading -> { /* Already showing loading */ }
+            }
         }
     }
     
@@ -440,11 +531,18 @@ fun TripAcceptDeclineScreen(
                     onClick = {
                         showAcceptDialog = false
                         isProcessing = true
-                        // BACKEND: Accept trip API call
                         scope.launch {
-                            delay(300) // TODO: Replace with actual API call
-                            isProcessing = false
-                            showSuccessDialog = true
+                            when (val result = repository.acceptAssignment(notificationId)) {
+                                is BroadcastResult.Success -> {
+                                    isProcessing = false
+                                    showSuccessDialog = true
+                                }
+                                is BroadcastResult.Error -> {
+                                    isProcessing = false
+                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                }
+                                is BroadcastResult.Loading -> { /* Still processing */ }
+                            }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Success)
@@ -488,11 +586,21 @@ fun TripAcceptDeclineScreen(
                     onClick = {
                         showDeclineDialog = false
                         isProcessing = true
-                        // BACKEND: Decline trip API call
                         scope.launch {
-                            delay(200) // TODO: Replace with actual API call
-                            isProcessing = false
-                            onNavigateBack()
+                            // Provide default reason if empty
+                            val reason = declineReason.ifBlank { "Not available" }
+                            when (val result = repository.declineAssignment(notificationId, reason)) {
+                                is BroadcastResult.Success -> {
+                                    isProcessing = false
+                                    Toast.makeText(context, "Trip declined", Toast.LENGTH_SHORT).show()
+                                    onNavigateBack()
+                                }
+                                is BroadcastResult.Error -> {
+                                    isProcessing = false
+                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                }
+                                is BroadcastResult.Loading -> { /* Still processing */ }
+                            }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Error)

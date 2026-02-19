@@ -40,12 +40,15 @@ import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.data.remote.SocketConnectionState
+import com.weelo.logistics.data.remote.BroadcastDismissedNotification
 import com.weelo.logistics.data.repository.BroadcastRepository
 import com.weelo.logistics.data.repository.BroadcastResult
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.Constants
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.draw.alpha
 
 // =============================================================================
 // RAPIDO STYLE COLORS
@@ -97,29 +100,43 @@ fun BroadcastListScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var selectedFilter by remember { mutableStateOf("All") }
     
+    // ========== GRACEFUL DISMISS STATE ==========
+    // Tracks which cards are being dismissed (blur + message overlay)
+    // Key = broadcastId, Value = DismissInfo(reason, message)
+    var dismissedCards by remember { mutableStateOf<Map<String, BroadcastDismissedNotification>>(emptyMap()) }
+    val listState = rememberLazyListState()
+    
     val socketState by SocketIOService.connectionState.collectAsState()
     var isSocketConnected by remember { mutableStateOf(false) }
     
-    // Fetch broadcasts
+    // OPTIMIZATION: Fetch broadcasts on IO dispatcher to avoid blocking Main thread
     fun fetchBroadcasts(forceRefresh: Boolean = false) {
-        scope.launch {
-            if (forceRefresh) isRefreshing = true else isLoading = true
-            errorMessage = null
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                if (forceRefresh) isRefreshing = true else isLoading = true
+                errorMessage = null
+            }
             
             when (val result = repository.fetchActiveBroadcasts(forceRefresh = forceRefresh)) {
                 is BroadcastResult.Success -> {
-                    broadcasts = result.data.broadcasts
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        broadcasts = result.data.broadcasts
+                    }
                     timber.log.Timber.d("Loaded ${broadcasts.size} broadcasts")
                 }
                 is BroadcastResult.Error -> {
-                    errorMessage = result.message
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        errorMessage = result.message
+                    }
                     timber.log.Timber.e("Error: ${result.message}")
                 }
                 is BroadcastResult.Loading -> { }
             }
             
-            isLoading = false
-            isRefreshing = false
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                isLoading = false
+                isRefreshing = false
+            }
         }
     }
     
@@ -168,19 +185,53 @@ fun BroadcastListScreen(
         }
     }
     
-    // Auto-refresh every 10 seconds
+    // Auto-refresh every 30 seconds (optimized from 10s to reduce server load)
     LaunchedEffect(Unit) {
         while (true) {
-            delay(10_000L)
+            delay(30_000L)
             fetchBroadcasts(forceRefresh = true)
         }
     }
     
-    // Filter broadcasts
-    val filteredBroadcasts = broadcasts.filter { broadcast ->
-        when (selectedFilter) {
-            "Urgent" -> broadcast.isUrgent
-            else -> true
+    // ========== GRACEFUL DISMISS: Listen for broadcast dismissals ==========
+    LaunchedEffect(Unit) {
+        SocketIOService.broadcastDismissed.collect { dismissNotification ->
+            val broadcastId = dismissNotification.broadcastId
+            if (broadcastId.isNotEmpty()) {
+                // 1. Add to dismissed map (triggers blur overlay on the card)
+                dismissedCards = dismissedCards + (broadcastId to dismissNotification)
+                
+                // 2. Find the index of the dismissed card in the raw broadcasts list
+                val currentIndex = broadcasts.indexOfFirst { it.broadcastId == broadcastId }
+                
+                // 3. After 2s delay, auto-scroll to next card and remove deceased card
+                scope.launch {
+                    delay(2000L) // Let user read the message
+                    
+                    // Scroll to next available card (if exists)
+                    if (currentIndex >= 0 && broadcasts.size > 1) {
+                        val nextIndex = if (currentIndex < broadcasts.size - 1) currentIndex + 1 else currentIndex - 1
+                        listState.animateScrollToItem(nextIndex.coerceAtLeast(0))
+                    }
+                    
+                    // Remove from dismissed map + refresh list to remove the card
+                    delay(500L) // Brief pause after scroll
+                    dismissedCards = dismissedCards - broadcastId
+                    fetchBroadcasts(forceRefresh = true)
+                }
+            }
+        }
+    }
+    
+    // OPTIMIZATION: Use derivedStateOf to prevent refiltering on every recomposition
+    val filteredBroadcasts by remember {
+        derivedStateOf {
+            broadcasts.filter { broadcast ->
+                when (selectedFilter) {
+                    "Urgent" -> broadcast.isUrgent
+                    else -> true
+                }
+            }
         }
     }
     
@@ -261,7 +312,10 @@ fun BroadcastListScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             val filters = listOf("All", "Urgent")
-            items(filters) { filter ->
+            items(
+                items = filters,
+                key = { it }
+            ) { filter ->
                 FilterChip(
                     selected = selectedFilter == filter,
                     onClick = { selectedFilter = filter },
@@ -326,26 +380,92 @@ fun BroadcastListScreen(
             
             else -> {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     items(
                         items = filteredBroadcasts,
-                        key = { it.broadcastId }
+                        key = { it.broadcastId },
+                        contentType = { "broadcast_order_card" }
                     ) { broadcast ->
-                        BroadcastOrderCard(
-                            broadcast = broadcast,
-                            onAcceptTruck = { vehicleType, vehicleSubtype, quantity ->
-                                // Navigate to confirmation/driver assignment
-                                onNavigateToBroadcastDetails(
-                                    "${broadcast.broadcastId}|$vehicleType|$vehicleSubtype|$quantity"
-                                )
-                            },
-                            onRejectTruck = { vehicleType, _ ->
-                                Toast.makeText(context, "Rejected $vehicleType", Toast.LENGTH_SHORT).show()
+                        val dismissInfo = dismissedCards[broadcast.broadcastId]
+                        val isDismissed = dismissInfo != null
+                        
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            // The actual card (blurred when dismissed)
+                            BroadcastOrderCard(
+                                broadcast = broadcast,
+                                modifier = Modifier.alpha(if (isDismissed) 0.25f else 1f),
+                                onAcceptTruck = { vehicleType, vehicleSubtype, quantity ->
+                                    if (!isDismissed) {
+                                        onNavigateToBroadcastDetails(
+                                            "${broadcast.broadcastId}|$vehicleType|$vehicleSubtype|$quantity"
+                                        )
+                                    }
+                                },
+                                onRejectTruck = { vehicleType, _ ->
+                                    if (!isDismissed) {
+                                        Toast.makeText(context, "Rejected $vehicleType", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
+                            
+                            // Dismiss overlay (shown on top of blurred card)
+                            if (isDismissed) {
+                                Box(
+                                    modifier = Modifier
+                                        .matchParentSize()
+                                        .background(
+                                            Color.Black.copy(alpha = 0.55f),
+                                            RoundedCornerShape(16.dp)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.padding(24.dp)
+                                    ) {
+                                        // Icon based on reason
+                                        Text(
+                                            text = when (dismissInfo!!.reason) {
+                                                "customer_cancelled" -> "🚫"
+                                                "fully_filled" -> "✅"
+                                                else -> "⏰"
+                                            },
+                                            fontSize = 48.sp
+                                        )
+                                        Spacer(Modifier.height(12.dp))
+                                        // Reason title
+                                        Text(
+                                            text = when (dismissInfo.reason) {
+                                                "customer_cancelled" -> "ORDER CANCELLED"
+                                                "fully_filled" -> "FULLY ASSIGNED"
+                                                else -> "ORDER EXPIRED"
+                                            },
+                                            fontSize = 18.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = when (dismissInfo.reason) {
+                                                "customer_cancelled" -> Color(0xFFFF5252)
+                                                "fully_filled" -> Color(0xFF4CAF50)
+                                                else -> RapidoYellow
+                                            },
+                                            letterSpacing = 2.sp
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                        // Message
+                                        Text(
+                                            text = dismissInfo.message,
+                                            fontSize = 14.sp,
+                                            color = Color.White.copy(alpha = 0.9f),
+                                            textAlign = TextAlign.Center,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
                             }
-                        )
+                        }
                     }
                 }
             }
@@ -363,13 +483,14 @@ fun BroadcastListScreen(
 @Suppress("UNUSED_VARIABLE")
 fun BroadcastOrderCard(
     broadcast: BroadcastTrip,
+    modifier: Modifier = Modifier,
     onAcceptTruck: (vehicleType: String, vehicleSubtype: String, quantity: Int) -> Unit,
     onRejectTruck: (vehicleType: String, vehicleSubtype: String) -> Unit
 ) {
     val context = LocalContext.current
     
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = RapidoWhite),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)

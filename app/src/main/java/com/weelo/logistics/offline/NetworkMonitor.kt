@@ -1,5 +1,6 @@
 package com.weelo.logistics.offline
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
@@ -49,6 +50,7 @@ class NetworkMonitor private constructor(
     private val _isOnline = MutableStateFlow(checkIsOnline())
     val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
     
+    @SuppressLint("StaticFieldLeak")
     companion object {
         private const val TAG = "NetworkMonitor"
         

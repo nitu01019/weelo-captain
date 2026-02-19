@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.api.VehicleData
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.PrimaryTopBar
+import com.weelo.logistics.ui.components.SkeletonVehicleDetailsLoading
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -148,12 +149,9 @@ fun VehicleDetailsScreen(
         
         when {
             isLoading -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = Primary)
-                }
+                SkeletonVehicleDetailsLoading(
+                    modifier = Modifier.fillMaxSize()
+                )
             }
             
             errorMessage != null -> {

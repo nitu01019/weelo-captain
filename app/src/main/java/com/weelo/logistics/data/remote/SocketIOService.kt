@@ -77,6 +77,117 @@ object SocketIOService {
     private val _driversUpdated = MutableSharedFlow<DriversUpdatedNotification>(replay = 1, extraBufferCapacity = 20)
     val driversUpdated: SharedFlow<DriversUpdatedNotification> = _driversUpdated.asSharedFlow()
     
+    // ==========================================================================
+    // TRIP ASSIGNMENT EVENTS - Driver receives new trip from transporter
+    // ==========================================================================
+    // Backend emits 'trip_assigned' when transporter confirms hold with assignments.
+    // This flow delivers the notification to the UI for showing Accept/Decline screen.
+    // Replay = 1 ensures late collectors (e.g., screen rotation) still get the event.
+    // ==========================================================================
+    private val _tripAssigned = MutableSharedFlow<TripAssignedNotification>(replay = 1, extraBufferCapacity = 10)
+    val tripAssigned: SharedFlow<TripAssignedNotification> = _tripAssigned.asSharedFlow()
+    
+    private val _driverTimeout = MutableSharedFlow<DriverTimeoutNotification>(replay = 1, extraBufferCapacity = 10)
+    val driverTimeout: SharedFlow<DriverTimeoutNotification> = _driverTimeout.asSharedFlow()
+    
+    // ==========================================================================
+    // ORDER CANCELLATION EVENTS - Customer cancels order
+    // ==========================================================================
+    // Separate flow from bookingUpdated so driver/transporter screens can
+    // specifically react to cancellations (e.g., auto-dismiss trip screen,
+    // show reason in snackbar, navigate back to dashboard).
+    // ==========================================================================
+    private val _orderCancelled = MutableSharedFlow<OrderCancelledNotification>(replay = 1, extraBufferCapacity = 10)
+    val orderCancelled: SharedFlow<OrderCancelledNotification> = _orderCancelled.asSharedFlow()
+    
+    // ==========================================================================
+    // BROADCAST DISMISSED — Graceful fade+scroll before removal
+    // ==========================================================================
+    // Emitted when a broadcast should be dismissed with a message (not instant remove).
+    // UI observes this to show blur overlay + reason message on the card,
+    // then auto-scrolls to next card and removes after a delay.
+    // ==========================================================================
+    private val _broadcastDismissed = MutableSharedFlow<BroadcastDismissedNotification>(replay = 1, extraBufferCapacity = 20)
+    val broadcastDismissed: SharedFlow<BroadcastDismissedNotification> = _broadcastDismissed.asSharedFlow()
+    
+    // ==========================================================================
+    // DRIVER STATUS CHANGED — Transporter receives real-time online/offline
+    // ==========================================================================
+    private val _driverStatusChanged = MutableSharedFlow<DriverStatusChangedNotification>(replay = 1, extraBufferCapacity = 20)
+    val driverStatusChanged: SharedFlow<DriverStatusChangedNotification> = _driverStatusChanged.asSharedFlow()
+    
+    // ==========================================================================
+    // HEARTBEAT — Driver sends every 12s to keep presence alive
+    // ==========================================================================
+    private var heartbeatJob: kotlinx.coroutines.Job? = null
+    @Volatile
+    private var _isOnlineLocally = false  // Tracks driver's local online intent (accessed from Socket.IO + Main threads)
+
+    /**
+     * Returns the current local online state (heartbeat running or not).
+     * Used by DriverDashboardViewModel as fallback when availability API fails.
+     */
+    fun isOnlineLocally(): Boolean = _isOnlineLocally
+    
+    /**
+     * Set the local online flag and start/stop heartbeat accordingly.
+     * Called by DriverDashboardViewModel after API call succeeds.
+     *
+     * @param online true = start heartbeat, false = stop heartbeat
+     */
+    fun setOnlineLocally(online: Boolean) {
+        _isOnlineLocally = online
+        if (online) {
+            startHeartbeat()
+        } else {
+            stopHeartbeat()
+        }
+    }
+    
+    /**
+     * Start heartbeat — sends {type: "heartbeat"} every 12 seconds
+     * Backend extends Redis presence TTL to 35s on each heartbeat.
+     * If heartbeat stops → TTL expires → driver auto-offline.
+     *
+     * TTL DESIGN:
+     *   Heartbeat interval = 12 seconds
+     *   Redis TTL = 35 seconds
+     *   → 3 retry windows before auto-offline
+     *   → Handles 4G instability / network jitter
+     */
+    fun startHeartbeat() {
+        // Cancel existing heartbeat if any
+        heartbeatJob?.cancel()
+        
+        heartbeatJob = CoroutineScope(Dispatchers.IO).launch {
+            timber.log.Timber.i("💓 Heartbeat started (every 12s)")
+            while (isActive) {
+                try {
+                    val heartbeatData = org.json.JSONObject().apply {
+                        put("type", "heartbeat")
+                        // TODO: Add real GPS coordinates here when location service is available
+                        // put("lat", currentLat)
+                        // put("lng", currentLng)
+                    }
+                    socket?.emit(Events.HEARTBEAT, heartbeatData)
+                } catch (e: Exception) {
+                    timber.log.Timber.w("💓 Heartbeat emit failed: ${e.message}")
+                }
+                kotlinx.coroutines.delay(12_000) // 12 seconds
+            }
+        }
+    }
+    
+    /**
+     * Stop heartbeat — called when driver goes offline or disconnects.
+     * Redis TTL will handle auto-offline after 35s.
+     */
+    fun stopHeartbeat() {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+        timber.log.Timber.i("💓 Heartbeat stopped")
+    }
+    
     // Stored credentials for reconnection
     private var serverUrl: String? = null
     private var authToken: String? = null
@@ -114,9 +225,22 @@ object SocketIOService {
         const val DRIVER_STATUS_CHANGED = "driver_status_changed"
         const val DRIVERS_UPDATED = "drivers_updated"
         
+        // =============================================================
+        // TRIP ASSIGNMENT EVENTS - Driver receives trip from transporter
+        // =============================================================
+        // Backend emits from truck-hold.service.ts → confirmHoldWithAssignments()
+        // This is how drivers learn about new trips assigned to them
+        const val TRIP_ASSIGNED = "trip_assigned"
+        const val DRIVER_TIMEOUT = "driver_timeout"       // Driver didn't respond in time
+        
         // Order lifecycle events
         const val ORDER_CANCELLED = "order_cancelled"  // When customer cancels order
         const val ORDER_EXPIRED = "order_expired"      // When order times out
+        
+        // Driver presence events
+        const val HEARTBEAT = "heartbeat"              // Driver → Server every 12s
+        const val DRIVER_ONLINE = "driver_online"      // Server → Transporter
+        const val DRIVER_OFFLINE = "driver_offline"    // Server → Transporter
         
         // Client -> Server
         const val JOIN_BOOKING = "join_booking"
@@ -183,19 +307,35 @@ object SocketIOService {
     
     /**
      * Setup all event listeners
+     * OPTIMIZATION: Remove old listeners before adding new ones to prevent memory leaks
      */
     private fun setupEventListeners() {
         socket?.apply {
+            // CRITICAL: Remove all existing listeners to prevent duplicates and memory leaks
+            off()
+            
             // Connection events
             on(Socket.EVENT_CONNECT) {
                 timber.log.Timber.i("✅ Socket.IO connected")
                 _connectionState.value = SocketConnectionState.Connected
+                
+                // AUTO-RECONNECT HEARTBEAT:
+                // If driver was ONLINE before disconnect, auto-restart heartbeat.
+                // Backend will restore Redis presence via restorePresence().
+                // Driver does NOT need to press button again.
+                if (_isOnlineLocally) {
+                    timber.log.Timber.i("💓 Auto-restarting heartbeat on reconnect (driver was online)")
+                    startHeartbeat()
+                }
             }
             
             on(Socket.EVENT_DISCONNECT) { args ->
                 val reason = args.firstOrNull()?.toString() ?: "unknown"
                 timber.log.Timber.w("🔌 Socket.IO disconnected: $reason")
                 _connectionState.value = SocketConnectionState.Disconnected
+                
+                // Stop heartbeat on disconnect — TTL (35s) handles auto-offline
+                stopHeartbeat()
             }
             
             on(Socket.EVENT_CONNECT_ERROR) { args ->
@@ -331,14 +471,34 @@ object SocketIOService {
                 handleDriversUpdated(args, "deleted")
             }
             
-            // Driver status changed
+            // Driver status changed (general)
             on(Events.DRIVER_STATUS_CHANGED) { args ->
                 handleDriversUpdated(args, "status_changed")
+                // Also handle as driver online/offline status change
+                handleDriverStatusChanged(args)
             }
             
             // General drivers update (catch-all for any driver changes)
             on(Events.DRIVERS_UPDATED) { args ->
                 handleDriversUpdated(args, "drivers_updated")
+            }
+            
+            // =================================================================
+            // TRIP ASSIGNMENT EVENTS - Critical for driver flow
+            // =================================================================
+            // Backend (truck-hold.service.ts) emits 'trip_assigned' to driver
+            // when transporter confirms hold with vehicle + driver assignment.
+            // This is THE entry point for the entire driver trip flow.
+            // =================================================================
+            
+            // Trip assigned to driver - show Accept/Decline screen
+            on(Events.TRIP_ASSIGNED) { args ->
+                handleTripAssigned(args)
+            }
+            
+            // Driver didn't respond in time - notify transporter
+            on(Events.DRIVER_TIMEOUT) { args ->
+                handleDriverTimeout(args)
             }
         }
     }
@@ -447,6 +607,39 @@ object SocketIOService {
     }
     
     /**
+     * Handle driver online/offline status change (for transporter UI)
+     *
+     * Payload from backend:
+     * { driverId, driverName, isOnline, action: "online"|"offline", timestamp }
+     */
+    private fun handleDriverStatusChanged(args: Array<Any>) {
+        try {
+            val data = args.firstOrNull() as? JSONObject ?: return
+            
+            val driverId = data.optString("driverId", "")
+            val driverName = data.optString("driverName", "")
+            val isOnline = data.optBoolean("isOnline", false)
+            val action = data.optString("action", "")
+            
+            timber.log.Timber.i("👤 Driver status changed: $driverName → ${if (isOnline) "ONLINE" else "OFFLINE"}")
+            
+            val notification = DriverStatusChangedNotification(
+                driverId = driverId,
+                driverName = driverName,
+                isOnline = isOnline,
+                action = action,
+                timestamp = data.optString("timestamp", "")
+            )
+            
+            CoroutineScope(Dispatchers.IO).launch {
+                _driverStatusChanged.emit(notification)
+            }
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "Error parsing driver_status_changed: ${e.message}")
+        }
+    }
+    
+    /**
      * Handle drivers updated events (update, delete, status change)
      */
     private fun handleDriversUpdated(args: Array<Any>, action: String) {
@@ -469,6 +662,134 @@ object SocketIOService {
             }
         } catch (e: Exception) {
             timber.log.Timber.e(e, "Error parsing drivers update: ${e.message}")
+        }
+    }
+    
+    // ==========================================================================
+    // TRIP ASSIGNMENT HANDLERS
+    // ==========================================================================
+    
+    /**
+     * Handle trip_assigned event from backend
+     * 
+     * CRITICAL: This is the entry point for the entire driver trip flow!
+     * Backend emits this from truck-hold.service.ts → confirmHoldWithAssignments()
+     * when a transporter assigns a specific vehicle + driver to a trip.
+     * 
+     * Payload matches backend driverNotification object:
+     * {
+     *   type: "trip_assigned",
+     *   assignmentId, tripId, orderId, truckRequestId,
+     *   pickup: { address, city, lat, lng },
+     *   drop: { address, city, lat, lng },
+     *   routePoints: [...],
+     *   vehicleNumber, farePerTruck, distanceKm,
+     *   customerName, customerPhone,
+     *   assignedAt, message
+     * }
+     * 
+     * SCALABILITY: Uses SharedFlow with replay=1 so late collectors still get
+     * the event (e.g., after screen rotation or activity recreation).
+     */
+    private fun handleTripAssigned(args: Array<Any>) {
+        try {
+            val data = args.firstOrNull() as? JSONObject ?: return
+            
+            timber.log.Timber.i("╔══════════════════════════════════════════════════════════════╗")
+            timber.log.Timber.i("║  🚛 NEW TRIP ASSIGNED TO DRIVER                              ║")
+            timber.log.Timber.i("╠══════════════════════════════════════════════════════════════╣")
+            timber.log.Timber.i("║  Assignment ID: ${data.optString("assignmentId", "")}")
+            timber.log.Timber.i("║  Trip ID: ${data.optString("tripId", "")}")
+            timber.log.Timber.i("║  Vehicle: ${data.optString("vehicleNumber", "")}")
+            timber.log.Timber.i("║  Message: ${data.optString("message", "")}")
+            timber.log.Timber.i("╚══════════════════════════════════════════════════════════════╝")
+            
+            // Parse pickup location
+            val pickupObj = data.optJSONObject("pickup")
+            val pickup = TripLocationInfo(
+                address = pickupObj?.optString("address", "") ?: "",
+                city = pickupObj?.optString("city", "") ?: "",
+                latitude = pickupObj?.optDouble("lat", 0.0) ?: 0.0,
+                longitude = pickupObj?.optDouble("lng", 0.0) ?: 0.0
+            )
+            
+            // Parse drop location
+            val dropObj = data.optJSONObject("drop")
+            val drop = TripLocationInfo(
+                address = dropObj?.optString("address", "") ?: "",
+                city = dropObj?.optString("city", "") ?: "",
+                latitude = dropObj?.optDouble("lat", 0.0) ?: 0.0,
+                longitude = dropObj?.optDouble("lng", 0.0) ?: 0.0
+            )
+            
+            val notification = TripAssignedNotification(
+                assignmentId = data.optString("assignmentId", ""),
+                tripId = data.optString("tripId", ""),
+                orderId = data.optString("orderId", ""),
+                truckRequestId = data.optString("truckRequestId", ""),
+                pickup = pickup,
+                drop = drop,
+                vehicleNumber = data.optString("vehicleNumber", ""),
+                farePerTruck = data.optDouble("farePerTruck", 0.0),
+                distanceKm = data.optDouble("distanceKm", 0.0),
+                customerName = data.optString("customerName", ""),
+                customerPhone = data.optString("customerPhone", ""),
+                assignedAt = data.optString("assignedAt", ""),
+                message = data.optString("message", "New trip assigned!")
+            )
+            
+            // Emit to flow — UI collects this and navigates to TripAcceptDeclineScreen
+            CoroutineScope(Dispatchers.IO).launch {
+                _tripAssigned.emit(notification)
+            }
+            
+            timber.log.Timber.i("✅ Trip assignment emitted to flow: ${notification.assignmentId}")
+            
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "Error parsing trip_assigned: ${e.message}")
+        }
+    }
+    
+    /**
+     * Handle driver_timeout event from backend
+     * 
+     * Called when a driver doesn't respond to a trip assignment within the
+     * timeout period (e.g., 60 seconds). Backend cancels the assignment
+     * and notifies the transporter to reassign.
+     * 
+     * For TRANSPORTER view: Shows "Driver X didn't respond — [Reassign]" banner
+     * For DRIVER view: Shows "Trip expired — you didn't respond in time"
+     * 
+     * Payload: { assignmentId, tripId, driverId, driverName, reason, message }
+     */
+    private fun handleDriverTimeout(args: Array<Any>) {
+        try {
+            val data = args.firstOrNull() as? JSONObject ?: return
+            
+            timber.log.Timber.w("╔══════════════════════════════════════════════════════════════╗")
+            timber.log.Timber.w("║  ⏰ DRIVER TIMEOUT - Assignment expired                      ║")
+            timber.log.Timber.w("╠══════════════════════════════════════════════════════════════╣")
+            timber.log.Timber.w("║  Assignment ID: ${data.optString("assignmentId", "")}")
+            timber.log.Timber.w("║  Driver: ${data.optString("driverName", "")}")
+            timber.log.Timber.w("║  Reason: ${data.optString("reason", "timeout")}")
+            timber.log.Timber.w("╚══════════════════════════════════════════════════════════════╝")
+            
+            val notification = DriverTimeoutNotification(
+                assignmentId = data.optString("assignmentId", ""),
+                tripId = data.optString("tripId", ""),
+                driverId = data.optString("driverId", ""),
+                driverName = data.optString("driverName", ""),
+                vehicleNumber = data.optString("vehicleNumber", ""),
+                reason = data.optString("reason", "timeout"),
+                message = data.optString("message", "Driver didn't respond in time")
+            )
+            
+            CoroutineScope(Dispatchers.IO).launch {
+                _driverTimeout.emit(notification)
+            }
+            
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "Error parsing driver_timeout: ${e.message}")
         }
     }
     
@@ -546,10 +867,25 @@ object SocketIOService {
                     ?: data.optString("pickupAddress", ""),
                 pickupCity = data.optJSONObject("pickupLocation")?.optString("city", "")
                     ?: data.optString("pickupCity", ""),
+                // CRITICAL FIX: Parse lat/lng from pickupLocation/pickup objects
+                // Backend sends coordinates in both formats for compatibility
+                pickupLatitude = data.optJSONObject("pickupLocation")?.optDouble("latitude", 0.0)
+                    ?: data.optJSONObject("pickup")?.optDouble("latitude", 0.0)
+                    ?: 0.0,
+                pickupLongitude = data.optJSONObject("pickupLocation")?.optDouble("longitude", 0.0)
+                    ?: data.optJSONObject("pickup")?.optDouble("longitude", 0.0)
+                    ?: 0.0,
                 dropAddress = data.optJSONObject("dropLocation")?.optString("address", "")
                     ?: data.optString("dropAddress", ""),
                 dropCity = data.optJSONObject("dropLocation")?.optString("city", "")
                     ?: data.optString("dropCity", ""),
+                // CRITICAL FIX: Parse lat/lng from dropLocation/drop objects
+                dropLatitude = data.optJSONObject("dropLocation")?.optDouble("latitude", 0.0)
+                    ?: data.optJSONObject("drop")?.optDouble("latitude", 0.0)
+                    ?: 0.0,
+                dropLongitude = data.optJSONObject("dropLocation")?.optDouble("longitude", 0.0)
+                    ?: data.optJSONObject("drop")?.optDouble("longitude", 0.0)
+                    ?: 0.0,
                 distanceKm = data.optInt("distance", data.optInt("distanceKm", 0)),
                 goodsType = data.optString("goodsType", "General"),
                 isUrgent = data.optBoolean("isUrgent", false),
@@ -733,12 +1069,11 @@ object SocketIOService {
     /**
      * Handle booking/broadcast expired
      * 
-     * CRITICAL: This is called when a broadcast times out on the backend.
-     * We MUST immediately remove it from the overlay so transporters don't
-     * see stale requests.
+     * ENHANCED: Instead of instantly removing, emits a "dismissed" notification
+     * so the UI can show a blur+message overlay for 2 seconds before removal.
      * 
      * Event: "broadcast_expired" or "booking_expired"
-     * Payload: { broadcastId, orderId, reason, message }
+     * Payload: { broadcastId, orderId, reason, message, customerName }
      */
     private fun handleBookingExpired(args: Array<Any>) {
         try {
@@ -749,27 +1084,44 @@ object SocketIOService {
                 data.optString("orderId", 
                     data.optString("bookingId", "")))
             val reason = data.optString("reason", "timeout")
+            val message = data.optString("message", when (reason) {
+                "customer_cancelled" -> "Sorry, this order was cancelled by the customer"
+                "fully_filled" -> "All trucks have been assigned for this booking"
+                else -> "This booking request has expired"
+            })
+            val customerName = data.optString("customerName", "")
             
             timber.log.Timber.w("╔══════════════════════════════════════════════════════════════╗")
-            timber.log.Timber.w("║  ⏰ BROADCAST EXPIRED - REMOVING FROM UI                      ║")
+            timber.log.Timber.w("║  ⏰ BROADCAST DISMISSED — GRACEFUL FADE                      ║")
             timber.log.Timber.w("╠══════════════════════════════════════════════════════════════╣")
             timber.log.Timber.w("║  Broadcast ID: $broadcastId")
             timber.log.Timber.w("║  Reason: $reason")
-            timber.log.Timber.w("║  Message: ${data.optString("message", "N/A")}")
+            timber.log.Timber.w("║  Message: $message")
             timber.log.Timber.w("╚══════════════════════════════════════════════════════════════╝")
             
             if (broadcastId.isNotEmpty()) {
-                // CRITICAL: Immediately remove from overlay (Main thread for UI)
+                // Emit dismiss notification for graceful fade (instead of instant remove)
+                CoroutineScope(Dispatchers.IO).launch {
+                    _broadcastDismissed.emit(BroadcastDismissedNotification(
+                        broadcastId = broadcastId,
+                        reason = reason,
+                        message = message,
+                        customerName = customerName
+                    ))
+                }
+                
+                // ALSO schedule delayed removal from overlay (2s for user to read message)
                 CoroutineScope(Dispatchers.Main).launch {
+                    kotlinx.coroutines.delay(2000) // 2 second graceful delay
                     com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(broadcastId)
-                    timber.log.Timber.i("   ✓ Removed broadcast $broadcastId from overlay")
+                    timber.log.Timber.i("   ✓ Removed broadcast $broadcastId from overlay after graceful delay")
                 }
             }
             
-            // Also emit to update any list views
+            // Also emit to update any list views (backward compat)
             val notification = BookingUpdatedNotification(
                 bookingId = broadcastId,
-                status = "expired",
+                status = if (reason == "customer_cancelled") "cancelled" else "expired",
                 trucksFilled = data.optInt("trucksFilled", -1),
                 trucksNeeded = data.optInt("trucksNeeded", -1)
             )
@@ -808,24 +1160,64 @@ object SocketIOService {
     /**
      * Handle order cancelled by customer
      * 
-     * CRITICAL: This IMMEDIATELY removes the order from overlay/broadcast list
-     * Called when customer cancels their search/order
+     * ENHANCED: Instead of instant removal, emits dismiss notification for
+     * graceful blur+message UX. Delayed removal happens after 2s.
      * 
-     * Uses BroadcastOverlayManager.removeBroadcast() for instant UI update
+     * Uses broadcastDismissed flow for UI blur + BroadcastOverlayManager scheduled removal
      */
     private fun handleOrderCancelled(args: Array<Any>) {
         try {
             val data = args.firstOrNull() as? JSONObject ?: return
-            val orderId = data.optString("orderId", "")
+            val orderId = data.optString("orderId", data.optString("broadcastId", ""))
             val reason = data.optString("reason", "Cancelled by customer")
+            val cancelledAt = data.optString("cancelledAt", "")
+            val message = data.optString("message", "Sorry, this order was cancelled by the customer")
+            val assignmentsCancelled = data.optInt("assignmentsCancelled", 0)
             
-            timber.log.Timber.w("🚫 ORDER CANCELLED: $orderId - $reason")
+            timber.log.Timber.w("╔══════════════════════════════════════════════════════════════╗")
+            timber.log.Timber.w("║  🚫 ORDER CANCELLED BY CUSTOMER — GRACEFUL DISMISS           ║")
+            timber.log.Timber.w("╠══════════════════════════════════════════════════════════════╣")
+            timber.log.Timber.w("║  Order ID: $orderId")
+            timber.log.Timber.w("║  Reason: $reason")
+            timber.log.Timber.w("║  Assignments Released: $assignmentsCancelled")
+            timber.log.Timber.w("╚══════════════════════════════════════════════════════════════╝")
             
-            // IMMEDIATELY remove from broadcast overlay (highest priority!)
-            com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(orderId)
+            // 1. Emit dismiss notification for graceful fade (instead of instant remove)
+            CoroutineScope(Dispatchers.IO).launch {
+                _broadcastDismissed.emit(BroadcastDismissedNotification(
+                    broadcastId = orderId,
+                    reason = "customer_cancelled",
+                    message = message,
+                    customerName = data.optString("customerName", "")
+                ))
+            }
             
-            // Also emit to update any list views
-            val notification = BookingUpdatedNotification(
+            // 2. Schedule delayed removal from overlay (2s for graceful fade)
+            CoroutineScope(Dispatchers.Main).launch {
+                kotlinx.coroutines.delay(2000)
+                com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(orderId)
+                timber.log.Timber.i("   ✓ Removed broadcast $orderId from overlay after graceful delay")
+            }
+            
+            // 3. Emit to dedicated orderCancelled flow (for driver/transporter screens)
+            val cancelNotification = OrderCancelledNotification(
+                orderId = orderId,
+                reason = reason,
+                message = message,
+                cancelledAt = cancelledAt,
+                assignmentsCancelled = assignmentsCancelled,
+                customerName = data.optString("customerName", ""),
+                customerPhone = data.optString("customerPhone", ""),
+                pickupAddress = data.optString("pickupAddress", ""),
+                dropAddress = data.optString("dropAddress", "")
+            )
+            
+            CoroutineScope(Dispatchers.IO).launch {
+                _orderCancelled.emit(cancelNotification)
+            }
+            
+            // 4. Also emit to bookingUpdated for backward compatibility (list views)
+            val bookingNotification = BookingUpdatedNotification(
                 bookingId = orderId,
                 status = "cancelled",
                 trucksFilled = -1,
@@ -833,10 +1225,10 @@ object SocketIOService {
             )
             
             CoroutineScope(Dispatchers.IO).launch {
-                _bookingUpdated.emit(notification)
+                _bookingUpdated.emit(bookingNotification)
             }
             
-            timber.log.Timber.i("   ✓ Removed from overlay and emitted update")
+            timber.log.Timber.i("   ✓ Emitted to broadcastDismissed + orderCancelled + bookingUpdated flows")
         } catch (e: Exception) {
             timber.log.Timber.e(e, "Error handling order cancelled: ${e.message}")
         }
@@ -845,20 +1237,33 @@ object SocketIOService {
     /**
      * Handle order expired (timeout)
      * 
-     * Called when order times out without being filled
-     * Also removes from overlay and updates UI
+     * ENHANCED: Graceful dismiss instead of instant removal
+     * Shows "Order expired" blur overlay for 2s before removing
      */
     private fun handleOrderExpired(args: Array<Any>) {
         try {
             val data = args.firstOrNull() as? JSONObject ?: return
             val orderId = data.optString("orderId", "")
             
-            timber.log.Timber.w("⏰ ORDER EXPIRED: $orderId")
+            timber.log.Timber.w("⏰ ORDER EXPIRED — GRACEFUL DISMISS: $orderId")
             
-            // Remove from broadcast overlay
-            com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(orderId)
+            // Emit dismiss notification for graceful fade
+            CoroutineScope(Dispatchers.IO).launch {
+                _broadcastDismissed.emit(BroadcastDismissedNotification(
+                    broadcastId = orderId,
+                    reason = "timeout",
+                    message = "This booking request has expired",
+                    customerName = data.optString("customerName", "")
+                ))
+            }
             
-            // Emit update
+            // Schedule delayed removal (2s for graceful fade)
+            CoroutineScope(Dispatchers.Main).launch {
+                kotlinx.coroutines.delay(2000)
+                com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(orderId)
+            }
+            
+            // Emit update for list views
             val notification = BookingUpdatedNotification(
                 bookingId = orderId,
                 status = "expired",
@@ -940,9 +1345,26 @@ object SocketIOService {
     
     /**
      * Disconnect from server
+     * 
+     * CRITICAL: Must reset _isOnlineLocally to false!
+     * Without this, the next login would auto-start heartbeat on EVENT_CONNECT
+     * because _isOnlineLocally is still true from the PREVIOUS session.
+     * This would make the NEW user appear online before they press the toggle.
+     * 
+     * EDGE CASES:
+     *   - Logout → disconnect → _isOnlineLocally = false → no ghost heartbeat ✅
+     *   - Login again → EVENT_CONNECT → _isOnlineLocally is false → no auto-heartbeat ✅
+     *   - App killed → SocketIOService is singleton → _isOnlineLocally persists →
+     *     but loadDashboardData() will sync it from backend anyway ✅
      */
     fun disconnect() {
         timber.log.Timber.i("🔌 Disconnecting...")
+        // Reset online intent FIRST — prevents EVENT_CONNECT from restarting
+        // heartbeat on next login with stale state from previous session
+        _isOnlineLocally = false
+        // Stop heartbeat — socket?.off() removes all listeners,
+        // so the disconnect handler (which also stops heartbeat) may never fire.
+        stopHeartbeat()
         socket?.disconnect()
         socket?.off()
         socket = null
@@ -990,8 +1412,16 @@ data class BroadcastNotification(
     val farePerTruck: Int,
     val pickupAddress: String,
     val pickupCity: String,
+    // =========================================================================
+    // CRITICAL FIX: Coordinates for Navigate button (was hardcoded 0.0)
+    // Backend sends these in pickupLocation/dropLocation JSON objects
+    // =========================================================================
+    val pickupLatitude: Double = 0.0,
+    val pickupLongitude: Double = 0.0,
     val dropAddress: String,
     val dropCity: String,
+    val dropLatitude: Double = 0.0,
+    val dropLongitude: Double = 0.0,
     val distanceKm: Int,
     val goodsType: String,
     val isUrgent: Boolean,
@@ -1044,17 +1474,20 @@ data class BroadcastNotification(
             customerId = customerId,
             customerName = customerName,
             customerMobile = "", // Not available from WebSocket
+            // CRITICAL FIX: Use actual coordinates from backend (was hardcoded 0.0)
+            // These are parsed from pickupLocation/dropLocation JSON objects
+            // Navigate button uses these for Google Maps directions
             pickupLocation = com.weelo.logistics.data.model.Location(
                 address = pickupAddress.ifEmpty { pickupCity },
                 city = pickupCity,
-                latitude = 0.0,
-                longitude = 0.0
+                latitude = pickupLatitude,
+                longitude = pickupLongitude
             ),
             dropLocation = com.weelo.logistics.data.model.Location(
                 address = dropAddress.ifEmpty { dropCity },
                 city = dropCity,
-                latitude = 0.0,
-                longitude = 0.0
+                latitude = dropLatitude,
+                longitude = dropLongitude
             ),
             distance = distanceKm.toDouble(),
             estimatedDuration = (distanceKm * 2).toLong(), // Rough estimate: 2 min per km
@@ -1077,7 +1510,9 @@ data class BroadcastNotification(
             status = com.weelo.logistics.data.model.BroadcastStatus.ACTIVE,
             broadcastTime = System.currentTimeMillis(),
             expiryTime = try {
-                java.time.Instant.parse(expiresAt).toEpochMilli()
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }.parse(expiresAt)?.time ?: (System.currentTimeMillis() + (60 * 1000))
             } catch (e: Exception) {
                 System.currentTimeMillis() + (60 * 1000) // Default 1 min expiry
             },
@@ -1191,10 +1626,150 @@ data class DriverAddedNotification(
 /**
  * Drivers Updated Notification
  */
+/**
+ * Driver online/offline status change notification (for transporter UI)
+ */
+data class DriverStatusChangedNotification(
+    val driverId: String,
+    val driverName: String,
+    val isOnline: Boolean,
+    val action: String,      // "online" or "offline"
+    val timestamp: String
+)
+
 data class DriversUpdatedNotification(
     val action: String,              // "added", "updated", "deleted", "status_changed", "drivers_updated"
     val driverId: String,
     val totalDrivers: Int,
     val availableCount: Int,
     val onTripCount: Int
+)
+
+// =============================================================================
+// TRIP ASSIGNMENT NOTIFICATION DATA CLASSES
+// =============================================================================
+
+/**
+ * Location info for pickup/drop in trip assignment
+ * 
+ * Matches backend payload structure:
+ *   pickup: { address, city, lat, lng }
+ *   drop: { address, city, lat, lng }
+ */
+data class TripLocationInfo(
+    val address: String,
+    val city: String,
+    val latitude: Double,
+    val longitude: Double
+)
+
+/**
+ * Trip Assigned Notification — sent to driver when transporter assigns them
+ * 
+ * Backend emits from: truck-hold.service.ts → confirmHoldWithAssignments()
+ * Event name: "trip_assigned"
+ * Target: Driver's personal room (user:{driverId})
+ * 
+ * FLOW:
+ *   Backend emits → SocketIOService receives → _tripAssigned flow →
+ *   UI collects → Navigate to TripAcceptDeclineScreen
+ * 
+ * This data class matches the backend's driverNotification object exactly.
+ * Any field changes in backend must be reflected here.
+ */
+data class TripAssignedNotification(
+    val assignmentId: String,        // Unique assignment ID (UUID)
+    val tripId: String,              // Trip ID for tracking (UUID)
+    val orderId: String,             // Original customer order ID
+    val truckRequestId: String,      // Which truck request this fulfills
+    val pickup: TripLocationInfo,    // Pickup location with lat/lng
+    val drop: TripLocationInfo,      // Drop location with lat/lng
+    val vehicleNumber: String,       // e.g., "KA-01-AB-1234"
+    val farePerTruck: Double,        // Price in ₹ for this trip
+    val distanceKm: Double,          // Distance in km
+    val customerName: String,        // Customer name for display
+    val customerPhone: String,       // Customer phone for calling
+    val assignedAt: String,          // ISO timestamp of assignment
+    val message: String              // Human-readable message
+)
+
+/**
+ * Driver Timeout Notification — sent when driver doesn't respond in time
+ * 
+ * Backend emits when assignment timeout expires (e.g., 60 seconds).
+ * 
+ * For TRANSPORTER: Shows "Driver X didn't respond — [Reassign]" banner
+ * For DRIVER: Shows "Trip expired — you didn't respond in time" 
+ * 
+ * Event name: "driver_timeout"
+ * Target: Both driver and transporter personal rooms
+ */
+data class DriverTimeoutNotification(
+    val assignmentId: String,        // Which assignment timed out
+    val tripId: String,              // Associated trip ID
+    val driverId: String,            // Driver who didn't respond
+    val driverName: String,          // Driver name for display
+    val vehicleNumber: String,       // Vehicle that was assigned
+    val reason: String,              // "timeout" | "cancelled" | etc.
+    val message: String              // Human-readable message
+)
+
+// =============================================================================
+// ORDER CANCELLATION NOTIFICATION
+// =============================================================================
+
+/**
+ * Order Cancelled Notification — sent when customer cancels their order
+ * 
+ * Backend emits from: order.service.ts → cancelOrder()
+ * Event name: "order_cancelled"
+ * Target: All notified transporters + all assigned drivers
+ * 
+ * FLOW:
+ *   Customer cancels → Backend releases assignments/vehicles →
+ *   SocketIOService receives → _orderCancelled flow →
+ *   UI collects → Remove from overlay, show snackbar, auto-dismiss trip screen
+ * 
+ * Used by:
+ * - TransporterDashboardScreen: Remove from active list, show snackbar
+ * - DriverDashboardScreen: Show snackbar "Customer cancelled: {reason}"
+ * - TripAcceptDeclineScreen: Auto-dismiss if order cancelled while deciding
+ * - DriverTripNavigationScreen: Show dialog → navigate to dashboard
+ */
+data class OrderCancelledNotification(
+    val orderId: String,                  // Order that was cancelled
+    val reason: String,                   // Why customer cancelled (from CancellationBottomSheet)
+    val message: String,                  // Human-readable message
+    val cancelledAt: String,              // ISO timestamp
+    val assignmentsCancelled: Int = 0,    // How many assignments were released
+    // CUSTOMER CONTACT — Driver/transporter can call even after cancel
+    val customerName: String = "",        // Customer name for display
+    val customerPhone: String = "",       // Customer phone for calling
+    val pickupAddress: String = "",       // Pickup location (for context)
+    val dropAddress: String = ""          // Drop location (for context)
+)
+
+// =============================================================================
+// BROADCAST DISMISSED NOTIFICATION — Graceful fade+scroll UX
+// =============================================================================
+
+/**
+ * Notification emitted when a broadcast should be dismissed gracefully.
+ * Instead of instant removal, UI shows blur+message overlay for 2s,
+ * then auto-scrolls to next card and removes.
+ *
+ * Reasons:
+ * - "customer_cancelled" → "Sorry, this order was cancelled by {customerName}"
+ * - "timeout" / "expired" → "This booking request has expired"
+ * - "fully_filled" → "All trucks have been assigned for this booking"
+ *
+ * Used by:
+ * - BroadcastListScreen: Blur card + scroll to next
+ * - BroadcastOverlayScreen: Blur current card + advance to next
+ */
+data class BroadcastDismissedNotification(
+    val broadcastId: String,         // Which broadcast to dismiss
+    val reason: String,              // "customer_cancelled" | "timeout" | "fully_filled"
+    val message: String,             // Human-readable message for overlay
+    val customerName: String = ""    // Customer name (if cancelled)
 )

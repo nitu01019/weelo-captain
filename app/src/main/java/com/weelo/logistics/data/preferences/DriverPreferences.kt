@@ -1,5 +1,6 @@
 package com.weelo.logistics.data.preferences
 
+import android.annotation.SuppressLint
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
@@ -29,6 +30,7 @@ private val Context.driverDataStore: DataStore<Preferences> by preferencesDataSt
 
 class DriverPreferences(private val context: Context) {
     
+    @SuppressLint("StaticFieldLeak")
     companion object {
         // Keys (type-safe)
         private val LANGUAGE_KEY = stringPreferencesKey("selected_language")
@@ -66,9 +68,15 @@ class DriverPreferences(private val context: Context) {
     }
     
     /**
-     * Save selected language
-     * Called after language selection screen
-     * CRITICAL: This enables dashboard access
+     * Save selected language — used for BOTH user selection AND backend restore.
+     * 
+     * Called when:
+     * 1. User explicitly selects a language on the language screen
+     * 2. Backend returns a saved language on login (restoreLanguageIfNeeded)
+     * 
+     * Once saved, the onboarding check sees a non-empty language and
+     * SKIPS the language selection screen. Language is only asked if
+     * the backend has no language (null) AND local is empty.
      * 
      * DUAL WRITE: Saves to both DataStore (for reactive Flow) AND
      * SharedPreferences (for synchronous read in attachBaseContext).
@@ -88,10 +96,21 @@ class DriverPreferences(private val context: Context) {
         // 2. CRITICAL: Also save to SharedPreferences for synchronous read
         // in MainActivity.attachBaseContext() — this is what actually applies
         // the locale on app restart. Without this, language resets to English!
+        //
+        // MUST USE commit() (synchronous), NOT apply() (async).
+        // WHY: Activity.recreate() is called immediately after saveLanguage().
+        // recreate() destroys the current Activity and creates a new one.
+        // attachBaseContext() in the new Activity reads SharedPreferences.
+        // If we use apply(), the write may not have flushed to disk yet
+        // when attachBaseContext() reads → stale "en" locale → English dashboard.
+        // commit() blocks until the write is complete → guaranteed correct read.
+        //
+        // SCALABILITY: commit() is ~1-2ms for a single key write. Called at most
+        // once per language selection (not in any hot path). Zero impact at scale.
         context.getSharedPreferences("weelo_prefs", android.content.Context.MODE_PRIVATE)
             .edit()
             .putString("preferred_language", languageCode)
-            .apply()
+            .commit()
     }
     
     /**
@@ -105,13 +124,22 @@ class DriverPreferences(private val context: Context) {
     
     /**
      * Restore language from backend response (after login).
-     * Only restores if backend has a saved preference AND local is empty.
+     * 
+     * If backend has a saved language → save it locally (full save).
+     * This means the onboarding check will see a non-empty language
+     * and SKIP the language selection screen.
+     * 
+     * If backend has no language (null/empty) → do nothing.
+     * The onboarding check will see an empty language and SHOW
+     * the language selection screen.
      * 
      * SCALABILITY: Called once per login, O(1), no network call.
      * MODULARITY: Isolated restore logic — caller doesn't need to know internals.
      * 
-     * CRITICAL: Uses saveLanguage() which does DUAL WRITE to both
-     * DataStore and SharedPreferences, ensuring attachBaseContext() reads it.
+     * WHY FULL SAVE: Language was already chosen by the user in a previous
+     * session and saved to backend. No need to re-ask. Once it's in the
+     * backend, it's the source of truth. On logout, local is cleared;
+     * on re-login, backend language is restored → skip language screen.
      */
     suspend fun restoreLanguageIfNeeded(backendLanguage: String?) {
         if (!backendLanguage.isNullOrEmpty()) {

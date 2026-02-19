@@ -51,7 +51,7 @@ interface BookingApiService {
      * Cancel a booking
      * POST /api/v1/bookings/{bookingId}/cancel
      */
-    @POST("bookings/{bookingId}/cancel")
+    @PATCH("bookings/{bookingId}/cancel")
     suspend fun cancelBooking(
         @Path("bookingId") bookingId: String,
         @Body request: CancelBookingRequest

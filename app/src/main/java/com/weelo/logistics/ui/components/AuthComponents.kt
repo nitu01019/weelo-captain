@@ -24,8 +24,8 @@ fun FuturisticPhoneInput(
     value: String,
     onValueChange: (String) -> Unit,
     label: String,
-    error: String = "",
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    error: String = ""
 ) {
     Column(modifier = modifier) {
         Text(
@@ -64,9 +64,9 @@ fun FuturisticPhoneInput(
 fun FuturisticButton(
     text: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    isLoading: Boolean = false,
-    modifier: Modifier = Modifier
+    isLoading: Boolean = false
 ) {
     Button(
         onClick = onClick,

@@ -77,9 +77,10 @@ object RetrofitClient {
     private const val CACHE_SIZE = 50L * 1024 * 1024  // 50 MB cache
     private const val MAX_IDLE_CONNECTIONS = 10
     private const val KEEP_ALIVE_DURATION_MINUTES = 5L
-    private const val CONNECT_TIMEOUT = 15L
-    private const val READ_TIMEOUT = 30L
-    private const val WRITE_TIMEOUT = 30L
+    // PERFORMANCE FIX: Reduced timeouts to fail faster and trigger retry sooner
+    private const val CONNECT_TIMEOUT = 10L   // was 15L — TCP connect should be instant
+    private const val READ_TIMEOUT = 20L      // was 30L — API responses should be <5s
+    private const val WRITE_TIMEOUT = 15L     // was 30L — request upload is small
     private const val MAX_RETRIES = 3
     
     // Token refresh lock to prevent multiple simultaneous refreshes
@@ -127,36 +128,20 @@ object RetrofitClient {
      * Only logs HEADERS in production, BODY in debug
      */
     private val loggingInterceptor = HttpLoggingInterceptor { message ->
-        // Log ALL network traffic for debugging
         timber.log.Timber.d("🌐 $message")
-        // Extra logging for response body (to catch parsing issues)
-        if (message.startsWith("{") || message.startsWith("[") || message.startsWith("<") || message.startsWith("\"")) {
-            timber.log.Timber.w("📦 RAW RESPONSE BODY: ${message.take(500)}")
-        }
     }.apply {
-        level = HttpLoggingInterceptor.Level.BODY  // Shows full request/response body
+        // SECURITY: Only log BODY in debug builds. Release builds log NONE
+        // to prevent leaking tokens, OTPs, phone numbers, and personal data.
+        level = if (com.weelo.logistics.BuildConfig.DEBUG) {
+            HttpLoggingInterceptor.Level.BODY
+        } else {
+            HttpLoggingInterceptor.Level.NONE
+        }
     }
     
-    /**
-     * Debug interceptor - logs raw response for debugging JSON parse errors
-     */
-    private val debugInterceptor = Interceptor { chain ->
-        val request = chain.request()
-        timber.log.Timber.d("📤 REQUEST: ${request.method} ${request.url}")
-        
-        val response = chain.proceed(request)
-        
-        // Read response body for logging (need to buffer it)
-        val responseBody = response.body
-        val source = responseBody?.source()
-        source?.request(Long.MAX_VALUE)
-        val buffer = source?.buffer?.clone()
-        val responseString = buffer?.readString(Charsets.UTF_8) ?: "null"
-        
-        timber.log.Timber.d("📥 RESPONSE [${response.code}]: ${responseString.take(500)}")
-        
-        response
-    }
+    // debugInterceptor REMOVED — redundant with loggingInterceptor and was
+    // double-buffering response bodies (source.request(Long.MAX_VALUE) + clone),
+    // causing 2x memory usage for every response on the main thread.
     
     /**
      * Response sanitizer interceptor - Ensures all responses are valid JSON
@@ -262,13 +247,26 @@ object RetrofitClient {
         }
         
         val newRequest = originalRequest.newBuilder()
-            .addHeader("Content-Type", "application/json")
-            .addHeader("Accept", "application/json")
-            .addHeader("x-no-compression", "true")  // Disable server-side compression to avoid gzip issues
+            // Use header() instead of addHeader() to REPLACE existing headers.
+            // Retrofit's @Body already sets Content-Type, and @Header("Authorization")
+            // already sets Authorization. Using addHeader() creates DUPLICATES which
+            // causes AWS ALB to return 400 Bad Request.
             .apply {
+                // Only set Content-Type if not already present (Retrofit @Body sets it)
+                if (originalRequest.header("Content-Type") == null) {
+                    header("Content-Type", "application/json")
+                }
+                header("Accept", "application/json")
+                header("x-no-compression", "true")  // Disable server-side compression to avoid gzip issues
+                
                 if (token != null && !isPublicEndpoint) {
-                    addHeader("Authorization", "Bearer $token")
-                    timber.log.Timber.d("✅ Added Authorization header")
+                    // Only set Authorization if not already present (API methods with @Header set it)
+                    if (originalRequest.header("Authorization") == null) {
+                        header("Authorization", "Bearer $token")
+                        timber.log.Timber.d("✅ Added Authorization header (interceptor)")
+                    } else {
+                        timber.log.Timber.d("✅ Authorization header already present (from @Header)")
+                    }
                 }
             }
             .build()
@@ -668,6 +666,19 @@ object RetrofitClient {
      */
     val trackingApi: TrackingApiService by lazy {
         retrofit.create(TrackingApiService::class.java)
+    }
+    
+    /**
+     * Assignment API - Driver trip accept/decline
+     * 
+     * Endpoints:
+     * - GET /assignments/:id         → Get assignment details
+     * - GET /assignments/driver      → Get driver's assignments
+     * - PATCH /assignments/:id/accept  → Accept assignment
+     * - PATCH /assignments/:id/decline → Decline with reason
+     */
+    val assignmentApi: AssignmentApiService by lazy {
+        retrofit.create(AssignmentApiService::class.java)
     }
     
     // ============== Token Management ==============

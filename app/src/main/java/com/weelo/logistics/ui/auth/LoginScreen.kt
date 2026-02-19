@@ -36,7 +36,6 @@ import androidx.compose.ui.unit.sp
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.ui.components.rememberScreenConfig
 import com.weelo.logistics.utils.ClickDebouncer
-import com.weelo.logistics.utils.GlobalRateLimiters
 import com.weelo.logistics.utils.InputValidator
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.data.api.SendOTPRequest
@@ -114,11 +113,18 @@ fun LoginScreen(
         }
     }
     
-    // Navigate after success - instant for speed ⚡
+    // Navigate after success - INSTANT (zero delay) ⚡
     LaunchedEffect(successMessage) {
         successMessage?.let {
-            delay(100) // Minimal delay for visual feedback
-            onNavigateToOTP(phoneNumber, role)
+            // Guard: Never navigate with empty phone number
+            // (causes route mismatch crash: otp_verification//DRIVER/login)
+            if (phoneNumber.isNotEmpty()) {
+                onNavigateToOTP(phoneNumber, role)
+            } else {
+                timber.log.Timber.e("❌ Cannot navigate to OTP: phoneNumber is empty")
+                errorMessage = "Please enter your phone number"
+                successMessage = null
+            }
         }
     }
     
@@ -214,13 +220,10 @@ fun LoginScreen(
                     errorMessage = ""
                     
                     scope.launch {
-                        // Rate limiting check
-                        if (!GlobalRateLimiters.otp.tryAcquire(phoneNumber)) {
-                            isLoading = false
-                            val retryAfter = GlobalRateLimiters.otp.getTimeUntilReset(phoneNumber) / 1000
-                            errorMessage = "Too many attempts. Try again in ${retryAfter}s"
-                            return@launch
-                        }
+                        // Rate limiting is handled by AuthViewModel (single check)
+                        // DO NOT add a second check here — same GlobalRateLimiters.otp
+                        // singleton would consume 2 permits per request, causing
+                        // premature "Too many attempts" with only 1 real attempt.
                         
                         // Use AuthViewModel so driver route is correct
                         try {

@@ -13,10 +13,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.weelo.logistics.R
 import com.weelo.logistics.ui.components.PrimaryTopBar
 import com.weelo.logistics.ui.components.SectionCard
+import com.weelo.logistics.ui.driver.SettingRow
 import com.weelo.logistics.ui.theme.*
 
 /**
@@ -34,7 +37,7 @@ fun TransporterSettingsScreen(
     // Language selection removed - app is English only
     
     Column(Modifier.fillMaxSize().background(Surface)) {
-        PrimaryTopBar(title = "Settings", onBackClick = onNavigateBack)
+        PrimaryTopBar(title = stringResource(R.string.settings), onBackClick = onNavigateBack)
         
         Column(
             Modifier
@@ -43,11 +46,11 @@ fun TransporterSettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            SectionCard("Notifications") {
+            SectionCard(stringResource(R.string.notifications)) {
                 SettingRow(
                     icon = Icons.Default.Notifications,
-                    title = "Push Notifications",
-                    subtitle = "Receive trip and driver notifications",
+                    title = stringResource(R.string.push_notifications),
+                    subtitle = stringResource(R.string.receive_driver_notifications),
                     trailing = {
                         Switch(
                             checked = notificationsEnabled,
@@ -58,44 +61,44 @@ fun TransporterSettingsScreen(
                 )
             }
             
-            SectionCard("Preferences") {
+            SectionCard(stringResource(R.string.preferences)) {
                 // Language selection removed - app is English only
                 SettingRow(
                     icon = Icons.Default.DarkMode,
-                    title = "Theme",
-                    subtitle = "Light",
+                    title = stringResource(R.string.theme),
+                    subtitle = stringResource(R.string.theme_light),
                     onClick = { /* TODO */ }
                 )
             }
             
-            SectionCard("Account") {
+            SectionCard(stringResource(R.string.account)) {
                 SettingRow(
                     icon = Icons.Default.Lock,
-                    title = "Privacy Policy",
-                    subtitle = "View our privacy policy",
+                    title = stringResource(R.string.privacy_policy),
+                    subtitle = stringResource(R.string.privacy_policy_desc),
                     onClick = { /* TODO */ }
                 )
                 Divider()
                 SettingRow(
                     icon = Icons.Default.Description,
-                    title = "Terms & Conditions",
-                    subtitle = "View terms of service",
+                    title = stringResource(R.string.terms_conditions),
+                    subtitle = stringResource(R.string.terms_desc),
                     onClick = { /* TODO */ }
                 )
             }
             
-            SectionCard("Support") {
+            SectionCard(stringResource(R.string.support)) {
                 SettingRow(
                     icon = Icons.Default.Help,
-                    title = "Help & Support",
-                    subtitle = "Get help or contact us",
+                    title = stringResource(R.string.help_support),
+                    subtitle = stringResource(R.string.help_support_desc),
                     onClick = { /* TODO */ }
                 )
                 Divider()
                 SettingRow(
                     icon = Icons.Default.Info,
-                    title = "About",
-                    subtitle = "Version 1.0.0",
+                    title = stringResource(R.string.about),
+                    subtitle = stringResource(R.string.about_version_format, "1.0.0"),
                     onClick = { /* TODO */ }
                 )
             }
@@ -106,8 +109,8 @@ fun TransporterSettingsScreen(
             ) {
                 SettingRow(
                     icon = Icons.Default.Logout,
-                    title = "Logout",
-                    subtitle = "Sign out from your account",
+                    title = stringResource(R.string.logout),
+                    subtitle = stringResource(R.string.logout_subtitle),
                     iconTint = Error,
                     titleColor = Error,
                     onClick = { showLogoutDialog = true }
@@ -119,9 +122,9 @@ fun TransporterSettingsScreen(
     if (showLogoutDialog) {
         AlertDialog(
             onDismissRequest = { showLogoutDialog = false },
-            icon = { Icon(Icons.Default.Logout, null, tint = Error) },
-            title = { Text("Logout") },
-            text = { Text("Are you sure you want to logout?") },
+            icon = { Icon(Icons.Default.Logout, stringResource(R.string.cd_logout), tint = Error) },
+            title = { Text(stringResource(R.string.logout_confirmation_title)) },
+            text = { Text(stringResource(R.string.logout_confirmation)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -129,12 +132,12 @@ fun TransporterSettingsScreen(
                         onLogout()
                     }
                 ) {
-                    Text("Logout", color = Error)
+                    Text(stringResource(R.string.logout), color = Error)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showLogoutDialog = false }) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.cancel))
                 }
             }
         )
@@ -143,42 +146,4 @@ fun TransporterSettingsScreen(
     // Language dialog removed - app is English only
 }
 
-@Composable
-fun SettingRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    subtitle: String,
-    iconTint: androidx.compose.ui.graphics.Color = Primary,
-    titleColor: androidx.compose.ui.graphics.Color = TextPrimary,
-    trailing: @Composable (() -> Unit)? = null,
-    onClick: (() -> Unit)? = null
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(icon, null, tint = iconTint, modifier = Modifier.size(24.dp))
-        Spacer(Modifier.width(16.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-                color = titleColor
-            )
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary
-            )
-        }
-        if (trailing != null) {
-            trailing()
-        } else if (onClick != null) {
-            Icon(Icons.Default.ChevronRight, null, tint = TextSecondary)
-        }
-    }
-}
+// SettingRow is imported from DriverSettingsScreen.kt — shared component

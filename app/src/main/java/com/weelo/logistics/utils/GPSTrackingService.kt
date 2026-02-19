@@ -135,7 +135,10 @@ class GPSTrackingService : Service() {
     private var driverId: String = ""
     
     // Location batching
-    private val locationBatch = mutableListOf<LocationData>()
+    // SCALABILITY: CopyOnWriteArrayList is thread-safe for concurrent reads/writes.
+    // Location callback adds points while flush coroutine reads/clears simultaneously.
+    // Regular mutableListOf() would throw ConcurrentModificationException under load.
+    private val locationBatch = java.util.concurrent.CopyOnWriteArrayList<LocationData>()
     private var lastBatchSentTime = System.currentTimeMillis()
     
     // Current state
@@ -409,15 +412,45 @@ class GPSTrackingService : Service() {
         
         serviceScope.launch {
             try {
-                // Send batch to API
-                // This will be implemented with the tracking API
-                timber.log.Timber.d("📤 Sending location batch: ${batchToSend.size} points")
+                timber.log.Timber.d("📤 Sending location batch: ${batchToSend.size} points to POST /tracking/batch")
                 
-                // TODO: Implement API call when tracking endpoint is ready
-                // RetrofitClient.trackingApi.sendLocationBatch(batchToSend)
+                // Convert LocationData → BatchLocationPoint for the API
+                val batchPoints = batchToSend.map { loc ->
+                    com.weelo.logistics.data.api.BatchLocationPoint(
+                        latitude = loc.latitude,
+                        longitude = loc.longitude,
+                        speed = loc.speed,
+                        bearing = loc.bearing,
+                        accuracy = loc.accuracy,
+                        timestamp = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+                            timeZone = java.util.TimeZone.getTimeZone("UTC")
+                        }.format(java.util.Date(loc.timestamp))
+                    )
+                }
+                
+                // Get tripId from the first point (all points in batch have same tripId)
+                val batchTripId = batchToSend.firstOrNull()?.tripId ?: return@launch
+                
+                val request = com.weelo.logistics.data.api.BatchLocationRequest(
+                    tripId = batchTripId,
+                    points = batchPoints
+                )
+                
+                val response = com.weelo.logistics.data.remote.RetrofitClient
+                    .trackingApi
+                    .uploadBatch(request)
+                
+                if (response.isSuccessful) {
+                    val result = response.body()?.data
+                    timber.log.Timber.i("✅ Batch uploaded: ${result?.accepted}/${result?.processed} accepted")
+                } else {
+                    timber.log.Timber.w("⚠️ Batch upload failed: ${response.code()} — will retry")
+                    // Re-add to batch for retry on next flush
+                    locationBatch.addAll(0, batchToSend)
+                }
                 
             } catch (e: Exception) {
-                timber.log.Timber.e(e, "❌ Failed to send location batch")
+                timber.log.Timber.e(e, "❌ Failed to send location batch — will retry")
                 // Re-add to batch for retry
                 locationBatch.addAll(0, batchToSend)
             }

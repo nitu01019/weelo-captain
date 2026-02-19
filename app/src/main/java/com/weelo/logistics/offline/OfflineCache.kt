@@ -1,5 +1,6 @@
 package com.weelo.logistics.offline
 
+import android.annotation.SuppressLint
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
@@ -46,6 +47,7 @@ class OfflineCache private constructor(
     private val dataStore = context.offlineDataStore
     private val gson = Gson()
     
+    @SuppressLint("StaticFieldLeak")
     companion object {
         private const val TAG = "OfflineCache"
         

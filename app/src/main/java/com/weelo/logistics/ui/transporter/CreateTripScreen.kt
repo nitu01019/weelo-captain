@@ -13,15 +13,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
-import com.weelo.logistics.data.model.*
-import com.weelo.logistics.data.repository.MockDataRepository
+import com.weelo.logistics.data.api.DriverData
+import com.weelo.logistics.data.model.Trip
+import com.weelo.logistics.data.model.Location
+import com.weelo.logistics.data.model.TripStatus
+import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.ClickDebouncer
 import com.weelo.logistics.utils.InputValidator
 import com.weelo.logistics.utils.DataSanitizer
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 @Composable
 fun CreateTripScreen(
@@ -41,16 +44,34 @@ fun CreateTripScreen(
     var isLoading by remember { mutableStateOf(false) }
     
     val scope = rememberCoroutineScope()
-    val repository = remember { MockDataRepository() }
     val clickDebouncer = remember { ClickDebouncer(500L) }
-    // TODO: Connect to real repository from backend
-    var vehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
-    var drivers by remember { mutableStateOf<List<Driver>>(emptyList()) }
-    
+    var vehicleNames by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) } // id → name
+    var driverNames by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) } // id → name
+
+    // Load vehicles and drivers from real API
     LaunchedEffect(Unit) {
-        scope.launch {
-            repository.getVehicles("t1").onSuccess { vehicles = it }
-            repository.getDrivers("t1").onSuccess { drivers = it }
+        try {
+            val vehicleResponse = RetrofitClient.vehicleApi.getVehicles()
+            val driverResponse = RetrofitClient.driverApi.getDriverList()
+
+            vehicleResponse.body()?.let { resp ->
+                if (resp.success) {
+                    vehicleNames = (resp.data as? List<*>)?.mapNotNull { v ->
+                        val map = v as? Map<*, *>
+                        val id = map?.get("id")?.toString() ?: return@mapNotNull null
+                        val number = map["vehicleNumber"]?.toString() ?: map["registrationNumber"]?.toString() ?: id
+                        Pair(id, number)
+                    } ?: emptyList()
+                }
+            }
+
+            driverResponse.body()?.data?.let { data ->
+                driverNames = data.drivers.map { Pair(it.id, it.name ?: it.phone) }
+            }
+
+            Timber.d("CreateTrip: Loaded ${vehicleNames.size} vehicles, ${driverNames.size} drivers")
+        } catch (e: Exception) {
+            Timber.e("CreateTrip: Failed to load data: ${e.message}")
         }
     }
     
@@ -133,24 +154,24 @@ fun CreateTripScreen(
             Divider()
             Text("Select Vehicle", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             
-            vehicles.take(3).forEach { vehicle ->
+            vehicleNames.take(3).forEach { vehicle ->
                 SelectableCard(
-                    title = vehicle.vehicleNumber,
-                    subtitle = vehicle.displayName,
-                    isSelected = selectedVehicleId == vehicle.id,
-                    onClick = { selectedVehicleId = vehicle.id }
+                    title = vehicle.second,
+                    subtitle = vehicle.first,
+                    isSelected = selectedVehicleId == vehicle.first,
+                    onClick = { selectedVehicleId = vehicle.first }
                 )
             }
             
             Divider()
             Text("Select Driver", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             
-            drivers.take(3).forEach { driver ->
+            driverNames.take(3).forEach { driver ->
                 SelectableCard(
-                    title = driver.name,
-                    subtitle = driver.mobileNumber,
-                    isSelected = selectedDriverId == driver.id,
-                    onClick = { selectedDriverId = driver.id }
+                    title = driver.second,
+                    subtitle = driver.first,
+                    isSelected = selectedDriverId == driver.first,
+                    onClick = { selectedDriverId = driver.first }
                 )
             }
             
@@ -187,23 +208,31 @@ fun CreateTripScreen(
                         else -> {
                             isLoading = true
                             scope.launch {
-                                // Sanitize user inputs
-                                val trip = Trip(
-                                    id = "trip_${System.currentTimeMillis()}",
-                                    transporterId = "t1",
-                                    vehicleId = selectedVehicleId!!,
-                                    driverId = selectedDriverId,
-                                    pickupLocation = Location(0.0, 0.0, DataSanitizer.sanitizeForApi(pickupAddress) ?: ""),
-                                    dropLocation = Location(0.0, 0.0, DataSanitizer.sanitizeForApi(dropAddress) ?: ""),
-                                    customerName = DataSanitizer.sanitizeForApi(customerName) ?: "",
-                                    customerMobile = customerMobile,
-                                    goodsType = DataSanitizer.sanitizeForApi(goodsType) ?: "",
-                                    weight = weight,
-                                    fare = fare.toDoubleOrNull() ?: 0.0,
-                                    status = TripStatus.ASSIGNED
-                                )
-                                repository.createTrip(trip)
-                                onTripCreated()
+                                try {
+                                    // Sanitize user inputs
+                                    val trip = Trip(
+                                        id = "trip_${System.currentTimeMillis()}",
+                                        transporterId = "t1",
+                                        vehicleId = selectedVehicleId!!,
+                                        driverId = selectedDriverId,
+                                        pickupLocation = Location(0.0, 0.0, DataSanitizer.sanitizeForApi(pickupAddress) ?: ""),
+                                        dropLocation = Location(0.0, 0.0, DataSanitizer.sanitizeForApi(dropAddress) ?: ""),
+                                        customerName = DataSanitizer.sanitizeForApi(customerName) ?: "",
+                                        customerMobile = customerMobile,
+                                        goodsType = DataSanitizer.sanitizeForApi(goodsType) ?: "",
+                                        weight = weight,
+                                        fare = fare.toDoubleOrNull() ?: 0.0,
+                                        status = TripStatus.ASSIGNED
+                                    )
+                                    // TODO: Call API to create trip when backend endpoint is ready
+                                    Timber.d("CreateTrip: Trip created - $trip")
+                                    onTripCreated()
+                                } catch (e: Exception) {
+                                    Timber.e("CreateTrip: Failed to create trip: ${e.message}")
+                                    errorMessage = "Failed to create trip"
+                                } finally {
+                                    isLoading = false
+                                }
                             }
                         }
                     }

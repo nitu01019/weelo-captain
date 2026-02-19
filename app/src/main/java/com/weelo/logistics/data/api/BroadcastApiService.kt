@@ -144,6 +144,7 @@ interface BroadcastApiService {
     @POST("broadcasts/{broadcastId}/accept")
     suspend fun acceptBroadcast(
         @Header("Authorization") token: String,
+        @Header("X-Idempotency-Key") idempotencyKey: String? = null,
         @Path("broadcastId") broadcastId: String,
         @Body request: AcceptBroadcastRequest
     ): Response<AcceptBroadcastResponse>
@@ -493,6 +494,8 @@ data class AcceptBroadcastResponse(
     val assignmentId: String,
     val tripId: String,
     val status: String,
+    val resultCode: String? = null,
+    val replayed: Boolean? = null,
     val error: String? = null
 )
 

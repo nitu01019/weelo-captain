@@ -1,0 +1,308 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App Name -->
+    <string name="app_name">வீலோ கேப்டன்</string>
+    
+    <!-- Language Selection -->
+    <string name="welcome_to">வரவேற்கிறோம்</string>
+    <string name="select_language">செயலி மொழியைத் தேர்ந்தெடுக்கவும்</string>
+    <string name="confirm">உறுதிப்படுத்து</string>
+    
+    <!-- Common -->
+    <string name="loading">ஏற்றுகிறது…</string>
+    <string name="error">பிழை</string>
+    <string name="retry">மீண்டும் முயற்சிக்கவும்</string>
+    <string name="cancel">ரத்துசெய்</string>
+    <string name="ok">சரி</string>
+    <string name="save">சேமி</string>
+    <string name="edit">திருத்து</string>
+    <string name="delete">நீக்கு</string>
+    <string name="back">பின்செல்</string>
+    
+    <!-- Dashboard -->
+    <string name="dashboard">டாஷ்போர்டு</string>
+    <string name="my_profile">எனது சுயவிவரம்</string>
+    <string name="settings">அமைப்புகள்</string>
+    <string name="logout">வெளியேறு</string>
+    <string name="help">உதவி</string>
+    
+    <!-- Profile -->
+    <string name="profile_photo">சுயவிவர புகைப்படம்</string>
+    <string name="license_photos">உரிம புகைப்படங்கள்</string>
+    <string name="license_front">உரிமம் முன்பக்கம்</string>
+    <string name="license_back">உரிமம் பின்பக்கம்</string>
+    <string name="personal_information">தனிப்பட்ட தகவல்</string>
+    <string name="name">பெயர்</string>
+    <string name="phone">தொலைபேசி</string>
+    <string name="email">மின்னஞ்சல்</string>
+    <string name="license_number">உரிம எண்</string>
+    <string name="vehicle_type">வாகன வகை</string>
+    <string name="address">முகவரி</string>
+    
+    <!-- Settings -->
+    <string name="notifications">அறிவிப்புகள்</string>
+    <string name="push_notifications">புஷ் அறிவிப்புகள்</string>
+    <string name="preferences">விருப்பங்கள்</string>
+    <string name="language">மொழி</string>
+    <string name="theme">தீம்</string>
+    <string name="account">கணக்கு</string>
+    <string name="privacy_policy">தனியுரிமைக் கொள்கை</string>
+    <string name="terms_conditions">விதிமுறைகள் மற்றும் நிபந்தனைகள்</string>
+    <string name="support">ஆதரவு</string>
+    <string name="help_support">உதவி மற்றும் ஆதரவு</string>
+    <string name="about">பற்றி</string>
+    <string name="version">பதிப்பு %1$s</string>
+    
+    <!-- Logout -->
+    <string name="logout_confirmation">நீங்கள் நிச்சயமாக வெளியேற விரும்புகிறீர்களா?</string>
+    <string name="logout_message">உங்கள் கணக்கிலிருந்து வெளியேறவும்</string>
+    
+    <!-- Notifications Settings -->
+    <string name="receive_notifications">பயண மற்றும் கட்டண அறிவிப்புகளைப் பெறவும்</string>
+    
+    <!-- Onboarding -->
+    <string name="skip">தவிர்</string>
+    <string name="next">அடுத்து</string>
+    <string name="get_started">தொடங்குங்கள்</string>
+    <string name="onboarding_title_1">விரைவான மற்றும் நம்பகமான தளவாடங்கள்</string>
+    <string name="onboarding_desc_1">வாடிக்கையாளர்களுடன் இணைந்து உங்கள் தளவாட வணிகத்தை திறம்பட நிர்வகிக்கவும்</string>
+    <string name="onboarding_title_2">நேரடி கண்காணிப்பு</string>
+    <string name="onboarding_desc_2">எங்கள் மேம்பட்ட அமைப்புடன் உங்கள் விநியோகம் மற்றும் கப்பற்படையை நேரடியாக கண்காணிக்கவும்</string>
+    <string name="onboarding_title_3">அதிகம் சம்பாதிக்கவும்</string>
+    <string name="onboarding_desc_3">ஸ்மார்ட் வழித்தடம் மற்றும் கப்பற்படை நிர்வாகத்துடன் உங்கள் வருவாயை அதிகரிக்கவும்</string>
+    
+    <!-- Errors -->
+    <string name="error_loading_profile">சுயவிவரத்தை ஏற்ற முடியவில்லை</string>
+    <string name="error_saving_language">மொழி விருப்பத்தைச் சேமிக்க முடியவில்லை</string>
+    <string name="error_network">நெட்வொர்க் பிழை. தயவுசெய்து உங்கள் இணைப்பைச் சரிபார்க்கவும்.</string>
+    <string name="error_loading_earnings">வருவாய் ஏற்றுவதில் தோல்வி</string>
+    <string name="error_loading_performance">செயல்திறன் தரவை ஏற்றுவதில் தோல்வி</string>
+    <string name="error_loading_notifications">அறிவிப்புகளை ஏற்றுவதில் தோல்வி</string>
+    <string name="error_loading_trips">பயண வரலாற்றை ஏற்றுவதில் தோல்வி</string>
+    <string name="error_generic">ஏதோ தவறு நிகழ்ந்தது. தயவுசெய்து மீண்டும் முயற்சிக்கவும்.</string>
+    
+    <!-- Dashboard — Top Bar & Greeting -->
+    <string name="welcome_format">வரவேற்கிறோம், %1$s!</string>
+    <string name="good_morning">காலை வணக்கம்</string>
+    <string name="good_afternoon">மதிய வணக்கம்</string>
+    <string name="good_evening">மாலை வணக்கம்</string>
+    <string name="menu">மெனு</string>
+    
+    <!-- Dashboard — Earnings Card -->
+    <string name="your_earnings">உங்கள் வருவாய்</string>
+    <string name="today">இன்று</string>
+    <string name="this_week">இந்த வாரம்</string>
+    <string name="this_month">இந்த மாதம்</string>
+    <string name="trips_count">%1$d பயணங்கள்</string>
+    <string name="pending_payment">நிலுவையில் உள்ள கட்டணம்</string>
+    <string name="start_accepting_trips">சம்பாதிக்க பயணங்களை ஏற்கத் தொடங்குங்கள்!</string>
+    <string name="earnings_auto_calculated">உங்கள் வருவாய் தானாக கணக்கிடப்படும்</string>
+    
+    <!-- Dashboard — Active Trip -->
+    <string name="active_trip">செயலில் உள்ள பயணம்</string>
+    <string name="time_elapsed_format">கடந்த நேரம்: %1$d நிமிடங்கள்</string>
+    <string name="eta_format">மதிப்பிடப்பட்ட நேரம்: %1$d நிமிடங்கள்</string>
+    
+    <!-- Dashboard — Stats Grid -->
+    <string name="quick_stats">விரைவு புள்ளிவிவரங்கள்</string>
+    <string name="total_trips">மொத்த பயணங்கள்</string>
+    <string name="distance_label">தூரம்</string>
+    <string name="rating_label">மதிப்பீடு</string>
+    <string name="on_time_label">சரியான நேரத்தில்</string>
+    
+    <!-- Dashboard — Performance -->
+    <string name="performance">செயல்திறன்</string>
+    <string name="no_performance_data">செயல்திறன் தரவு இல்லை</string>
+    <string name="complete_trips_performance">உங்கள் செயல்திறன் அளவீடுகளை உருவாக்க பயணங்களை முடிக்கவும்</string>
+    <string name="acceptance_rate">ஏற்புத்\nதிறன்</string>
+    <string name="on_time_delivery">சரியான\nநேரத்தில்</string>
+    <string name="rating_format">மதிப்பீடு\n%1$s⭐</string>
+    
+    <!-- Dashboard — Recent Trips -->
+    <string name="recent_trips">சமீபத்திய பயணங்கள்</string>
+    <string name="view_all">அனைத்தையும் காண்க</string>
+    <string name="no_trips_yet">இன்னும் பயணங்கள் இல்லை</string>
+    <string name="no_trips_message">உங்கள் முடிக்கப்பட்ட பயணங்கள் இங்கே தோன்றும். போக்குவரத்து நிறுவனங்களிடமிருந்து பயணங்களை ஏற்கத் தொடங்குங்கள்!</string>
+    
+    <!-- Dashboard — Notifications -->
+    <string name="recent_notifications">சமீபத்திய அறிவிப்புகள்</string>
+    <string name="no_notifications">அறிவிப்புகள் இல்லை</string>
+    <string name="no_notifications_message">நீங்கள் அனைத்தையும் பார்த்துவிட்டீர்கள்! புதிய பயண கோரிக்கைகள் மற்றும் புதுப்பிப்புகள் இங்கே தோன்றும்.</string>
+    
+    <!-- Dashboard — Error State -->
+    <string name="oops_something_wrong">அடடா! ஏதோ தவறு நடந்துவிட்டது</string>
+    
+    <!-- Trip Status -->
+    <string name="heading_to_pickup">எடுக்கும் இடத்திற்குச் செல்கிறது</string>
+    <string name="at_pickup_location">எடுக்கும் இடத்தில்</string>
+    <string name="in_transit_status">பயணத்தில்</string>
+    <string name="at_drop_location">இறக்கும் இடத்தில்</string>
+    <string name="completed_status">முடிந்தது</string>
+    
+    <!-- Trip Status Labels (Transporter) -->
+    <string name="status_pending">நிலுவையில்</string>
+    <string name="status_assigned">ஒதுக்கப்பட்டது</string>
+    <string name="status_accepted">ஏற்கப்பட்டது</string>
+    <string name="status_at_pickup">எடுக்கும் இடத்தில்</string>
+    <string name="status_loaded">ஏற்றப்பட்டது</string>
+    <string name="status_in_progress">நடைபெறுகிறது</string>
+    <string name="status_completed">முடிந்தது</string>
+    <string name="status_rejected">நிராகரிக்கப்பட்டது</string>
+    <string name="status_cancelled">ரத்துசெய்யப்பட்டது</string>
+    
+    <!-- Time Ago -->
+    <string name="just_now">இப்போதுதான்</string>
+    <string name="min_ago_format">%1$d நிமிடங்களுக்கு முன்</string>
+    <string name="hour_ago_format">%1$d மணி நேரத்திற்கு முன்</string>
+    <string name="hours_ago_format">%1$d மணி நேரத்திற்கு முன்</string>
+    <string name="day_ago_format">%1$d நாளுக்கு முன்</string>
+    <string name="days_ago_format">%1$d நாட்களுக்கு முன்</string>
+    
+    <!-- Navigation Drawer -->
+    <string name="trip_history">பயண வரலாறு</string>
+    <string name="earnings_menu">வருவாய்</string>
+    <string name="documents_menu">ஆவணங்கள்</string>
+    <string name="my_fleet">எனது கப்பற்படை</string>
+    <string name="my_drivers">எனது ஓட்டுநர்கள்</string>
+    <string name="trips_menu">பயணங்கள்</string>
+    <string name="not_logged_in">உள்நுழையவில்லை</string>
+    <string name="tap_edit_profile">சுயவிவரத்தைத் திருத்த தட்டவும்</string>
+    <string name="set_your_name">உங்கள் பெயரை அமைக்கவும்</string>
+    <string name="app_version_format">வீலோ கேப்டன் v%1$s</string>
+    
+    <!-- Settings — Descriptions -->
+    <string name="push_notifications_desc">பயண மற்றும் கட்டண அறிவிப்புகளைப் பெறவும்</string>
+    <string name="receive_driver_notifications">பயண மற்றும் ஓட்டுநர் அறிவிப்புகளைப் பெறவும்</string>
+    <string name="change_language">மொழியை மாற்று</string>
+    <string name="theme_light">வெளிச்சம்</string>
+    <string name="privacy_policy_desc">எங்கள் தனியுரிமைக் கொள்கையைக் காண்க</string>
+    <string name="terms_desc">சேவை விதிமுறைகளைக் காண்க</string>
+    <string name="help_support_desc">உதவி பெறவும் அல்லது எங்களைத் தொடர்பு கொள்ளவும்</string>
+    <string name="about_version_format">பதிப்பு %1$s</string>
+    <string name="logout_confirmation_title">வெளியேறு</string>
+    <string name="logout_subtitle">உங்கள் கணக்கிலிருந்து வெளியேறவும்</string>
+    
+    <!-- Online/Offline Toggle -->
+    <string name="online">ஆன்லைன்</string>
+    <string name="offline">ஆஃப்லைன்</string>
+    <string name="you_are_online">நீங்கள் ஆன்லைனில் உள்ளீர்கள்</string>
+    <string name="you_are_offline">நீங்கள் ஆஃப்லைனில் உள்ளீர்கள்</string>
+    <string name="switching_status">மாற்றுகிறது…</string>
+    <string name="please_wait">தயவுசெய்து காத்திருக்கவும்</string>
+    <string name="accepting_trip_requests">பயண கோரிக்கைகளை ஏற்கிறது</string>
+    <string name="not_accepting_trips">பயணங்களை ஏற்கவில்லை</string>
+    <string name="receiving_booking_requests">பதிவு கோரிக்கைகளைப் பெறுகிறது</string>
+    <string name="not_receiving_requests">கோரிக்கைகளைப் பெறவில்லை</string>
+    <string name="no_internet_connection">இணைய இணைப்பு இல்லை</string>
+    <string name="offline_banner_message">நீங்கள் ஆஃப்லைனில் உள்ளீர்கள். சில அம்சங்கள் வேலை செய்யாமல் போகலாம்.</string>
+    <string name="no_network">நெட்வொர்க் இல்லை</string>
+    
+    <!-- Map & Components -->
+    <string name="pickup_label">எடுக்கும் இடம்</string>
+    <string name="drop_label">இறக்கும் இடம்</string>
+    <string name="map_view">வரைபடக் காட்சி</string>
+    <string name="tap_to_open_map">முழு வரைபடத்தைத் திறக்க தட்டவும்</string>
+    <string name="search_placeholder">தேடுங்கள்…</string>
+    <string name="clear">அழி</string>
+    <string name="profile">சுயவிவரம்</string>
+    
+    <!-- Transporter Dashboard -->
+    <string name="total_vehicles">மொத்த வாகனங்கள்</string>
+    <string name="total_drivers">மொத்த ஓட்டுநர்கள்</string>
+    <string name="quick_actions">விரைவு செயல்கள்</string>
+    <string name="add_vehicle">வாகனம் சேர்</string>
+    <string name="add_driver">ஓட்டுநர் சேர்</string>
+    <string name="cannot_connect_backend">பின்தளத்துடன் இணைக்க முடியவில்லை</string>
+    <string name="order_cancelled">ஆர்டர் ரத்துசெய்யப்பட்டது</string>
+    <string name="trucks_released_format">%1$d லாரி(கள்) வெளியிடப்பட்டது</string>
+    <string name="call_action">அழைக்கவும்</string>
+    
+    <!-- Content Descriptions -->
+    <string name="cd_notifications">அறிவிப்புகள்</string>
+    <string name="cd_profile">சுயவிவரம்</string>
+    <string name="cd_menu">மெனு</string>
+    <string name="cd_back">பின்செல்</string>
+    <string name="cd_clear">அழி</string>
+    <string name="cd_verified">சரிபார்க்கப்பட்டது</string>
+    <string name="cd_map">வரைபடம்</string>
+    <string name="cd_logout">வெளியேறு</string>
+    <string name="cd_download">பதிவிறக்கம்</string>
+    <string name="cd_refresh">புதுப்பி</string>
+    <string name="cd_edit">திருத்து</string>
+    <string name="cd_search">தேடு</string>
+    <!-- PHASE 2 -->
+    <string name="earnings_title">வருவாய்</string>
+    <string name="period_today">இன்று</string>
+    <string name="period_week">வாரம்</string>
+    <string name="period_month">மாதம்</string>
+    <string name="total_earnings_format">மொத்த வருவாய் (%1$s)</string>
+    <string name="trips_label">டிரிப்</string>
+    <string name="avg_per_trip">சராசரி/டிரிப்</string>
+    <string name="pending_payments">நிலுவை கட்டணம்</string>
+    <string name="pending_amount">நிலுவை தொகை</string>
+    <string name="request_payment">கோரிக்கை</string>
+    <string name="trip_wise_breakdown">டிரிப்-வாரியான விவரம்</string>
+    <string name="status_paid">செலுத்தப்பட்டது</string>
+    <string name="performance_title">செயல்திறன்</string>
+    <string name="overall_rating">ஒட்டுமொத்த மதிப்பீடு</string>
+    <string name="based_on_trips_format">%1$d டிரிப்களின் அடிப்படையில்</string>
+    <string name="trip_statistics">டிரிப் புள்ளிவிவரம்</string>
+    <string name="total_label">மொத்தம்</string>
+    <string name="completed_label">நிறைவு</string>
+    <string name="cancelled_label">ரத்து</string>
+    <string name="performance_metrics">செயல்திறன் அளவீடுகள்</string>
+    <string name="on_time_delivery_rate">சரியான நேரத்தில் டெலிவரி</string>
+    <string name="acceptance_rate_label">ஏற்பு விகிதம்</string>
+    <string name="distance_covered">கடந்த தூரம்</string>
+    <string name="completion_rate">நிறைவு விகிதம்</string>
+    <string name="monthly_trends">மாதாந்திர போக்கு</string>
+    <string name="last_months_format">கடந்த %1$d மாதங்கள்</string>
+    <string name="recent_trips_label">சமீபத்திய டிரிப்</string>
+    <string name="notifications_title">அறிவிப்புகள்</string>
+    <string name="filter_all">அனைத்தும்</string>
+    <string name="filter_unread">படிக்காத</string>
+    <string name="filter_trips">டிரிப்</string>
+    <string name="filter_payments">கட்டணம்</string>
+    <string name="no_notifications_label">அறிவிப்புகள் இல்லை</string>
+    <string name="time_m_ago_format">%1$d நி. முன்</string>
+    <string name="time_h_ago_format">%1$d ம.நே. முன்</string>
+    <string name="time_d_ago_format">%1$d நா. முன்</string>
+    <string name="trip_history_title">டிரிப் வரலாறு</string>
+    <string name="search_customer_location">வாடிக்கையாளர் அல்லது இடத்தால் தேடு</string>
+    <string name="filter_completed">நிறைவு</string>
+    <string name="filter_cancelled">ரத்து</string>
+    <string name="no_trip_history">இதுவரை டிரிப் வரலாறு இல்லை</string>
+    <string name="no_trips_found">டிரிப்கள் கிடைக்கவில்லை</string>
+    <string name="total_summary">மொத்தம்</string>
+    <string name="earned_label">சம்பாதித்தது</string>
+    <string name="in_progress_label">நடைபெறுகிறது</string>
+    <string name="km_format">%1$s கி.மீ.</string>
+    <string name="profile_photo_label">சுயவிவர புகைப்படம்</string>
+    <string name="visible_to_transporter">போக்குவரத்தாளருக்கு தெரியும்</string>
+    <string name="only_visible_to_you">உங்களுக்கு மட்டும் தெரியும்</string>
+    <string name="update_photo">புகைப்படம் புதுப்பிக்கவும்</string>
+    <string name="choose_photo_method">புகைப்படத்தை எப்படி புதுப்பிக்க வேண்டும் என்பதைத் தேர்ந்தெடுக்கவும்:</string>
+    <string name="take_photo">புகைப்படம் எடுக்கவும்</string>
+    <string name="use_camera">கேமரா பயன்படுத்தவும்</string>
+    <string name="choose_from_gallery">கேலரியிலிருந்து தேர்ந்தெடுக்கவும்</string>
+    <string name="select_existing_photo">இருக்கும் புகைப்படத்தைத் தேர்ந்தெடுக்கவும்</string>
+    <string name="uploading_photo">புகைப்படம் பதிவேற்றப்படுகிறது…</string>
+    <string name="front_label">முன்புறம்</string>
+    <string name="back_label">பின்புறம்</string>
+    <string name="license_format">உரிமம் %1$s</string>
+    <string name="my_documents">என் ஆவணங்கள்</string>
+    <string name="upload_documents_info">சரிபார்ப்புக்காக உங்கள் ஆவணங்களின் தெளிவான புகைப்படங்களை பதிவேற்றவும்</string>
+    <string name="driving_license">ஓட்டுநர் உரிமம்</string>
+    <string name="aadhar_card">ஆதார் அட்டை</string>
+    <string name="pan_card">பான் அட்டை</string>
+    <string name="vehicle_rc_optional">வாகன ஆர்சி (விருப்பத்தேர்வு)</string>
+    <string name="vehicle_insurance_optional">வாகன காப்பீடு (விருப்பத்தேர்வு)</string>
+    <string name="doc_verified">சரிபார்க்கப்பட்டது</string>
+    <string name="doc_pending">நிலுவையில்</string>
+    <string name="doc_not_uploaded">பதிவேற்றப்படவில்லை</string>
+    <string name="view_button">பார்</string>
+    <string name="upload_button">பதிவேற்று</string>
+    <string name="reupload_button">மீண்டும் பதிவேற்று</string>
+    <string name="documents_note">குறிப்பு: டிரிப் தொடங்குவதற்கு முன் தேவையான ஆவணங்கள் சரிபார்க்கப்பட வேண்டும்.</string>
+    <string name="valid_till_format">செல்லும் தேதி: %1$s</string>
+</resources>

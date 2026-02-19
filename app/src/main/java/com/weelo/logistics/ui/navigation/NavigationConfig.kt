@@ -32,42 +32,46 @@ object NavigationConfig {
     
     /**
      * Slide in from right (Forward navigation)
+     * Pure slide — no alpha compositing for GPU efficiency
      */
     fun slideInFromRight(): EnterTransition {
         return slideInHorizontally(
             animationSpec = tweenSpec,
             initialOffsetX = { fullWidth -> fullWidth }
-        ) + fadeIn(animationSpec = fadeTweenSpec)
+        )
     }
     
     /**
      * Slide out to left (Forward navigation)
+     * Pure slide — no alpha compositing for GPU efficiency
      */
     fun slideOutToLeft(): ExitTransition {
         return slideOutHorizontally(
             animationSpec = tweenSpec,
             targetOffsetX = { fullWidth -> -fullWidth / 3 }
-        ) + fadeOut(animationSpec = fadeTweenSpec)
+        )
     }
     
     /**
      * Slide in from left (Back navigation)
+     * Pure slide — no alpha compositing for GPU efficiency
      */
     fun slideInFromLeft(): EnterTransition {
         return slideInHorizontally(
             animationSpec = tweenSpec,
             initialOffsetX = { fullWidth -> -fullWidth / 3 }
-        ) + fadeIn(animationSpec = fadeTweenSpec)
+        )
     }
     
     /**
      * Slide out to right (Back navigation)
+     * Pure slide — no alpha compositing for GPU efficiency
      */
     fun slideOutToRight(): ExitTransition {
         return slideOutHorizontally(
             animationSpec = tweenSpec,
             targetOffsetX = { fullWidth -> fullWidth }
-        ) + fadeOut(animationSpec = fadeTweenSpec)
+        )
     }
     
     /**

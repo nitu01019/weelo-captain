@@ -125,7 +125,10 @@ data class TransporterAvailabilityResponse(
 
 data class TransporterAvailabilityData(
     val isAvailable: Boolean,
-    val updatedAt: String? = null
+    val updatedAt: String? = null,
+    val cooldownMs: Long? = null,           // Cooldown after PUT (how long to wait before next toggle)
+    val cooldownRemainingMs: Long? = null,   // Remaining cooldown from GET (for disabling button)
+    val idempotent: Boolean? = null          // True if state was already the same (no actual change)
 )
 
 data class TransporterProfileResponse(

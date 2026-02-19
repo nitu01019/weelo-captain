@@ -3,6 +3,7 @@ package com.weelo.logistics
 import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
@@ -11,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.rememberNavController
 import com.weelo.logistics.broadcast.BroadcastAcceptanceScreen
 import com.weelo.logistics.broadcast.BroadcastOverlayManager
@@ -49,25 +51,68 @@ class MainActivity : ComponentActivity() {
     // =========================================================================
     private val mainViewModel: MainViewModel by viewModels()
     
+    // =========================================================================
+    // REACTIVE LOCALE STATE
+    //
+    // WHY: stringResource() reads from LocalContext.current.resources.
+    // By wrapping the Compose tree with CompositionLocalProvider(LocalContext
+    // provides localizedContext), changing localeCode triggers recomposition →
+    // ALL stringResource() calls resolve to the new language INSTANTLY.
+    //
+    // No Activity.recreate(). No screen flash. No WebSocket reconnect.
+    // Pure Compose state change → recomposition → done.
+    //
+    // ROLE ISOLATION: Only drivers call updateLocale(). Transporters never
+    // write preferred_language, so localeCode stays "en" (system default).
+    //
+    // SCALABILITY: O(1) state change. No network call. Compiled resource lookup.
+    // =========================================================================
+    internal var localeCode by mutableStateOf("en")
+        private set
+    
     /**
-     * Apply saved language preference before activity is created
-     * This ensures the app opens in the user's selected language
+     * Update the app locale INSTANTLY without Activity restart.
+     *
+     * Called from:
+     * - LanguageSelectionScreen (first-time onboarding)
+     * - DriverSettingsScreen (language change bottom sheet)
+     * - OTPVerificationScreen (re-login with backend language)
+     *
+     * THREAD SAFETY: Must be called on Main thread (Compose state).
+     * PERFORMANCE: O(1) — single state assignment triggers recomposition.
+     */
+    fun updateLocale(langCode: String) {
+        // 1. Update Compose state → triggers recomposition of entire tree
+        localeCode = langCode
+        
+        // 2. Update JVM default locale (for non-Compose code: Timber, services, etc.)
+        val locale = java.util.Locale(langCode)
+        java.util.Locale.setDefault(locale)
+        
+        // 3. Update Activity resources (for any code using activity context directly)
+        val config = android.content.res.Configuration(resources.configuration)
+        config.setLocale(locale)
+        @Suppress("DEPRECATION")
+        resources.updateConfiguration(config, resources.displayMetrics)
+        
+        timber.log.Timber.i("🌐 Locale updated instantly: $langCode (no recreate)")
+    }
+    
+    /**
+     * Apply saved language preference before activity is created.
+     * This ensures the app opens in the user's selected language on COLD START.
      * 
-     * PERFORMANCE FIX: Using synchronous SharedPreferences instead of
-     * runBlocking with DataStore to prevent blocking the main thread
+     * PERFORMANCE: Synchronous SharedPreferences read (non-blocking, ~1ms).
      */
     override fun attachBaseContext(newBase: Context) {
-        // PERFORMANCE: Use synchronous SharedPreferences read (non-blocking)
-        // Previously used runBlocking which blocked the UI thread
         val prefs = newBase.getSharedPreferences("weelo_prefs", Context.MODE_PRIVATE)
         val savedLanguage = prefs.getString("preferred_language", null)
         
-        // Apply language or default to English
         val languageCode = savedLanguage ?: "en"
         val context = LocaleHelper.setLocale(newBase, languageCode)
         super.attachBaseContext(context)
         
-        timber.log.Timber.i("📱 Language applied: $languageCode")
+        timber.log.Timber.i("📱 attachBaseContext language: $languageCode")
     }
     
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -87,16 +132,50 @@ class MainActivity : ComponentActivity() {
         // Initialize BroadcastOverlayManager with context for availability checks
         BroadcastOverlayManager.initialize(this)
         
+        // =====================================================================
+        // Initialize localeCode from SharedPreferences (same source as
+        // attachBaseContext). This ensures the reactive Compose state matches
+        // the locale that attachBaseContext already applied.
+        //
+        // MUST happen BEFORE setContent so the first Compose frame uses
+        // the correct locale context.
+        // =====================================================================
+        val langPrefs = getSharedPreferences("weelo_prefs", Context.MODE_PRIVATE)
+        val savedLang = langPrefs.getString("preferred_language", null)
+        if (!savedLang.isNullOrEmpty()) {
+            localeCode = savedLang
+        }
+        
         setContent {
             WeeloTheme {
+                // =============================================================
+                // REACTIVE LOCALE CONTEXT
+                //
+                // Creates a locale-aware Context from the current localeCode.
+                // When localeCode changes (via updateLocale()), this
+                // recomputes → CompositionLocalProvider re-provides it →
+                // ALL stringResource() and context.getString() calls
+                // beneath this point resolve to the new language INSTANTLY.
+                //
+                // KEY: remember(localeCode) ensures a new Context is created
+                // only when the language actually changes (not on every frame).
+                //
+                // PERFORMANCE: createConfigurationContext() is ~0.5ms.
+                // Called at most once per language change (not per frame).
+                // =============================================================
+                val localizedContext = remember(localeCode) {
+                    LocaleHelper.setLocale(this@MainActivity, localeCode)
+                }
+                
+                CompositionLocalProvider(
+                    LocalContext provides localizedContext,
+                    LocalActivityResultRegistryOwner provides this@MainActivity
+                ) {
                 // Remember navController at root level for overlay navigation
                 val navController = rememberNavController()
                 
                 // ================================================================
                 // STATE FOR ACCEPTANCE FLOW
-                // ================================================================
-                // When user accepts a broadcast, we show the acceptance screen
-                // (truck selection + driver assignment) as an overlay
                 // ================================================================
                 var acceptedBroadcast by remember { mutableStateOf<BroadcastTrip?>(null) }
                 var showAcceptanceScreen by remember { mutableStateOf(false) }
@@ -107,7 +186,6 @@ class MainActivity : ComponentActivity() {
                         when (event) {
                             is BroadcastOverlayManager.BroadcastEvent.Accepted -> {
                                 timber.log.Timber.i("✅ Broadcast accepted: ${event.broadcast.broadcastId}")
-                                // Show acceptance screen overlay
                                 acceptedBroadcast = event.broadcast
                                 showAcceptanceScreen = true
                             }
@@ -128,7 +206,6 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    // Box to layer overlays on top of navigation
                     Box(modifier = Modifier.fillMaxSize()) {
                         // ============================================
                         // LAYER 1: Main Navigation
@@ -141,24 +218,20 @@ class MainActivity : ComponentActivity() {
                         
                         // ============================================
                         // LAYER 2: Broadcast Overlay (Rapido-style)
-                        // Shows when new broadcast arrives
                         // ============================================
                         BroadcastOverlayScreen(
                             onAccept = { broadcast ->
                                 timber.log.Timber.i("🎯 User accepted broadcast: ${broadcast.broadcastId}")
-                                // Store broadcast and show acceptance screen
                                 acceptedBroadcast = broadcast
                                 showAcceptanceScreen = true
                             },
                             onReject = { broadcast ->
                                 timber.log.Timber.i("❌ User rejected broadcast: ${broadcast.broadcastId}")
-                                // Overlay manager will show next broadcast automatically
                             }
                         )
                         
                         // ============================================
                         // LAYER 3: Acceptance Screen (Truck + Driver)
-                        // Shows after user clicks "Accept" on broadcast
                         // ============================================
                         acceptedBroadcast?.let { broadcast ->
                             BroadcastAcceptanceScreen(
@@ -173,12 +246,12 @@ class MainActivity : ComponentActivity() {
                                     timber.log.Timber.i("✅ Assignment successful!")
                                     showAcceptanceScreen = false
                                     acceptedBroadcast = null
-                                    // Optionally navigate to trips or dashboard
                                 }
                             )
                         }
                     }
                 }
+                } // End CompositionLocalProvider
             }
         }
     }

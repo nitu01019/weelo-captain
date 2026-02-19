@@ -20,9 +20,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.weelo.logistics.R
 import com.weelo.logistics.offline.AvailabilityManager
 import com.weelo.logistics.offline.NetworkMonitor
 import com.weelo.logistics.ui.theme.*
@@ -60,27 +62,27 @@ fun AvailabilityToggle(
     val networkMonitor = remember { NetworkMonitor.getInstance(context) }
     
     val isAvailable by availabilityManager.isAvailable.collectAsState()
-    val isSyncing by availabilityManager.isSyncing.collectAsState()
+    val isToggling by availabilityManager.isToggling.collectAsState()
     val isOnline by networkMonitor.isOnline.collectAsState()
-    
+
     // Colors
     val backgroundColor by animateColorAsState(
         targetValue = if (isAvailable) Color(0xFF4CAF50) else Color(0xFFE53935),
         animationSpec = tween(300),
         label = "bgColor"
     )
-    
+
     val toggleScale by animateFloatAsState(
-        targetValue = if (isSyncing) 0.95f else 1f,
+        targetValue = if (isToggling) 0.95f else 1f,
         animationSpec = tween(150),
         label = "scale"
     )
-    
+
     Card(
         modifier = modifier
             .scale(toggleScale)
             .clip(RoundedCornerShape(16.dp))
-            .clickable(enabled = !isSyncing) {
+            .clickable(enabled = !isToggling) {
                 scope.launch {
                     availabilityManager.toggleAvailability()
                     onStatusChanged?.invoke(!isAvailable)
@@ -109,16 +111,16 @@ fun AvailabilityToggle(
                 
                 Column {
                     Text(
-                        text = if (isAvailable) "You're Online" else "You're Offline",
+                        text = if (isAvailable) stringResource(R.string.you_are_online) else stringResource(R.string.you_are_offline),
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp
                     )
                     Text(
                         text = if (isAvailable) 
-                            "Receiving booking requests" 
+                            stringResource(R.string.receiving_booking_requests)
                         else 
-                            "Not receiving requests",
+                            stringResource(R.string.not_receiving_requests),
                         color = Color.White.copy(alpha = 0.8f),
                         fontSize = 12.sp
                     )
@@ -143,7 +145,7 @@ fun AvailabilityToggle(
                         .background(Color.White, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isSyncing) {
+                    if (isToggling) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(16.dp),
                             color = backgroundColor,
@@ -172,7 +174,7 @@ fun AvailabilityToggle(
             )
             Spacer(modifier = Modifier.width(4.dp))
             Text(
-                text = "No internet connection",
+                text = stringResource(R.string.no_internet_connection),
                 color = Color(0xFFFFA726),
                 fontSize = 12.sp
             )
@@ -181,7 +183,13 @@ fun AvailabilityToggle(
 }
 
 /**
- * Big Rapido-style toggle for app bar - Clean switch without text
+ * Big Rapido-style toggle for app bar — Clean switch without text
+ *
+ * PRODUCTION FEATURES:
+ * - Disabled during 2s frontend cooldown (prevents spam)
+ * - Shows spinner during API call
+ * - Shows cloud-off icon when device is offline
+ * - Smooth animations for thumb position and colors
  */
 @Composable
 fun AvailabilityToggleCompact(
@@ -190,42 +198,42 @@ fun AvailabilityToggleCompact(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    
+
     val availabilityManager = remember { AvailabilityManager.getInstance(context) }
     val networkMonitor = remember { NetworkMonitor.getInstance(context) }
-    
+
     val isAvailable by availabilityManager.isAvailable.collectAsState()
-    val isSyncing by availabilityManager.isSyncing.collectAsState()
+    val isToggling by availabilityManager.isToggling.collectAsState()
     val isOnline by networkMonitor.isOnline.collectAsState()
-    
-    // Track colors - Green when online, Red when offline
+
+    // Track colors — Green when online, Gray when offline
     val trackColor by animateColorAsState(
         targetValue = if (isAvailable) Color(0xFF4CAF50) else Color(0xFFBDBDBD),
         animationSpec = tween(250),
         label = "trackColor"
     )
-    
+
     // Thumb position animation
     val thumbOffset by animateFloatAsState(
         targetValue = if (isAvailable) 1f else 0f,
         animationSpec = tween(250),
         label = "thumbOffset"
     )
-    
-    // Thumb color - White normally, slightly gray when syncing
+
+    // Thumb color — White normally, slightly gray when toggling
     val thumbColor by animateColorAsState(
-        targetValue = if (isSyncing) Color(0xFFF5F5F5) else Color.White,
+        targetValue = if (isToggling) Color(0xFFF5F5F5) else Color.White,
         animationSpec = tween(150),
         label = "thumbColor"
     )
-    
+
     Box(
         modifier = modifier
             .width(56.dp)
             .height(32.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(trackColor)
-            .clickable(enabled = !isSyncing) {
+            .clickable(enabled = !isToggling) {
                 scope.launch {
                     availabilityManager.toggleAvailability()
                     onStatusChanged?.invoke(!isAvailable)
@@ -253,8 +261,8 @@ fun AvailabilityToggleCompact(
             contentAlignment = Alignment.Center
         ) {
             when {
-                isSyncing -> {
-                    // Show spinner while syncing
+                isToggling -> {
+                    // Show spinner during toggle cooldown
                     CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
                         color = trackColor,
@@ -265,16 +273,16 @@ fun AvailabilityToggleCompact(
                     // Show cloud-off icon when no network
                     Icon(
                         imageVector = Icons.Default.CloudOff,
-                        contentDescription = "No network",
+                        contentDescription = stringResource(R.string.no_network),
                         tint = Color(0xFFFFA726),
                         modifier = Modifier.size(16.dp)
                     )
                 }
             }
         }
-        
+
         // Glow effect when online (optional subtle indicator)
-        if (isAvailable && !isSyncing) {
+        if (isAvailable && !isToggling) {
             Box(
                 modifier = Modifier
                     .padding(3.dp)
@@ -320,7 +328,7 @@ fun OfflineBanner(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "You're offline. Some features may not work.",
+                    text = stringResource(R.string.offline_banner_message),
                     color = Color.White,
                     fontSize = 12.sp
                 )

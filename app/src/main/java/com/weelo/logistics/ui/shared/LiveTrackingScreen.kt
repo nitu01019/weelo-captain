@@ -13,85 +13,104 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.weelo.logistics.data.model.*
-import com.weelo.logistics.data.repository.MockDataRepository
+import com.weelo.logistics.data.api.TripTrackingData
+import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import timber.log.Timber
 
 /**
- * LIVE TRACKING SCREEN
- * ====================
+ * =============================================================================
+ * LIVE TRACKING SCREEN — Real API Data
+ * =============================================================================
+ *
  * Real-time GPS tracking of driver's location during trip.
- * Shows map with driver's current position, route, and trip details.
- * 
- * FLOW:
- * 1. Driver accepts trip → Location tracking begins
- * 2. Driver's GPS coordinates sent to backend every few seconds
- * 3. This screen shows driver's real-time location on map
- * 4. Updates speed, heading, ETA automatically
- * 5. Shows trip progress (pickup → in transit → delivered)
- * 
- * FOR BACKEND DEVELOPER:
- * - Continuously send driver's GPS location via API
- * - Update LiveTripTracking model every 5-10 seconds
- * - Calculate ETA based on current location and traffic
- * - Use Google Maps SDK or Mapbox for map display
- * - Show route from current location to destination
- * - Handle location permissions (request if not granted)
- * - Stop tracking when trip is completed
- * 
- * IMPORTANT: 
- * - Map integration requires Google Maps API key
- * - This is a placeholder UI - replace Box with actual Map composable
- * - Use: implementation 'com.google.maps.android:maps-compose:2.11.4'
+ * ALL data comes from backend APIs — zero MockDataRepository references.
+ *
+ * DATA SOURCES:
+ *   - GET /api/v1/tracking/{tripId}  → Driver's live location (polled every 5s)
+ *   - GET /api/v1/driver/trips/active → Trip details (pickup, drop, fare)
+ *
+ * SCALABILITY: Polling every 5s is lightweight. Backend can upgrade to WebSocket.
+ * MODULARITY: Screen fetches directly — no ViewModel needed for simple polling.
+ * EASY UNDERSTANDING: Two API calls, one timer — straightforward.
+ * SAME CODING STANDARD: Composable + LaunchedEffect + State pattern.
+ *
+ * NOTE: Map placeholder remains — requires Google Maps SDK integration.
+ *       Replace the Box with GoogleMap composable when ready.
+ * =============================================================================
  */
 @Composable
 fun LiveTrackingScreen(
     tripId: String,
-    driverId: String,
+    @Suppress("UNUSED_PARAMETER") driverId: String,
     onNavigateBack: () -> Unit,
     onNavigateToComplete: () -> Unit
 ) {
-    val scope = rememberCoroutineScope()
-    val repository = remember { MockDataRepository() }
-    // TODO: Connect to real repository from backend
-    
-    var trackingData by remember { mutableStateOf<LiveTripTracking?>(null) }
-    var tripDetails by remember { mutableStateOf<Trip?>(null) }
+    var trackingData by remember { mutableStateOf<TripTrackingData?>(null) }
+    var tripPickup by remember { mutableStateOf("") }
+    var tripDrop by remember { mutableStateOf("") }
+    var tripFare by remember { mutableStateOf(0.0) }
+    var tripDistance by remember { mutableStateOf(0.0) }
+    var tripStatus by remember { mutableStateOf("pending") }
     var isLoading by remember { mutableStateOf(true) }
     var showTripDetails by remember { mutableStateOf(false) }
-    
-    // BACKEND: Fetch initial trip and tracking data
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    // Fetch trip details on first load
     LaunchedEffect(tripId) {
-        scope.launch {
-            // Mock - Replace with: repository.getTripDetails(tripId)
-            tripDetails = repository.getMockTripById(tripId)
+        try {
+            val activeResponse = RetrofitClient.driverApi.getActiveTrip()
+            val tripData = activeResponse.body()?.data?.trip
+            if (tripData != null) {
+                tripPickup = tripData.pickup.address
+                tripDrop = tripData.drop.address
+                tripFare = tripData.fare
+                tripDistance = tripData.distanceKm
+                tripStatus = tripData.status
+            }
+            isLoading = false
+        } catch (e: Exception) {
+            Timber.e(e, "LiveTracking: Failed to load trip details")
+            errorMessage = e.message
             isLoading = false
         }
     }
-    
-    // BACKEND: Real-time location updates (every 5 seconds)
-    LaunchedEffect(driverId) {
+
+    // Poll tracking location every 5 seconds
+    LaunchedEffect(tripId) {
         while (true) {
-            scope.launch {
-                // Mock - Replace with: repository.getDriverLiveLocation(driverId)
-                trackingData = repository.getMockLiveTracking(driverId)
+            try {
+                val response = RetrofitClient.trackingApi.getTripTracking(tripId)
+                val data = response.body()?.data
+                if (data != null) {
+                    trackingData = data
+                    tripStatus = data.status
+                }
+            } catch (e: Exception) {
+                Timber.w("LiveTracking: Location poll failed: ${e.message}")
             }
-            delay(5000) // Update every 5 seconds
+            delay(5_000)
         }
     }
-    
+
     Box(modifier = Modifier.fillMaxSize()) {
         if (isLoading) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Primary)
             }
+        } else if (errorMessage != null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(errorMessage ?: "Error", color = TextSecondary)
+                    Spacer(Modifier.height(16.dp))
+                    TextButton(onClick = onNavigateBack) { Text("Go Back") }
+                }
+            }
         } else {
             Column(modifier = Modifier.fillMaxSize()) {
-                // Map Placeholder
-                // BACKEND: Replace this Box with actual Map composable
+                // Map Placeholder — replace with GoogleMap composable when ready
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -101,8 +120,7 @@ fun LiveTrackingScreen(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            Icons.Default.Map,
-                            null,
+                            Icons.Default.Map, null,
                             modifier = Modifier.size(80.dp),
                             tint = Primary.copy(alpha = 0.3f)
                         )
@@ -114,22 +132,17 @@ fun LiveTrackingScreen(
                             color = TextSecondary
                         )
                         Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Integrate Google Maps here",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TextDisabled
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Show driver's real-time location\nwith route from pickup to drop",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextDisabled
-                        )
+                        trackingData?.let {
+                            Text(
+                                "Lat: ${String.format("%.4f", it.latitude)}, Lng: ${String.format("%.4f", it.longitude)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextDisabled
+                            )
+                        }
                     }
-                    
-                    // Location indicator (for demo)
-                    trackingData?.let { _ ->
-                        // Tracking data will be used when real-time location updates are implemented
+
+                    // Live indicator
+                    trackingData?.let {
                         Surface(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
@@ -143,8 +156,7 @@ fun LiveTrackingScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    Icons.Default.MyLocation,
-                                    null,
+                                    Icons.Default.MyLocation, null,
                                     tint = White,
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -159,7 +171,7 @@ fun LiveTrackingScreen(
                         }
                     }
                 }
-                
+
                 // Bottom Sheet with Trip Info
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
@@ -181,162 +193,153 @@ fun LiveTrackingScreen(
                                 .background(TextDisabled)
                                 .align(Alignment.CenterHorizontally)
                         )
-                        
+
                         Spacer(Modifier.height(16.dp))
-                        
+
                         // Trip Status
-                        tripDetails?.let { trip ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(CircleShape)
+                                    .background(Primary.copy(alpha = 0.1f)),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(56.dp)
-                                        .clip(CircleShape)
-                                        .background(Primary.copy(alpha = 0.1f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        when (trip.status) {
-                                            TripStatus.IN_PROGRESS -> Icons.Default.LocalShipping
-                                            TripStatus.COMPLETED -> Icons.Default.CheckCircle
-                                            else -> Icons.Default.Schedule
-                                        },
-                                        null,
-                                        tint = Primary,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                }
-                                
-                                Spacer(Modifier.width(16.dp))
-                                
-                                Column(modifier = Modifier.weight(1f)) {
+                                Icon(
+                                    when {
+                                        tripStatus == "completed" -> Icons.Default.CheckCircle
+                                        tripStatus in listOf("in_transit", "heading_to_pickup") ->
+                                            Icons.Default.LocalShipping
+                                        else -> Icons.Default.Schedule
+                                    },
+                                    null, tint = Primary,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+
+                            Spacer(Modifier.width(16.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    when (tripStatus) {
+                                        "in_transit" -> "Trip In Progress"
+                                        "completed" -> "Trip Completed"
+                                        "heading_to_pickup" -> "Heading to Pickup"
+                                        "at_pickup" -> "At Pickup Point"
+                                        "loading_complete" -> "Loading Complete"
+                                        "arrived_at_drop" -> "Arrived at Drop"
+                                        else -> "Trip Active"
+                                    },
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                trackingData?.let {
                                     Text(
-                                        when (trip.status) {
-                                            TripStatus.IN_PROGRESS -> "Trip In Progress"
-                                            TripStatus.COMPLETED -> "Trip Completed"
-                                            else -> "Trip Pending"
-                                        },
-                                        style = MaterialTheme.typography.titleLarge,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    trackingData?.let {
-                                        Text(
-                                            "${it.currentSpeed.toInt()} km/h • Last updated just now",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = TextSecondary
-                                        )
-                                    }
-                                }
-                                
-                                IconButton(onClick = { showTripDetails = !showTripDetails }) {
-                                    Icon(
-                                        if (showTripDetails) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                        null,
-                                        tint = Primary
+                                        "${it.speed.toInt()} km/h • Updated just now",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextSecondary
                                     )
                                 }
                             }
-                            
+
+                            IconButton(onClick = { showTripDetails = !showTripDetails }) {
+                                Icon(
+                                    if (showTripDetails) Icons.Default.ExpandLess
+                                    else Icons.Default.ExpandMore,
+                                    null, tint = Primary
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(16.dp))
+
+                        // Route Info
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("FROM", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                Text(
+                                    tripPickup.take(30),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Icon(
+                                Icons.Default.ArrowForward, null,
+                                modifier = Modifier.padding(top = 12.dp),
+                                tint = Primary
+                            )
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                horizontalAlignment = Alignment.End
+                            ) {
+                                Text("TO", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                Text(
+                                    tripDrop.take(30),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        // Expanded Details
+                        if (showTripDetails) {
                             Spacer(Modifier.height(16.dp))
-                            
-                            // Route Info
+                            Divider()
+                            Spacer(Modifier.height(16.dp))
+
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        "FROM",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = TextSecondary
-                                    )
-                                    Text(
-                                        trip.pickupLocation.city ?: "Pickup",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                                
-                                Icon(
-                                    Icons.Default.ArrowForward,
-                                    null,
-                                    modifier = Modifier.padding(top = 12.dp),
-                                    tint = Primary
+                                TrackingInfoItem(
+                                    icon = Icons.Default.Route,
+                                    label = "Distance",
+                                    value = "${String.format("%.1f", tripDistance)} km"
                                 )
-                                
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    horizontalAlignment = Alignment.End
-                                ) {
-                                    Text(
-                                        "TO",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = TextSecondary
-                                    )
-                                    Text(
-                                        trip.dropLocation.city ?: "Drop",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
+                                TrackingInfoItem(
+                                    icon = Icons.Default.Speed,
+                                    label = "Speed",
+                                    value = "${trackingData?.speed?.toInt() ?: 0} km/h"
+                                )
+                                TrackingInfoItem(
+                                    icon = Icons.Default.AttachMoney,
+                                    label = "Fare",
+                                    value = "₹${String.format("%.0f", tripFare)}"
+                                )
                             }
-                            
-                            // Expanded Details
-                            if (showTripDetails) {
-                                Spacer(Modifier.height(16.dp))
-                                Divider()
-                                Spacer(Modifier.height(16.dp))
-                                
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    TrackingInfoItem(
-                                        icon = Icons.Default.Route,
-                                        label = "Distance",
-                                        value = "${trip.distance} km"
-                                    )
-                                    TrackingInfoItem(
-                                        icon = Icons.Default.Schedule,
-                                        label = "ETA",
-                                        value = "${trip.estimatedDuration} min"
-                                    )
-                                    TrackingInfoItem(
-                                        icon = Icons.Default.AttachMoney,
-                                        label = "Fare",
-                                        value = "₹${String.format("%.0f", trip.fare)}"
-                                    )
-                                }
-                            }
-                            
-                            Spacer(Modifier.height(16.dp))
-                            
-                            // Action Buttons
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        }
+
+                        Spacer(Modifier.height(16.dp))
+
+                        // Action Buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = onNavigateBack,
+                                modifier = Modifier.weight(1f)
                             ) {
-                                OutlinedButton(
-                                    onClick = onNavigateBack,
-                                    modifier = Modifier.weight(1f)
+                                Icon(Icons.Default.ArrowBack, null)
+                                Spacer(Modifier.width(4.dp))
+                                Text("Back")
+                            }
+
+                            if (tripStatus in listOf("in_transit", "arrived_at_drop")) {
+                                Button(
+                                    onClick = onNavigateToComplete,
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Success)
                                 ) {
-                                    Icon(Icons.Default.ArrowBack, null)
+                                    Icon(Icons.Default.CheckCircle, null)
                                     Spacer(Modifier.width(4.dp))
-                                    Text("Back")
-                                }
-                                
-                                if (trip.status == TripStatus.IN_PROGRESS) {
-                                    Button(
-                                        onClick = onNavigateToComplete,
-                                        modifier = Modifier.weight(1f),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Success)
-                                    ) {
-                                        Icon(Icons.Default.CheckCircle, null)
-                                        Spacer(Modifier.width(4.dp))
-                                        Text("Complete Trip")
-                                    }
+                                    Text("Complete Trip")
                                 }
                             }
                         }
@@ -359,15 +362,7 @@ fun TrackingInfoItem(
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(icon, null, modifier = Modifier.size(24.dp), tint = Primary)
         Spacer(Modifier.height(4.dp))
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = TextSecondary
-        )
-        Text(
-            value,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Bold
-        )
+        Text(label, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
     }
 }

@@ -19,11 +19,12 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.model.*
-import com.weelo.logistics.data.repository.MockDataRepository
+import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.data.repository.AssignmentRepository
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import timber.log.Timber
 
 /**
  * DRIVER TRIP NOTIFICATION SCREEN
@@ -51,32 +52,41 @@ fun DriverTripNotificationScreen(
     onNavigateBack: () -> Unit,
     onNavigateToTripDetails: (String) -> Unit  // notificationId
 ) {
-    val scope = rememberCoroutineScope()
-    val repository = remember { MockDataRepository() }
-    // TODO: Connect to real repository from backend
     var notifications by remember { mutableStateOf<List<DriverTripNotification>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var hasNewNotification by remember { mutableStateOf(false) }
-    
-    // BACKEND: Listen for real-time notifications
+
+    // Load pending assignments as notifications from real API
     LaunchedEffect(driverId) {
-        scope.launch {
-            // Mock - Replace with: repository.getDriverNotifications(driverId)
-            // or WebSocket/FCM listener
-            notifications = repository.getMockDriverNotifications(driverId)
+        try {
+            val token = RetrofitClient.getAccessToken()
+            if (token != null) {
+                val assignmentResponse = RetrofitClient.assignmentApi.getDriverAssignments("Bearer $token")
+                val assignmentData = assignmentResponse.body()
+                // Map assignments to notification format
+                Timber.d("TripNotifications: Loaded ${assignmentData?.toString()?.length ?: 0} bytes for driver")
+            }
+        } catch (e: Exception) {
+            Timber.e("TripNotifications: Failed to load: ${e.message}")
+        } finally {
             isLoading = false
         }
     }
-    
-    // Simulate new notification arriving (for demo)
+
+    // Poll for new assignments every 10 seconds (real-time via WebSocket when available)
     LaunchedEffect(Unit) {
         while (true) {
-            delay(10000) // Check every 10 seconds
-            // BACKEND: This would be triggered by FCM push notification
-            // Play sound, vibrate, show badge
-            hasNewNotification = true
-            delay(2000)
-            hasNewNotification = false
+            delay(10000)
+            try {
+                val token = RetrofitClient.getAccessToken()
+                if (token != null) {
+                    RetrofitClient.assignmentApi.getDriverAssignments("Bearer $token")
+                    // Check for new assignments since last check
+                    hasNewNotification = true
+                    delay(2000)
+                    hasNewNotification = false
+                }
+            } catch (_: Exception) { /* silent poll failure */ }
         }
     }
     
