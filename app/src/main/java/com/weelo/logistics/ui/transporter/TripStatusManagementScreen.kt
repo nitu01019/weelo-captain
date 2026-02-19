@@ -20,6 +20,7 @@ import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.data.repository.AssignmentRepository
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
+import kotlinx.coroutines.launch
 import timber.log.Timber
 
 /**
@@ -54,43 +55,46 @@ fun TripStatusManagementScreen(
     var isLoading by remember { mutableStateOf(true) }
     var isRefreshing by remember { mutableStateOf(false) }
 
-    // Fetch assignment details from real API
-    LaunchedEffect(assignmentId) {
-        try {
-            val response = RetrofitClient.assignmentApi.getAssignmentById("", assignmentId)
-            val data = response.body()
-            if (data != null) {
-                // Map API response to existing model (assignment details)
-                Timber.d("TripStatus: Assignment loaded for $assignmentId")
+    // Shared refresh function — used by initial load AND refresh button
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val doRefresh: () -> Unit = remember(assignmentId) {
+        {
+            scope.launch {
+                isRefreshing = true
+                try {
+                    val token = RetrofitClient.getAccessToken() ?: run {
+                        Timber.w("TripStatus: No auth token — skipping fetch")
+                        return@launch
+                    }
+                    val response = RetrofitClient.assignmentApi.getAssignmentById(
+                        "Bearer $token", assignmentId
+                    )
+                    if (response.isSuccessful && response.body()?.success == true) {
+                        Timber.d("TripStatus: Assignment loaded/refreshed for $assignmentId")
+                        // TODO: map response.body()?.data → TripAssignment and set assignment = mapped
+                    } else {
+                        Timber.w("TripStatus: Fetch failed ${response.code()}")
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Timber.e(e, "TripStatus: Fetch error")
+                } finally {
+                    isRefreshing = false
+                    isLoading = false
+                }
             }
-        } catch (e: Exception) {
-            Timber.e("TripStatus: Failed to load: ${e.message}")
-        } finally {
-            isLoading = false
+            Unit
         }
     }
 
-    // Auto-refresh every 5 seconds for real-time driver responses
+    // Initial load
+    LaunchedEffect(assignmentId) { doRefresh() }
+
+    // Auto-poll every 5 seconds for real-time driver responses
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(5000)
-            isRefreshing = true
-            try {
-                val token = RetrofitClient.getAccessToken()
-                if (token != null) {
-                    val response = RetrofitClient.assignmentApi.getAssignmentById("Bearer $token", assignmentId)
-                    if (response.isSuccessful) {
-                        Timber.d("TripStatus: Refreshed assignment data")
-                    } else {
-                        Timber.w("TripStatus: Refresh failed ${response.code()}")
-                    }
-                }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Timber.w("TripStatus: Refresh error: ${e.message}")
-            } finally {
-                isRefreshing = false
-            }
+            doRefresh()
         }
     }
     
@@ -107,11 +111,12 @@ fun TripStatusManagementScreen(
         SocketIOService.assignmentStatusChanged.collect { notification ->
             Timber.i("📋 Real-time status update: ${notification.assignmentId} → ${notification.status}")
             
-            // Update matching assignment in our local state
+            // Update matching assignment — match by driverId OR vehicleNumber
+            // NOT notification.assignmentId (that's the parent assignment, not the driver)
             assignment?.let { currentAssignment ->
                 val updatedAssignments = currentAssignment.assignments.map { driverAssignment ->
-                    if (driverAssignment.driverId == notification.assignmentId || 
-                        driverAssignment.vehicleNumber == notification.vehicleNumber) {
+                    // Match by vehicleNumber — most reliable key available in both models
+                    if (driverAssignment.vehicleNumber == notification.vehicleNumber) {
                         driverAssignment.copy(
                             status = when (notification.status) {
                                 "driver_accepted" -> DriverResponseStatus.ACCEPTED
@@ -169,10 +174,7 @@ fun TripStatusManagementScreen(
                         strokeWidth = 2.dp
                     )
                 } else {
-                    IconButton(onClick = { 
-                        isRefreshing = true
-                        // Refresh data
-                    }) {
+                    IconButton(onClick = { doRefresh() }) {
                         Icon(Icons.Default.Refresh, "Refresh", tint = White)
                     }
                 }
@@ -208,9 +210,10 @@ fun TripStatusManagementScreen(
                             
                             Spacer(Modifier.height(16.dp))
                             
-                            // Progress Bar
+                            // Progress Bar — zero-guard prevents NaN/Infinity when totalCount=0
+                            val safeProgress = if (totalCount > 0) acceptedCount.toFloat() / totalCount else 0f
                             LinearProgressIndicator(
-                                progress = acceptedCount.toFloat() / totalCount,
+                                progress = safeProgress,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(12.dp)

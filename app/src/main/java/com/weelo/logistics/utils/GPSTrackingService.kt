@@ -191,11 +191,23 @@ class GPSTrackingService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         timber.log.Timber.i("🛑 GPSTrackingService destroyed")
-        
+
         stopLocationUpdates()
-        flushLocationBatch() // Send any remaining locations
+        // Flush remaining batch SYNCHRONOUSLY before cancelling scope.
+        // flushLocationBatch() launches a coroutine in serviceScope — if we cancel
+        // the scope first, that coroutine is cancelled before it sends → location points lost.
+        // runBlocking(IO) ensures the HTTP call completes before onDestroy returns.
+        if (locationBatch.isNotEmpty()) {
+            try {
+                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                    flushLocationBatchSync()
+                }
+            } catch (e: Exception) {
+                timber.log.Timber.e(e, "⚠️ Sync flush on destroy failed — points may be lost")
+            }
+        }
         serviceScope.cancel()
-        
+
         _isTracking.value = false
         _lastLocation.value = null
     }
@@ -475,6 +487,45 @@ class GPSTrackingService : Service() {
                 timber.log.Timber.e(e, "❌ Failed to send location batch — will retry")
                 retryBatch(batchToSend)
             }
+        }
+    }
+
+    /**
+     * Synchronous version of flushLocationBatch — used in onDestroy() so remaining points
+     * are sent before serviceScope is cancelled. Called from runBlocking(IO).
+     */
+    private suspend fun flushLocationBatchSync() {
+        val batchToSend = synchronized(locationBatch) {
+            if (locationBatch.isEmpty()) return
+            val copy = locationBatch.toList()
+            locationBatch.clear()
+            copy
+        }
+        try {
+            val token = RetrofitClient.getAccessToken() ?: run {
+                timber.log.Timber.w("⚠️ No token for sync flush — re-queueing ${batchToSend.size} points")
+                retryBatch(batchToSend)
+                return
+            }
+            val points = batchToSend.map { loc ->
+                com.weelo.logistics.data.api.BatchLocationPoint(
+                    latitude = loc.latitude,
+                    longitude = loc.longitude,
+                    speed = loc.speed,
+                    bearing = loc.bearing,
+                    accuracy = loc.accuracy,
+                    timestamp = ISO_UTC_FORMAT.format(java.util.Date(loc.timestamp))
+                )
+            }
+            val tripId = batchToSend.first().tripId
+            val res = RetrofitClient.trackingApi.uploadBatch(
+                com.weelo.logistics.data.api.BatchLocationRequest(tripId, points)
+            )
+            if (!(res.isSuccessful && res.body()?.success == true)) {
+                timber.log.Timber.w("⚠️ Sync flush failed ${res.code()} — points lost on destroy")
+            }
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "Sync flush error — ${batchToSend.size} points lost")
         }
     }
 

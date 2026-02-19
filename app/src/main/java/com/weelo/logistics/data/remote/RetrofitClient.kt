@@ -157,38 +157,43 @@ object RetrofitClient {
     private val responseSanitizerInterceptor = Interceptor { chain ->
         val request = chain.request()
         val response = chain.proceed(request)
-        
+
         // Only process responses with body
         val responseBody = response.body ?: return@Interceptor response
-        
-        // Read the response body
-        val source = responseBody.source()
-        source.request(Long.MAX_VALUE)
-        val buffer = source.buffer.clone()
-        val responseString = buffer.readString(Charsets.UTF_8).trim()
-        
-        timber.log.Timber.d("🔍 Response sanitizer - Code: ${response.code}, Body: ${responseString.take(200)}")
-        
-        // Check if response is valid JSON
-        val isValidJson = responseString.isNotEmpty() && 
-            (responseString.startsWith("{") || responseString.startsWith("["))
-        
-        if (isValidJson) {
-            // Valid JSON - return as-is
+        val contentType = responseBody.contentType()
+
+        // Read body ONCE via string() — avoids the source.request(Long.MAX_VALUE) + buffer.clone()
+        // double-buffering pattern that doubles memory usage for every response (OOM risk at scale).
+        val responseString = try {
+            responseBody.string().trim()
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "⚠️ Failed to read response body")
             return@Interceptor response
         }
-        
-        // Non-JSON response - wrap it in a proper error response
+
+        timber.log.Timber.d("🔍 Response sanitizer - Code: ${response.code}, Body: ${responseString.take(200)}")
+
+        // Check if response is valid JSON — return rebuilt body (original stream already consumed)
+        val isValidJson = responseString.isNotEmpty() &&
+            (responseString.startsWith("{") || responseString.startsWith("["))
+
+        if (isValidJson) {
+            // Valid JSON — rebuild from string (stream already consumed above)
+            return@Interceptor response.newBuilder()
+                .body(responseString.toResponseBody(contentType))
+                .build()
+        }
+
+        // Non-JSON response — wrap in proper error structure
         timber.log.Timber.w("⚠️ Non-JSON response detected, wrapping in error structure")
-        
+
         val errorMessage = when {
             responseString.isEmpty() -> "Empty response from server"
-            responseString.startsWith("<!") || responseString.startsWith("<html") -> 
+            responseString.startsWith("<!") || responseString.startsWith("<html") ->
                 "Server returned HTML error page"
             responseString.startsWith("\"") && responseString.endsWith("\"") ->
-                // Plain quoted string - extract the message
                 responseString.trim('"')
-            else -> responseString.take(200) // Use first 200 chars as error message
+            else -> responseString.take(200)
         }
         
         // Create a proper JSON error response
