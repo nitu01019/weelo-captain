@@ -140,6 +140,7 @@ class DriverEarningsViewModel : ViewModel() {
                 }
 
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Timber.e(e, "$TAG: Failed to load earnings for $period")
                 _earningsState.value = EarningsState.Error(e.message ?: "Network error")
             }

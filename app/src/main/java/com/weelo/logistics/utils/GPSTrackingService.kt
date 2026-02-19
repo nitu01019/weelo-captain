@@ -435,7 +435,11 @@ class GPSTrackingService : Service() {
                 }
 
                 // Get tripId from the first point (all points in batch have same tripId)
-                val batchTripId = batchToSend.firstOrNull()?.tripId ?: return@launch
+                val batchTripId = batchToSend.firstOrNull()?.tripId
+                if (batchTripId == null) {
+                    timber.log.Timber.w("⚠️ Batch has no tripId — discarding ${batchToSend.size} points")
+                    return@launch
+                }
 
                 val request = com.weelo.logistics.data.api.BatchLocationRequest(
                     tripId = batchTripId,
@@ -477,16 +481,23 @@ class GPSTrackingService : Service() {
     /**
      * Re-queue a failed batch for retry, capped at MAX_BATCH_BUFFER to prevent unbounded growth.
      * Drops oldest points if buffer is full (newest data is more valuable for live tracking).
+     *
+     * THREAD SAFETY: synchronized on locationBatch — CopyOnWriteArrayList's individual ops are
+     * thread-safe but the read-modify-write sequence (snapshot + clear + addAll) is NOT atomic.
+     * A concurrent location callback adding points between clear() and addAll() would lose those
+     * points. synchronized() makes the entire sequence atomic.
      */
     private fun retryBatch(failed: List<LocationData>) {
-        val combined = failed + locationBatch
-        locationBatch.clear()
-        // Keep only the most recent MAX_BATCH_BUFFER points
-        val capped = if (combined.size > MAX_BATCH_BUFFER) {
-            timber.log.Timber.w("⚠️ Buffer overflow: dropping ${combined.size - MAX_BATCH_BUFFER} oldest points")
-            combined.takeLast(MAX_BATCH_BUFFER)
-        } else combined
-        locationBatch.addAll(capped)
+        synchronized(locationBatch) {
+            val combined = failed + locationBatch.toList()
+            locationBatch.clear()
+            // Keep only the most recent MAX_BATCH_BUFFER points (newest = most valuable)
+            val capped = if (combined.size > MAX_BATCH_BUFFER) {
+                timber.log.Timber.w("⚠️ Buffer overflow: dropping ${combined.size - MAX_BATCH_BUFFER} oldest points")
+                combined.takeLast(MAX_BATCH_BUFFER)
+            } else combined
+            locationBatch.addAll(capped)
+        }
     }
 }
 

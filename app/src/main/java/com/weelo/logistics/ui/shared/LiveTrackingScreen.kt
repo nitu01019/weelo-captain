@@ -86,9 +86,13 @@ fun LiveTrackingScreen(
         }
     }
 
-    // Poll tracking location every 5 seconds
+    // Poll tracking location every 5 seconds — stops when trip is completed/cancelled
     LaunchedEffect(tripId) {
-        while (true) {
+        val terminalStatuses = setOf("completed", "cancelled", "failed")
+        while (tripStatus !in terminalStatuses) {
+            delay(5_000)
+            // Re-check after delay in case status changed (e.g. via initial fetch)
+            if (tripStatus in terminalStatuses) break
             try {
                 val response = RetrofitClient.trackingApi.getTripTracking(tripId)
                 if (response.isSuccessful && response.body()?.success == true) {
@@ -96,6 +100,10 @@ fun LiveTrackingScreen(
                     if (data != null) {
                         trackingData = data
                         tripStatus = data.status
+                        if (data.status in terminalStatuses) {
+                            Timber.i("LiveTracking: Trip ${data.status} — stopping poll")
+                            break
+                        }
                     }
                 } else {
                     Timber.w("LiveTracking: Poll error ${response.code()}")
@@ -104,8 +112,8 @@ fun LiveTrackingScreen(
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Timber.w("LiveTracking: Location poll failed: ${e.message}")
             }
-            delay(5_000)
         }
+        Timber.i("LiveTracking: Poll loop exited (tripStatus=$tripStatus)")
     }
 
     Box(modifier = Modifier.fillMaxSize()) {

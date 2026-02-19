@@ -137,11 +137,13 @@ class DriverTripHistoryViewModel : ViewModel() {
                     )
                     Timber.d("$TAG: Loaded $filter — ${items.size} trips")
                 } else {
-                    _tripHistoryState.value = TripHistoryState.Success(emptyList())
+                    // null data from API is an error — don't silently show empty list
+                    _tripHistoryState.value = TripHistoryState.Error("Failed to load trips")
                     Timber.w("$TAG: API returned null data for filter=$filter")
                 }
 
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Timber.e(e, "$TAG: Failed to load trips for filter=$filter")
                 _tripHistoryState.value = TripHistoryState.Error(e.message ?: "Network error")
             }
