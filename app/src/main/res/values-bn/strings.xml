@@ -301,4 +301,6 @@
     <string name="speed_kmh_format">%d km/h</string>
     <string name="fare_amount_format">₹%.0f</string>
     <string name="lat_lng_format">Lat: %.4f, Lng: %.4f</string>
+    <string name="error_invalid_customer_name">অবৈধ গ্রাহকের নাম</string>
+    <string name="error_invalid_phone">অবৈধ ফোন নম্বর</string>
 </resources>

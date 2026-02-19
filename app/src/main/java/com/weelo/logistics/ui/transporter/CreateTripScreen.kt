@@ -1,6 +1,8 @@
 package com.weelo.logistics.ui.transporter
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.platform.LocalContext
+import com.weelo.logistics.R
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -44,6 +46,7 @@ fun CreateTripScreen(
     var isLoading by remember { mutableStateOf(false) }
     
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val clickDebouncer = remember { ClickDebouncer(500L) }
     var vehicleNames by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) } // id → name
     var driverNames by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) } // id → name
@@ -206,13 +209,13 @@ fun CreateTripScreen(
                     // Validate inputs
                     val nameValidation = InputValidator.validateName(customerName)
                     if (!nameValidation.isValid) {
-                        errorMessage = nameValidation.errorMessage ?: "Invalid customer name"
+                        errorMessage = nameValidation.errorMessage ?: context.getString(R.string.error_invalid_customer_name)
                         return@PrimaryButton
                     }
                     
                     val phoneValidation = InputValidator.validatePhoneNumber(customerMobile)
                     if (customerMobile.isNotEmpty() && !phoneValidation.isValid) {
-                        errorMessage = phoneValidation.errorMessage ?: "Invalid phone number"
+                        errorMessage = phoneValidation.errorMessage ?: context.getString(R.string.error_invalid_phone)
                         return@PrimaryButton
                     }
                     
