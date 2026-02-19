@@ -305,4 +305,10 @@
     <string name="reupload_button">ਦੁਬਾਰਾ ਅੱਪਲੋਡ</string>
     <string name="documents_note">ਨੋਟ: ਟ੍ਰਿਪ ਸ਼ੁਰੂ ਕਰਨ ਤੋਂ ਪਹਿਲਾਂ ਲੋੜੀਂਦੇ ਦਸਤਾਵੇਜ਼ ਤਸਦੀਕ ਹੋਣੇ ਚਾਹੀਦੇ ਹਨ।</string>
     <string name="valid_till_format">ਵੈਧ ਤਾਰੀਖ: %1$s</string>
+    <string name="distance">ਦੂਰੀ</string>
+    <string name="speed">ਗਤੀ</string>
+    <string name="fare">ਕਿਰਾਇਆ</string>
+    <string name="distance_km_format">%.1f km</string>
+    <string name="speed_kmh_format">%d km/h</string>
+    <string name="fare_amount_format">₹%.0f</string>
 </resources>

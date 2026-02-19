@@ -220,7 +220,7 @@ fun CreateTripScreen(
                         pickupAddress.isEmpty() -> errorMessage = "Enter pickup address"
                         dropAddress.isEmpty() -> errorMessage = "Enter drop address"
                         selectedVehicleId == null -> errorMessage = "Select a vehicle"
-                        selectedDriverId == null -> errorMessage = "Select a driver"
+                        // Driver is optional — transporter can assign later
                         else -> {
                             isLoading = true
                             scope.launch {

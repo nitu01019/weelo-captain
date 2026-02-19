@@ -305,4 +305,10 @@
     <string name="reupload_button">మళ్ళీ అప్‌లోడ్</string>
     <string name="documents_note">గమనిక: ట్రిప్ ప్రారంభించడానికి ముందు అవసరమైన పత్రాలు ధృవీకరించబడాలి.</string>
     <string name="valid_till_format">చెల్లుబాటు తేదీ: %1$s</string>
+    <string name="distance">దూరం</string>
+    <string name="speed">వేగం</string>
+    <string name="fare">ఛార్జీ</string>
+    <string name="distance_km_format">%.1f km</string>
+    <string name="speed_kmh_format">%d km/h</string>
+    <string name="fare_amount_format">₹%.0f</string>
 </resources>

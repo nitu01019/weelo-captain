@@ -294,4 +294,10 @@
     <string name="reupload_button">ફરી અપલોડ</string>
     <string name="documents_note">નોંધ: ટ્રિપ શરૂ કરતાં પહેલાં જરૂરી દસ્તાવેજો ચકાસાવા જોઈએ.</string>
     <string name="valid_till_format">માન્ય તારીખ: %1$s</string>
+    <string name="distance">અંતર</string>
+    <string name="speed">ઝડપ</string>
+    <string name="fare">ભાડું</string>
+    <string name="distance_km_format">%.1f km</string>
+    <string name="speed_kmh_format">%d km/h</string>
+    <string name="fare_amount_format">₹%.0f</string>
 </resources>

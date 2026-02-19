@@ -284,6 +284,10 @@ fun DriverDashboardScreen(
                             onNotificationsClick = if (isContentReady) onNavigateToNotifications else { {} },
                             onProfileClick = if (isContentReady) onNavigateToProfile else { {} }
                         )
+                    },
+                    snackbarHost = {
+                        // Renders order-cancellation snackbar with "Call Customer" action
+                        androidx.compose.material3.SnackbarHost(hostState = cancelSnackbarHostState)
                     }
                 ) { paddingValues ->
                 Column(

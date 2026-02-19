@@ -294,4 +294,10 @@
     <string name="reupload_button">পুনরায় আপলোড</string>
     <string name="documents_note">দ্রষ্টব্য: ট্রিপ শুরু করার আগে প্রয়োজনীয় নথিপত্র যাচাই করতে হবে।</string>
     <string name="valid_till_format">বৈধ তারিখ: %1$s</string>
+    <string name="distance">দূরত্ব</string>
+    <string name="speed">গতি</string>
+    <string name="fare">ভাড়া</string>
+    <string name="distance_km_format">%.1f km</string>
+    <string name="speed_kmh_format">%d km/h</string>
+    <string name="fare_amount_format">₹%.0f</string>
 </resources>

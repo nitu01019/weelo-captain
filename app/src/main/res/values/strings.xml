@@ -292,6 +292,12 @@
     <string name="earned_label">Earned</string>
     <string name="in_progress_label">In Progress</string>
     <string name="km_format">%1$s km</string>
+    <string name="distance">Distance</string>
+    <string name="speed">Speed</string>
+    <string name="fare">Fare</string>
+    <string name="distance_km_format">%.1f km</string>
+    <string name="speed_kmh_format">%d km/h</string>
+    <string name="fare_amount_format">₹%.0f</string>
     
     <!-- Profile Screen -->
     <string name="profile_photo_label">Profile Photo</string>

@@ -13,6 +13,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.weelo.logistics.R
 import com.weelo.logistics.data.api.TripTrackingData
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.*
@@ -320,18 +322,18 @@ fun LiveTrackingScreen(
                             ) {
                                 TrackingInfoItem(
                                     icon = Icons.Default.Route,
-                                    label = "Distance",
-                                    value = "${String.format("%.1f", tripDistance)} km"
+                                    label = stringResource(R.string.distance),
+                                    value = stringResource(R.string.distance_km_format, tripDistance)
                                 )
                                 TrackingInfoItem(
                                     icon = Icons.Default.Speed,
-                                    label = "Speed",
-                                    value = "${trackingData?.speed?.toInt() ?: 0} km/h"
+                                    label = stringResource(R.string.speed),
+                                    value = stringResource(R.string.speed_kmh_format, trackingData?.speed?.toInt() ?: 0)
                                 )
                                 TrackingInfoItem(
                                     icon = Icons.Default.AttachMoney,
-                                    label = "Fare",
-                                    value = "₹${String.format("%.0f", tripFare)}"
+                                    label = stringResource(R.string.fare),
+                                    value = stringResource(R.string.fare_amount_format, tripFare)
                                 )
                             }
                         }

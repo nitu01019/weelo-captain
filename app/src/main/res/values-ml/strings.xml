@@ -251,4 +251,10 @@
     <string name="reupload_button">വീണ്ടും അപ്‌ലോഡ്</string>
     <string name="documents_note">കുറിപ്പ്: ട്രിപ്പ് ആരംഭിക്കുന്നതിന് മുമ്പ് ആവശ്യമായ രേഖകൾ പരിശോധിക്കണം.</string>
     <string name="valid_till_format">സാധുത തീയതി: %1$s</string>
+    <string name="distance">ദൂരം</string>
+    <string name="speed">വേഗം</string>
+    <string name="fare">ഭാഡ</string>
+    <string name="distance_km_format">%.1f km</string>
+    <string name="speed_kmh_format">%d km/h</string>
+    <string name="fare_amount_format">₹%.0f</string>
 </resources>

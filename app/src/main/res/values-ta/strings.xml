@@ -305,4 +305,10 @@
     <string name="reupload_button">மீண்டும் பதிவேற்று</string>
     <string name="documents_note">குறிப்பு: டிரிப் தொடங்குவதற்கு முன் தேவையான ஆவணங்கள் சரிபார்க்கப்பட வேண்டும்.</string>
     <string name="valid_till_format">செல்லும் தேதி: %1$s</string>
+    <string name="distance">தூரம்</string>
+    <string name="speed">வேகம்</string>
+    <string name="fare">கட்டணம்</string>
+    <string name="distance_km_format">%.1f km</string>
+    <string name="speed_kmh_format">%d km/h</string>
+    <string name="fare_amount_format">₹%.0f</string>
 </resources>

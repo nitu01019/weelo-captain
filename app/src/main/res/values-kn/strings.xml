@@ -286,4 +286,10 @@
     <string name="reupload_button">ಮರು ಅಪ್‌ಲೋಡ್</string>
     <string name="documents_note">ಸೂಚನೆ: ಟ್ರಿಪ್ ಪ್ರಾರಂಭಿಸುವ ಮೊದಲು ಅಗತ್ಯ ದಾಖಲೆಗಳನ್ನು ಪರಿಶೀಲಿಸಬೇಕು.</string>
     <string name="valid_till_format">ಮಾನ್ಯ ದಿನಾಂಕ: %1$s</string>
+    <string name="distance">ದೂರ</string>
+    <string name="speed">ವೇಗ</string>
+    <string name="fare">ಬಾಡಿಗೆ</string>
+    <string name="distance_km_format">%.1f km</string>
+    <string name="speed_kmh_format">%d km/h</string>
+    <string name="fare_amount_format">₹%.0f</string>
 </resources>

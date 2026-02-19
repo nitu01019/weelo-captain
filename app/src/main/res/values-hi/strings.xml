@@ -324,4 +324,10 @@
     <string name="reupload_button">पुनः अपलोड</string>
     <string name="documents_note">नोट: ट्रिप शुरू करने से पहले आवश्यक दस्तावेज़ सत्यापित होने चाहिए।</string>
     <string name="valid_till_format">वैध तिथि: %1$s</string>
+    <string name="distance">दूरी</string>
+    <string name="speed">गति</string>
+    <string name="fare">किराया</string>
+    <string name="distance_km_format">%.1f km</string>
+    <string name="speed_kmh_format">%d km/h</string>
+    <string name="fare_amount_format">₹%.0f</string>
 </resources>
