@@ -257,4 +257,5 @@
     <string name="distance_km_format">%.1f km</string>
     <string name="speed_kmh_format">%d km/h</string>
     <string name="fare_amount_format">₹%.0f</string>
+    <string name="lat_lng_format">Lat: %.4f, Lng: %.4f</string>
 </resources>

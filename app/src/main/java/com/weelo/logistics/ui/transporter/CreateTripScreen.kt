@@ -206,13 +206,13 @@ fun CreateTripScreen(
                     // Validate inputs
                     val nameValidation = InputValidator.validateName(customerName)
                     if (!nameValidation.isValid) {
-                        errorMessage = nameValidation.errorMessage!!
+                        errorMessage = nameValidation.errorMessage ?: "Invalid customer name"
                         return@PrimaryButton
                     }
                     
                     val phoneValidation = InputValidator.validatePhoneNumber(customerMobile)
                     if (customerMobile.isNotEmpty() && !phoneValidation.isValid) {
-                        errorMessage = phoneValidation.errorMessage!!
+                        errorMessage = phoneValidation.errorMessage ?: "Invalid phone number"
                         return@PrimaryButton
                     }
                     

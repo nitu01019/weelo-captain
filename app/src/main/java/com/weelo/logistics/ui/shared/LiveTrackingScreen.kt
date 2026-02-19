@@ -157,7 +157,7 @@ fun LiveTrackingScreen(
                         Spacer(Modifier.height(8.dp))
                         trackingData?.let {
                             Text(
-                                "Lat: ${String.format("%.4f", it.latitude)}, Lng: ${String.format("%.4f", it.longitude)}",
+                                stringResource(R.string.lat_lng_format, it.latitude, it.longitude),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextDisabled
                             )

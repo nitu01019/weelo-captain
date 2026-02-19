@@ -137,6 +137,10 @@ object RetrofitClient {
         } else {
             HttpLoggingInterceptor.Level.NONE
         }
+        // Redact sensitive headers from logcat — prevents JWT tokens leaking
+        redactHeader("Authorization")
+        redactHeader("Cookie")
+        redactHeader("Set-Cookie")
     }
     
     // debugInterceptor REMOVED — redundant with loggingInterceptor and was
@@ -171,7 +175,11 @@ object RetrofitClient {
             return@Interceptor response
         }
 
-        timber.log.Timber.d("🔍 Response sanitizer - Code: ${response.code}, Body: ${responseString.take(200)}")
+        // Gate body preview behind VERBOSE — never log body content in production (PII risk)
+        if (com.weelo.logistics.BuildConfig.DEBUG) {
+            timber.log.Timber.v("🔍 Response sanitizer - Code: ${response.code}, Length: ${responseString.length}")
+            // Deliberately NOT logging body content to prevent accidental PII exposure in logs
+        }
 
         // Check if response is valid JSON — return rebuilt body (original stream already consumed)
         val isValidJson = responseString.isNotEmpty() &&
