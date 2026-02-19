@@ -68,10 +68,19 @@ fun CreateTripScreen(
 
             if (driverResponse.isSuccessful && driverResponse.body()?.success == true) {
                 driverResponse.body()?.data?.let { data ->
-                    driverNames = data.drivers.map { Pair(it.id, it.name ?: it.phone) }
+                    // name ?: phone ?: id — never display raw "null" in the picker
+                    driverNames = data.drivers.mapNotNull { d ->
+                        val id = d.id.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                        val label = d.name?.takeIf { it.isNotBlank() }
+                            ?: d.phone?.takeIf { it.isNotBlank() }
+                            ?: id
+                        Pair(id, label)
+                    }
                 }
             } else {
                 Timber.w("CreateTrip: Failed to load drivers ${driverResponse.code()}")
+                // Show non-blocking warning — vehicle data still usable
+                if (errorMessage.isBlank()) errorMessage = "Could not load drivers. You can still create a trip without assigning one."
             }
 
             Timber.d("CreateTrip: Loaded ${vehicleNames.size} vehicles, ${driverNames.size} drivers")
@@ -217,10 +226,24 @@ fun CreateTripScreen(
                             scope.launch {
                                 try {
                                     // Sanitize user inputs
+                                    // Validate fare — must be a positive number
+                                    val parsedFare = fare.toDoubleOrNull()
+                                    if (parsedFare == null || parsedFare <= 0.0) {
+                                        errorMessage = "Please enter a valid fare amount"
+                                        isLoading = false
+                                        return@launch
+                                    }
+
+                                    val vehicleId = selectedVehicleId ?: run {
+                                        errorMessage = "Please select a vehicle"
+                                        isLoading = false
+                                        return@launch
+                                    }
+
                                     val trip = Trip(
                                         id = "trip_${System.currentTimeMillis()}",
                                         transporterId = "t1",
-                                        vehicleId = selectedVehicleId!!,
+                                        vehicleId = vehicleId,
                                         driverId = selectedDriverId,
                                         pickupLocation = Location(0.0, 0.0, DataSanitizer.sanitizeForApi(pickupAddress) ?: ""),
                                         dropLocation = Location(0.0, 0.0, DataSanitizer.sanitizeForApi(dropAddress) ?: ""),
@@ -228,7 +251,7 @@ fun CreateTripScreen(
                                         customerMobile = customerMobile,
                                         goodsType = DataSanitizer.sanitizeForApi(goodsType) ?: "",
                                         weight = weight,
-                                        fare = fare.toDoubleOrNull() ?: 0.0,
+                                        fare = parsedFare,
                                         status = TripStatus.ASSIGNED
                                     )
                                     // TODO: Replace with real API call when endpoint is ready

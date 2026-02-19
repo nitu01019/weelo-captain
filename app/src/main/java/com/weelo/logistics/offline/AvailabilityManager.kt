@@ -12,6 +12,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * =============================================================================
@@ -82,8 +84,14 @@ class AvailabilityManager private constructor(
     val isSyncing: StateFlow<Boolean> = _isToggling.asStateFlow()
     val syncError: StateFlow<String?> = _toggleError.asStateFlow()
 
-    /** True while syncWithBackend() is in-flight (prevents concurrent syncs from network monitor) */
-    private val _isSyncing = MutableStateFlow(false)
+    /**
+     * Mutex guard for syncWithBackend() — truly atomic, coroutine-safe.
+     * Replaces non-atomic _isSyncing StateFlow check which had a TOCTOU race:
+     *   Thread A: reads _isSyncing=false → Thread B: reads _isSyncing=false →
+     *   Both proceed → 409 lock conflict on backend → one reverts toggle.
+     * Mutex.tryLock() is atomic — only one coroutine wins, others return false immediately.
+     */
+    private val syncMutex = Mutex()
 
     /** Monotonic counter incremented on every toggle. Used to detect stale init-sync GET responses. */
     private val _toggleCounter = java.util.concurrent.atomic.AtomicInteger(0)
@@ -139,7 +147,7 @@ class AvailabilityManager private constructor(
                 delay(500)
 
                 // If user already toggled during the 500ms delay, skip this fetch
-                if (_isToggling.value || _isSyncing.value) {
+                if (_isToggling.value || syncMutex.isLocked) {
                     timber.log.Timber.i("🔄 Skipping init sync — toggle/sync in progress")
                     return@launch
                 }
@@ -166,7 +174,7 @@ class AvailabilityManager private constructor(
                     }
 
                     // Also check active toggle/sync as additional safety
-                    if (!_isToggling.value && !_isSyncing.value) {
+                    if (!_isToggling.value && !syncMutex.isLocked) {
                         _isAvailable.value = backendState
                         dataStore.edit { prefs ->
                             prefs[KEY_IS_AVAILABLE] = backendState
@@ -186,7 +194,7 @@ class AvailabilityManager private constructor(
         // which would cause a 409 (distributed lock conflict) → revert → snap back to ONLINE.
         scope.launch {
             networkMonitor.isOnline.collect { isOnline ->
-                if (isOnline && !_isToggling.value && !_isSyncing.value) {
+                if (isOnline && !_isToggling.value && !syncMutex.isLocked) {
                     val pendingSync = dataStore.data.first()[KEY_PENDING_SYNC] ?: false
                     if (pendingSync) {
                         timber.log.Timber.i("📶 Network available — syncing pending availability status")
@@ -303,18 +311,24 @@ class AvailabilityManager private constructor(
      * @return true if sync succeeded, false if failed
      */
     private suspend fun syncWithBackend(available: Boolean): Boolean {
-        // Concurrency guard — prevent concurrent syncs causing 409 lock conflicts
-        if (_isSyncing.value) {
+        // Atomic concurrency guard — Mutex.tryLock() is TOCTOU-safe unlike StateFlow.value check.
+        // If another coroutine holds the lock, we skip immediately (no 409 from concurrent PUT).
+        if (!syncMutex.tryLock()) {
             timber.log.Timber.w("⚠️ Sync already in-flight — skipping concurrent call")
             return false
         }
 
         if (!networkMonitor.isCurrentlyOnline()) {
+            syncMutex.unlock()
             timber.log.Timber.w("📵 Offline — availability will sync when online")
             return false
         }
 
-        _isSyncing.value = true
+        // Snapshot counter BEFORE the API call. If the user toggles during the in-flight
+        // request, the counter increments. We only clear KEY_PENDING_SYNC when the counter
+        // still matches — preventing a mid-flight toggle from being silently lost.
+        val counterSnapshot = _toggleCounter.get()
+
         try {
             val response = RetrofitClient.transporterApi.updateAvailability(
                 RetrofitClient.getAuthHeader(),
@@ -324,8 +338,13 @@ class AvailabilityManager private constructor(
             return when {
                 // ✅ Success (200)
                 response.isSuccessful && response.body()?.success == true -> {
-                    dataStore.edit { prefs ->
-                        prefs[KEY_PENDING_SYNC] = false
+                    // Only clear pending if no new toggle happened mid-flight
+                    if (_toggleCounter.get() == counterSnapshot) {
+                        dataStore.edit { prefs ->
+                            prefs[KEY_PENDING_SYNC] = false
+                        }
+                    } else {
+                        timber.log.Timber.w("⚠️ State changed mid-sync — keeping pending flag for next sync")
                     }
 
                     // Read cooldown from backend response
@@ -377,12 +396,17 @@ class AvailabilityManager private constructor(
                 }
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) {
+                syncMutex.unlock()
+                throw e
+            }
             timber.log.Timber.e("❌ Network error during sync: ${e.message}")
             // Network error — keep pending sync, will retry when online
             // Don't set _toggleError for network errors (keep optimistic state)
             return false
         } finally {
-            _isSyncing.value = false
+            // Always release mutex — even on exception or cancellation (above re-throws after unlock)
+            if (syncMutex.isLocked) syncMutex.unlock()
         }
     }
 

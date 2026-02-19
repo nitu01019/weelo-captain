@@ -123,7 +123,8 @@ class DriverEarningsViewModel : ViewModel() {
                                 tripId = trip.id.take(12).uppercase(),
                                 route = "${trip.pickup.address.take(20)} → ${trip.drop.address.take(20)}",
                                 date = trip.completedAt ?: trip.createdAt ?: "Unknown",
-                                amount = trip.fare.toInt(),
+                                // fare is Double from API — convert safely to Int (avoid crash on NaN/Inf)
+                                amount = trip.fare.takeIf { it.isFinite() }?.toInt() ?: 0,
                                 status = if (trip.status == "completed") "Paid" else "Pending"
                             )
                         } ?: emptyList()

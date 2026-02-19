@@ -189,6 +189,9 @@ fun DriverDashboardScreen(
                 lastCancelledCustomerPhone.isNotBlank()) {
                 val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
                     data = android.net.Uri.parse("tel:$lastCancelledCustomerPhone")
+                    // FLAG_ACTIVITY_NEW_TASK required when launching from non-Activity context
+                    // (e.g. locale-wrapped context from MainActivity.attachBaseContext)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 driverContext.startActivity(intent)
             }
