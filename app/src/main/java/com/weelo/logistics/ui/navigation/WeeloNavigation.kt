@@ -1,5 +1,7 @@
 package com.weelo.logistics.ui.navigation
 
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.layout.*
@@ -7,9 +9,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -17,6 +22,28 @@ import timber.log.Timber
 import com.weelo.logistics.ui.auth.*
 import com.weelo.logistics.ui.driver.DriverProfileViewModel
 import com.weelo.logistics.ui.driver.DriverProfileScreenWithPhotos
+import androidx.lifecycle.viewmodel.compose.viewModel
+
+/**
+ * Find MainActivity from any Context by walking up the ContextWrapper chain.
+ *
+ * WHY: LocalContext.current inside the NavHost returns a locale-wrapped context
+ * from CompositionLocalProvider(LocalContext provides localizedContext).
+ * This context is created by createConfigurationContext() which does NOT
+ * wrap the original Activity — it creates a standalone ContextWrapper.
+ * So (context as? MainActivity) returns null.
+ *
+ * LocalView.current.context always returns the real Activity context,
+ * but navController.context may also be wrapped. This utility handles all cases.
+ */
+private fun Context.findMainActivity(): com.weelo.logistics.MainActivity? {
+    var ctx: Context = this
+    while (ctx is ContextWrapper) {
+        if (ctx is com.weelo.logistics.MainActivity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
+}
 
 /**
  * ============================================================================
@@ -43,16 +70,55 @@ private fun NavHostController.navigateSmooth(
     inclusive: Boolean = false,
     restoreState: Boolean = true
 ) {
-    navigate(route) {
-        launchSingleTop = true
-        this.restoreState = restoreState
-        if (popUpToRoute != null) {
-            popUpTo(popUpToRoute) {
-                saveState = true
-                this.inclusive = inclusive
+    try {
+        navigate(route) {
+            launchSingleTop = true
+            this.restoreState = restoreState
+            if (popUpToRoute != null) {
+                popUpTo(popUpToRoute) {
+                    saveState = true
+                    this.inclusive = inclusive
+                }
             }
         }
+    } catch (e: IllegalArgumentException) {
+        // Guard: Prevents crash when navigation destination is not found
+        // (e.g., empty route segment like otp_verification//DRIVER/login)
+        Timber.e(e, "❌ Navigation failed for route: $route")
     }
+}
+
+/**
+ * Perform full logout cleanup — clears tokens, preferences, locale, and navigates to role selection.
+ *
+ * EXTRACTED: Single source of truth for logout. Called from Dashboard logout AND Settings logout.
+ * Prevents divergence where one path is updated and the other is not.
+ *
+ * @param navController Navigation controller for redirect
+ * @param coroutineScope Scoped coroutine for async DataStore clear (prevents MainScope leak)
+ */
+private fun performLogout(navController: NavHostController, coroutineScope: CoroutineScope) {
+    // 1. Clear secure tokens (synchronous)
+    com.weelo.logistics.data.remote.RetrofitClient.clearAllData()
+    
+    // 2. Clear driver preferences (async via scoped coroutine — no MainScope leak)
+    val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences
+        .getInstance(navController.context)
+    coroutineScope.launch {
+        driverPrefs.clearAll()
+    }
+    
+    // 3. Reset locale to English so auth screens show in default language.
+    //    After re-login, updateLocale() restores the user's saved language.
+    navController.context.findMainActivity()?.updateLocale("en")
+    
+    // 4. Navigate to role selection, clearing entire back stack
+    navController.navigateSmooth(
+        route = Screen.RoleSelection.route,
+        popUpToRoute = null,
+        inclusive = true,
+        restoreState = false
+    )
 }
 
 /**
@@ -68,6 +134,9 @@ fun WeeloNavigation(
     isLoggedIn: Boolean = false,
     userRole: String? = null
 ) {
+    // Scoped coroutine for logout cleanup (prevents MainScope leak)
+    val logoutScope = rememberCoroutineScope()
+    
     // Determine start destination based on login status
     // CRITICAL: Drivers ALWAYS go through onboarding check first
     // to ensure language is selected. Never skip to dashboard directly.
@@ -109,7 +178,10 @@ fun WeeloNavigation(
             )
         }
         
-        composable("${Screen.Login.route}/{role}") { backStackEntry ->
+        composable(
+            "${Screen.Login.route}/{role}",
+            arguments = listOf(navArgument("role") { type = NavType.StringType })
+        ) { backStackEntry ->
             val role = backStackEntry.arguments?.getString("role") ?: "TRANSPORTER"
             LoginScreen(
                 role = role,
@@ -125,7 +197,14 @@ fun WeeloNavigation(
             )
         }
         
-        composable("otp_verification/{mobile}/{role}/{type}") { backStackEntry ->
+        composable(
+            "otp_verification/{mobile}/{role}/{type}",
+            arguments = listOf(
+                navArgument("mobile") { type = NavType.StringType },
+                navArgument("role") { type = NavType.StringType },
+                navArgument("type") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
             val mobile = backStackEntry.arguments?.getString("mobile") ?: ""
             val role = backStackEntry.arguments?.getString("role") ?: "TRANSPORTER"
             val type = backStackEntry.arguments?.getString("type") ?: "login"
@@ -164,7 +243,10 @@ fun WeeloNavigation(
             )
         }
         
-        composable("${Screen.Signup.route}/{role}") { backStackEntry ->
+        composable(
+            "${Screen.Signup.route}/{role}",
+            arguments = listOf(navArgument("role") { type = NavType.StringType })
+        ) { backStackEntry ->
             val role = backStackEntry.arguments?.getString("role") ?: "TRANSPORTER"
             SignupScreen(
                 role = role,
@@ -333,7 +415,7 @@ fun WeeloNavigation(
         
         composable(Screen.AddDriver.route) {
             com.weelo.logistics.ui.transporter.AddDriverScreen(
-                transporterId = "TRP-001", // TODO: Get from user session
+                transporterId = com.weelo.logistics.data.remote.RetrofitClient.getUserId() ?: "",
                 onNavigateBack = { navController.popBackStack() },
                 onDriverAdded = {
                     navController.navigateSmooth(
@@ -425,13 +507,14 @@ fun WeeloNavigation(
                 }
                 
                 Timber.i(
-                    "🔒 Onboarding check: language='$savedLanguage', profileDone=$profileDone"
+                    "🔒 Onboarding check: savedLanguage='$savedLanguage', profileDone=$profileDone"
                 )
                 
                 when {
                     savedLanguage.isEmpty() -> {
-                        // NO LANGUAGE → MUST select language (STRICT SECURITY)
-                        Timber.i("🔒 Language not selected → forcing language screen")
+                        // No language saved locally (backend had null + never selected)
+                        // → MUST select language before proceeding
+                        Timber.i("🔒 No language saved → showing language selection screen")
                         navController.navigateSmooth(
                             route = "driver_language_selection",
                             popUpToRoute = "driver_onboarding_check",
@@ -471,12 +554,16 @@ fun WeeloNavigation(
             com.weelo.logistics.ui.components.OnboardingCheckSkeleton()
         }
         
-        // Language Selection Screen
+        // Language Selection Screen (first-time onboarding)
         composable("driver_language_selection") {
-            val context = androidx.compose.ui.platform.LocalContext.current
+            val langContext = androidx.compose.ui.platform.LocalContext.current
             val driverPrefs = remember { 
-                com.weelo.logistics.data.preferences.DriverPreferences.getInstance(context) 
+                com.weelo.logistics.data.preferences.DriverPreferences.getInstance(langContext) 
             }
+            
+            // Get real MainActivity via LocalView (not affected by locale wrapping)
+            val langView = androidx.compose.ui.platform.LocalView.current
+            val langMainActivity = remember { langView.context.findMainActivity() }
             
             val coroutineScope = rememberCoroutineScope()
             
@@ -487,11 +574,19 @@ fun WeeloNavigation(
             
             com.weelo.logistics.ui.driver.LanguageSelectionScreen(
                 onLanguageSelected = { languageCode ->
-                    // SECURITY: Save language (enables dashboard access)
                     coroutineScope.launch {
+                        // 1. Save language locally (commit = synchronous)
                         driverPrefs.saveLanguage(languageCode)
-                        // Navigate to profile completion (on main thread)
+                        
+                        // 2. Update locale INSTANTLY via reactive state
+                        //    No recreate(). No screen flash. No WebSocket disruption.
+                        //    CompositionLocalProvider re-provides localized Context →
+                        //    all stringResource() calls resolve to new language.
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            timber.log.Timber.i("🌐 First-time language selected: $languageCode → instant locale update")
+                            langMainActivity?.updateLocale(languageCode)
+                            
+                            // 3. Navigate to profile completion (language is done)
                             navController.navigateSmooth(
                                 route = "driver_profile_completion",
                                 popUpToRoute = "driver_language_selection",
@@ -543,36 +638,33 @@ fun WeeloNavigation(
             popEnterTransition = { NavAnimations.fadeIn },
             popExitTransition = { NavAnimations.fadeOut }
         ) {
+            val currentDriverId = com.weelo.logistics.data.remote.RetrofitClient.getUserId() ?: ""
             com.weelo.logistics.ui.driver.DriverDashboardScreen(
-                onNavigateToNotifications = { /* TODO: Implement */ },
-                onNavigateToTripHistory = { /* TODO: Implement */ },
+                onNavigateToNotifications = { navController.navigateSmooth(Screen.DriverNotifications.createRoute(currentDriverId)) },
+                onNavigateToTripHistory = { navController.navigateSmooth(Screen.DriverTripHistory.createRoute(currentDriverId)) },
                 onNavigateToProfile = { navController.navigateSmooth("driver_profile") },
+                onNavigateToEarnings = { navController.navigateSmooth(Screen.DriverEarnings.createRoute(currentDriverId)) },
+                onNavigateToDocuments = { navController.navigateSmooth(Screen.DriverDocuments.createRoute(currentDriverId)) },
+                onNavigateToSettings = { navController.navigateSmooth(Screen.DriverSettings.route) },
                 onOpenFullMap = { _ -> /* TODO: Implement */ },
                 onLogout = {
-                    // Clear tokens AND driver preferences (language, profile status)
-                    // CRITICAL: Must clear DriverPreferences so re-login checks
-                    // backend state instead of stale local state
-                    com.weelo.logistics.data.remote.RetrofitClient.clearAllData()
-                    val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences
-                        .getInstance(navController.context)
-                    kotlinx.coroutines.MainScope().launch {
-                        driverPrefs.clearAll()
-                    }
-                    // Back button or logout goes to role selection
-                    navController.navigateSmooth(
-                        route = Screen.RoleSelection.route,
-                        popUpToRoute = null,
-                        inclusive = true,
-                        restoreState = false
-                    )
+                    performLogout(navController, logoutScope)
                 }
             )
         }
         
         // Driver Profile Screen (with photo display and update)
+        // Uses viewModel() factory for proper lifecycle management (survives config changes)
         composable("driver_profile") {
             val context = androidx.compose.ui.platform.LocalContext.current
-            val viewModel = remember { DriverProfileViewModel(context) }
+            val viewModel: DriverProfileViewModel = viewModel(
+                factory = object : androidx.lifecycle.ViewModelProvider.Factory {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                        return DriverProfileViewModel(context.applicationContext) as T
+                    }
+                }
+            )
             
             com.weelo.logistics.ui.driver.DriverProfileScreenWithPhotos(
                 viewModel = viewModel,
@@ -582,7 +674,7 @@ fun WeeloNavigation(
         
         // Driver Performance
         composable(Screen.DriverPerformance.route) { backStackEntry ->
-            val driverId = backStackEntry.arguments?.getString("driverId") ?: "d1"
+            val driverId = backStackEntry.arguments?.getString("driverId") ?: ""
             com.weelo.logistics.ui.driver.DriverPerformanceScreen(
                 driverId = driverId,
                 onNavigateBack = { navController.popBackStack() }
@@ -591,7 +683,7 @@ fun WeeloNavigation(
         
         // Driver Earnings
         composable(Screen.DriverEarnings.route) { backStackEntry ->
-            val driverId = backStackEntry.arguments?.getString("driverId") ?: "d1"
+            val driverId = backStackEntry.arguments?.getString("driverId") ?: ""
             com.weelo.logistics.ui.driver.DriverEarningsScreen(
                 driverId = driverId,
                 onNavigateBack = { navController.popBackStack() }
@@ -600,7 +692,7 @@ fun WeeloNavigation(
         
         // Driver Profile Edit
         composable(Screen.DriverProfileEdit.route) { backStackEntry ->
-            val driverId = backStackEntry.arguments?.getString("driverId") ?: "d1"
+            val driverId = backStackEntry.arguments?.getString("driverId") ?: ""
             com.weelo.logistics.ui.driver.DriverProfileEditScreen(
                 driverId = driverId,
                 onNavigateBack = { navController.popBackStack() },
@@ -610,7 +702,7 @@ fun WeeloNavigation(
         
         // Driver Documents
         composable(Screen.DriverDocuments.route) { backStackEntry ->
-            val driverId = backStackEntry.arguments?.getString("driverId") ?: "d1"
+            val driverId = backStackEntry.arguments?.getString("driverId") ?: ""
             com.weelo.logistics.ui.driver.DriverDocumentsScreen(
                 driverId = driverId,
                 onNavigateBack = { navController.popBackStack() }
@@ -618,21 +710,49 @@ fun WeeloNavigation(
         }
         
         // Driver Settings
+        // NOTE: Language change is now handled by an inline ModalBottomSheet
+        // inside DriverSettingsScreen — no onChangeLanguage callback needed.
         composable(Screen.DriverSettings.route) {
             com.weelo.logistics.ui.driver.DriverSettingsScreen(
                 onNavigateBack = { navController.popBackStack() },
-                onChangeLanguage = { 
-                    navController.navigateSmooth("driver_language_selection") 
-                },
                 onLogout = {
-                    navController.navigateSmooth(
-                        route = Screen.RoleSelection.route,
-                        popUpToRoute = null,
-                        inclusive = true,
-                        restoreState = false
-                    )
+                    performLogout(navController, logoutScope)
                 }
             )
         }
+        
+        // Driver Trip History
+        composable(Screen.DriverTripHistory.route) { backStackEntry ->
+            val driverId = backStackEntry.arguments?.getString("driverId") ?: ""
+            com.weelo.logistics.ui.driver.DriverTripHistoryScreen(
+                driverId = driverId,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToTripDetails = { tripId ->
+                    navController.navigateSmooth(Screen.TripDetails.createRoute(tripId))
+                }
+            )
+        }
+        
+        // Driver Notifications
+        composable(Screen.DriverNotifications.route) { backStackEntry ->
+            val driverId = backStackEntry.arguments?.getString("driverId") ?: ""
+            com.weelo.logistics.ui.driver.DriverNotificationsScreen(
+                driverId = driverId,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToTrip = { tripId ->
+                    navController.navigateSmooth(Screen.TripDetails.createRoute(tripId))
+                }
+            )
+        }
+        
+        // =====================================================================
+        // LANGUAGE CHANGE route REMOVED.
+        //
+        // Language change from Settings is now handled by an inline
+        // ModalBottomSheet inside DriverSettingsScreen.kt — no separate
+        // screen, no navigation, no Activity.recreate().
+        //
+        // Uses MainActivity.updateLocale() for instant locale switch.
+        // =====================================================================
     }
 }

@@ -10,8 +10,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.weelo.logistics.R
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 
@@ -25,7 +27,7 @@ fun DriverDocumentsScreen(@Suppress("UNUSED_PARAMETER")
     onNavigateBack: () -> Unit
 ) {
     Column(Modifier.fillMaxSize().background(Surface)) {
-        PrimaryTopBar(title = "My Documents", onBackClick = onNavigateBack)
+        PrimaryTopBar(title = stringResource(R.string.my_documents), onBackClick = onNavigateBack)
         
         Column(
             Modifier
@@ -45,7 +47,7 @@ fun DriverDocumentsScreen(@Suppress("UNUSED_PARAMETER")
                     Icon(Icons.Default.Info, null, tint = Secondary, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "Upload clear photos of your documents for verification",
+                        stringResource(R.string.upload_documents_info),
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
@@ -54,9 +56,9 @@ fun DriverDocumentsScreen(@Suppress("UNUSED_PARAMETER")
             
             // Driving License
             DocumentCard(
-                title = "Driving License",
+                title = stringResource(R.string.driving_license),
                 subtitle = "DL1420110012345",
-                status = "Verified",
+                status = stringResource(R.string.doc_verified),
                 statusColor = Success,
                 icon = Icons.Default.Badge,
                 onView = { /* TODO */ },
@@ -65,9 +67,9 @@ fun DriverDocumentsScreen(@Suppress("UNUSED_PARAMETER")
             
             // Aadhar Card
             DocumentCard(
-                title = "Aadhar Card",
+                title = stringResource(R.string.aadhar_card),
                 subtitle = "XXXX XXXX 5678",
-                status = "Pending",
+                status = stringResource(R.string.doc_pending),
                 statusColor = Warning,
                 icon = Icons.Default.CreditCard,
                 onView = null,
@@ -76,9 +78,9 @@ fun DriverDocumentsScreen(@Suppress("UNUSED_PARAMETER")
             
             // PAN Card
             DocumentCard(
-                title = "PAN Card",
+                title = stringResource(R.string.pan_card),
                 subtitle = "ABCDE1234F",
-                status = "Not Uploaded",
+                status = stringResource(R.string.doc_not_uploaded),
                 statusColor = Error,
                 icon = Icons.Default.CreditCard,
                 onView = null,
@@ -87,9 +89,9 @@ fun DriverDocumentsScreen(@Suppress("UNUSED_PARAMETER")
             
             // Vehicle RC
             DocumentCard(
-                title = "Vehicle RC (Optional)",
+                title = stringResource(R.string.vehicle_rc_optional),
                 subtitle = "GJ-01-AB-1234",
-                status = "Verified",
+                status = stringResource(R.string.doc_verified),
                 statusColor = Success,
                 icon = Icons.Default.Description,
                 onView = { /* TODO */ },
@@ -98,9 +100,9 @@ fun DriverDocumentsScreen(@Suppress("UNUSED_PARAMETER")
             
             // Insurance
             DocumentCard(
-                title = "Vehicle Insurance (Optional)",
-                subtitle = "Valid till: 31/12/2024",
-                status = "Verified",
+                title = stringResource(R.string.vehicle_insurance_optional),
+                subtitle = stringResource(R.string.valid_till_format, "31/12/2024"),
+                status = stringResource(R.string.doc_verified),
                 statusColor = Success,
                 icon = Icons.Default.Shield,
                 onView = { /* TODO */ },
@@ -110,7 +112,7 @@ fun DriverDocumentsScreen(@Suppress("UNUSED_PARAMETER")
             Divider()
             
             Text(
-                "Note: Required documents must be verified before you can start taking trips.",
+                stringResource(R.string.documents_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = TextSecondary
             )
@@ -126,9 +128,14 @@ fun DocumentCard(
     @Suppress("UNUSED_PARAMETER") statusColor: androidx.compose.ui.graphics.Color,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     onView: (() -> Unit)?,
-    onUpload: () -> Unit
+    onUpload: () -> Unit,
+    chipStatus: ChipStatus = when {
+        statusColor == Success -> ChipStatus.COMPLETED
+        statusColor == Warning -> ChipStatus.PENDING
+        else -> ChipStatus.CANCELLED
+    }
 ) {
-    // statusColor will be used for status badge when document status UI is enhanced
+    // statusColor determines chip status type
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Row(
@@ -165,11 +172,7 @@ fun DocumentCard(
                 
                 StatusChip(
                     text = status,
-                    status = when (status) {
-                        "Verified" -> ChipStatus.COMPLETED
-                        "Pending" -> ChipStatus.PENDING
-                        else -> ChipStatus.CANCELLED
-                    }
+                    status = chipStatus
                 )
             }
             
@@ -181,7 +184,7 @@ fun DocumentCard(
             ) {
                 if (onView != null) {
                     SecondaryButton(
-                        text = "View",
+                        text = stringResource(R.string.view_button),
                         onClick = onView,
                         modifier = Modifier.weight(1f)
                     )
@@ -195,7 +198,7 @@ fun DocumentCard(
                 ) {
                     Icon(Icons.Default.Upload, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text(if (onView == null) "Upload" else "Re-upload")
+                    Text(if (onView == null) stringResource(R.string.upload_button) else stringResource(R.string.reupload_button))
                 }
             }
         }

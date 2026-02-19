@@ -167,13 +167,8 @@ object DataSanitizer {
      * Convert HTML to plain text (Android View)
      * Use for legacy code that needs Spanned
      */
-    @Suppress("DEPRECATION")
     fun fromHtml(html: String): Spanned {
-        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-            Html.fromHtml(html, Html.FROM_HTML_MODE_LEGACY)
-        } else {
-            Html.fromHtml(html)
-        }
+        return Html.fromHtml(html, Html.FROM_HTML_MODE_LEGACY)
     }
     
     /**

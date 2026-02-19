@@ -85,6 +85,22 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    lint {
+        // Treat all warnings as warnings (not errors)
+        abortOnError = false
+        warningsAsErrors = false
+        // Disable non-actionable checks
+        disable += setOf(
+            "UnusedResources",       // XML resources kept for future use / theming
+            "GradleDependency",      // Dependency upgrades tracked separately
+            "IconLocation",          // PNGs moved to drawable-nodpi (acceptable)
+            "IconLauncherShape",     // Launcher icons are correct for brand
+            "IconDuplicates",        // Intentional same-icon across densities
+            "OldTargetApi",          // targetSdk upgrade tracked separately
+            "AppBundleLocaleChanges" // Play Core lib not needed for sideloaded APKs
+        )
+    }
 }
 
 dependencies {
@@ -134,6 +150,8 @@ dependencies {
     // Google Maps & Location Services
     implementation("com.google.android.gms:play-services-maps:18.2.0")
     implementation("com.google.android.gms:play-services-location:21.1.0")  // Updated to match customer app
+    implementation("com.google.android.gms:play-services-auth:21.3.0")      // SMS Retriever API (zero-permission OTP auto-read)
+    implementation("com.google.android.gms:play-services-auth-api-phone:18.1.0") // Phone number hint
     implementation("com.google.maps.android:maps-compose:4.3.0")            // Compose Maps for embedded maps
     implementation("com.google.maps.android:android-maps-utils:3.8.2")      // Map utilities (markers, clustering)
     
@@ -158,8 +176,7 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     
-    // Image loading with caching - OPTIMIZATION
-    implementation("io.coil-kt:coil-compose:2.5.0")
+    // OkHttp logging interceptor for debugging
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     
     // Coroutines

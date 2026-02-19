@@ -19,11 +19,12 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.model.*
-import com.weelo.logistics.data.repository.MockDataRepository
+import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.data.repository.AssignmentRepository
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import timber.log.Timber
 
 /**
  * DRIVER TRIP NOTIFICATION SCREEN
@@ -45,38 +46,92 @@ import kotlinx.coroutines.launch
  * - Auto-refresh list when new notification arrives
  * - Handle notification expiry (e.g., 5 minutes timeout)
  */
+// =============================================================================
+// HELPERS
+// =============================================================================
+
+/** Maps backend AssignmentData list → DriverTripNotification list. Single source of truth. */
+private fun mapAssignmentsToNotifications(
+    assignments: List<com.weelo.logistics.data.api.AssignmentData>
+): List<DriverTripNotification> = assignments.map { a ->
+    DriverTripNotification(
+        notificationId = a.id,
+        assignmentId = a.id,
+        driverId = a.driverId,
+        pickupAddress = a.pickupAddress ?: "Pickup",
+        dropAddress = a.dropAddress ?: "Drop",
+        distance = a.distanceKm ?: 0.0,
+        estimatedDuration = ((a.distanceKm ?: 0.0) / 30.0 * 60).toLong(),
+        fare = a.pricePerTruck ?: 0.0,
+        goodsType = a.goodsType ?: a.vehicleType ?: "General",
+        status = when (a.status) {
+            "driver_accepted" -> NotificationStatus.ACCEPTED
+            "driver_declined" -> NotificationStatus.DECLINED
+            "expired" -> NotificationStatus.EXPIRED
+            else -> NotificationStatus.PENDING_RESPONSE
+        }
+    )
+}
+
 @Composable
 fun DriverTripNotificationScreen(
     driverId: String,
     onNavigateBack: () -> Unit,
     onNavigateToTripDetails: (String) -> Unit  // notificationId
 ) {
-    val scope = rememberCoroutineScope()
-    val repository = remember { MockDataRepository() }
-    // TODO: Connect to real repository from backend
     var notifications by remember { mutableStateOf<List<DriverTripNotification>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var hasNewNotification by remember { mutableStateOf(false) }
-    
-    // BACKEND: Listen for real-time notifications
+
+    // Load pending assignments as notifications from real API
     LaunchedEffect(driverId) {
-        scope.launch {
-            // Mock - Replace with: repository.getDriverNotifications(driverId)
-            // or WebSocket/FCM listener
-            notifications = repository.getMockDriverNotifications(driverId)
+        try {
+            val token = RetrofitClient.getAccessToken()
+            if (token != null) {
+                val assignmentResponse = RetrofitClient.assignmentApi.getDriverAssignments("Bearer $token")
+                if (assignmentResponse.isSuccessful && assignmentResponse.body()?.success == true) {
+                    val assignmentData = assignmentResponse.body()?.data?.assignments
+                    notifications = mapAssignmentsToNotifications(assignmentData.orEmpty())
+                    Timber.d("TripNotifications: Loaded ${notifications.size} assignments for driver")
+                } else {
+                    Timber.w("TripNotifications: API error ${assignmentResponse.code()}")
+                }
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Timber.e(e, "TripNotifications: Failed to load")
+        } finally {
             isLoading = false
         }
     }
-    
-    // Simulate new notification arriving (for demo)
+
+    // Poll for new assignments every 10 seconds (real-time via WebSocket when available)
     LaunchedEffect(Unit) {
         while (true) {
-            delay(10000) // Check every 10 seconds
-            // BACKEND: This would be triggered by FCM push notification
-            // Play sound, vibrate, show badge
-            hasNewNotification = true
-            delay(2000)
-            hasNewNotification = false
+            delay(10000)
+            try {
+                val token = RetrofitClient.getAccessToken()
+                if (token != null) {
+                    val response = RetrofitClient.assignmentApi.getDriverAssignments("Bearer $token")
+                    if (response.isSuccessful && response.body()?.success == true) {
+                        val newList = mapAssignmentsToNotifications(
+                            response.body()?.data?.assignments.orEmpty()
+                        )
+                        // Only update state + flash badge when IDs actually changed
+                        val oldIds = notifications.map { it.notificationId }
+                        val newIds = newList.map { it.notificationId }
+                        if (newIds != oldIds) {
+                            notifications = newList
+                            hasNewNotification = true
+                            delay(2000)
+                            hasNewNotification = false
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Timber.w("TripNotifications: Poll failed: ${e.message}")
+            }
         }
     }
     

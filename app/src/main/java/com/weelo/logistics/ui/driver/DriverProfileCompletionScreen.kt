@@ -78,7 +78,7 @@ fun DriverProfileCompletionScreen(
     // API integration
     val context = LocalContext.current
     // Read actual selected language from DriverPreferences (not hardcoded)
-    val driverPrefs = remember { com.weelo.logistics.data.preferences.DriverPreferences(context) }
+    val driverPrefs = remember { com.weelo.logistics.data.preferences.DriverPreferences.getInstance(context) }
     val savedLanguage by driverPrefs.selectedLanguage.collectAsState(initial = "en")
     val coroutineScope = rememberCoroutineScope()
     val repository = remember {
@@ -327,9 +327,7 @@ fun DriverProfileCompletionScreen(
                                     }
                                 } catch (e: Exception) {
                                     isLoading = false
-                                    timber.log.Timber.e("Exception: ${e.javaClass.simpleName}")
-                                    timber.log.Timber.e("Message: ${e.message}")
-                                    e.printStackTrace()
+                                    timber.log.Timber.e(e, "Exception: ${e.javaClass.simpleName} - ${e.message}")
                                     errorMessage = "Error: ${e.message ?: "Unknown error"}"
                                 }
                             }

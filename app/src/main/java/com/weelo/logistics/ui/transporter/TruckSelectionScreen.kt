@@ -236,7 +236,10 @@ fun TruckSelectionScreen(
                             }
                         }
                     } else {
-                        items(availableVehicles) { vehicle ->
+                        items(
+                            items = availableVehicles,
+                            key = { it.id }
+                        ) { vehicle ->
                             VehicleSelectionCard(
                                 vehicle = vehicle,
                                 isSelected = selectedVehicleIds.contains(vehicle.id),

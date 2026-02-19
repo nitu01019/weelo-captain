@@ -18,16 +18,39 @@ import coil.request.ImageRequest
  * OPTIMIZED IMAGE COMPONENTS
  * ==========================
  * Centralized image loading with caching and memory optimization.
+ * Instagram-style hard caching with S3 URL normalization.
  * 
  * Benefits:
- * - Memory caching for repeated images
- * - Disk caching for network images
- * - Crossfade animations
+ * - Memory caching for repeated images (25% RAM)
+ * - Disk caching for network images (100MB)
+ * - S3 URL normalization: same image = same cache key regardless of signature
+ * - Backend URL change (new upload) = automatic cache miss = fresh fetch
+ * - Crossfade animations (300ms)
  * - Proper content scaling
  */
 
 /**
- * Optimized AsyncImage for loading images from URLs with caching
+ * Normalize S3 pre-signed URLs by stripping query parameters.
+ * S3 URLs include `?X-Amz-Algorithm=...&X-Amz-Credential=...&X-Amz-Signature=...`
+ * which change on every API call even for the same image.
+ * 
+ * By using just the base path as cache key:
+ * - Same image → same cache key → instant from cache (Instagram behavior)
+ * - New upload → different S3 path → cache miss → fresh network fetch
+ */
+private fun normalizeImageUrl(url: String?): String? {
+    if (url.isNullOrBlank()) return null
+    return url.substringBefore("?")
+}
+
+/**
+ * Optimized AsyncImage for loading images from URLs with Instagram-style hard caching.
+ * 
+ * Cache strategy:
+ * - memoryCacheKey = base URL (without S3 query params)
+ * - diskCacheKey = base URL (without S3 query params)
+ * - Full URL used for network fetch (includes valid S3 signature)
+ * - Once cached, image loads instantly without network round-trip
  */
 @Suppress("UNUSED_PARAMETER")
 @Composable
@@ -40,6 +63,9 @@ fun OptimizedNetworkImage(
 ) {
     val context = LocalContext.current
     
+    // Normalize URL for cache key — strip S3 query params
+    val cacheKey = remember(imageUrl) { normalizeImageUrl(imageUrl) }
+    
     // OPTIMIZATION: Remember the image request to avoid recreation
     val imageRequest = remember(imageUrl) {
         ImageRequest.Builder(context)
@@ -47,6 +73,14 @@ fun OptimizedNetworkImage(
             .crossfade(true)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
+            // Instagram-style: use normalized URL as cache key
+            // Same image = same key even when S3 signature changes
+            .apply {
+                cacheKey?.let {
+                    memoryCacheKey(it)
+                    diskCacheKey(it)
+                }
+            }
             .build()
     }
     

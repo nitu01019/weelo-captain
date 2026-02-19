@@ -48,9 +48,12 @@ import com.weelo.logistics.core.notification.BroadcastSoundService
 import com.weelo.logistics.data.model.BroadcastTrip
 import com.weelo.logistics.data.model.RequestedVehicle
 import com.weelo.logistics.data.model.RoutePointType
+import com.weelo.logistics.data.remote.BroadcastDismissedNotification
+import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.data.repository.BroadcastRepository
 import com.weelo.logistics.data.repository.BroadcastResult
 import com.weelo.logistics.ui.theme.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val TAG = "BroadcastOverlay"
@@ -162,6 +165,39 @@ fun BroadcastOverlayScreen(
                 soundService.playBroadcastSound()
             }
         }
+    }
+    
+    // =========================================================================
+    // GRACEFUL DISMISS STATE — Tracks if current broadcast is being dismissed
+    // =========================================================================
+    var dismissInfo by remember { mutableStateOf<BroadcastDismissedNotification?>(null) }
+    
+    // Listen for broadcast dismissals
+    LaunchedEffect(Unit) {
+        SocketIOService.broadcastDismissed.collect { notification ->
+            val current = BroadcastOverlayManager.currentBroadcast.value
+            if (current != null && current.broadcastId == notification.broadcastId) {
+                // Current broadcast is being dismissed — show overlay
+                dismissInfo = notification
+                
+                // After 2s, auto-advance to next or hide overlay
+                scope.launch {
+                    delay(2000L)
+                    dismissInfo = null
+                    
+                    // If more broadcasts, advance to next; otherwise overlay hides naturally
+                    if (BroadcastOverlayManager.totalBroadcastCount.value > 1) {
+                        BroadcastOverlayManager.showNextBroadcast()
+                    }
+                    // Note: removeBroadcast is already scheduled by SocketIOService (2s delay)
+                }
+            }
+        }
+    }
+    
+    // Clear dismiss info when broadcast changes
+    LaunchedEffect(currentBroadcast?.broadcastId) {
+        dismissInfo = null
     }
     
     // =========================================================================
@@ -295,22 +331,76 @@ fun BroadcastOverlayScreen(
                     usePlatformDefaultWidth = false
                 )
             ) {
-                BroadcastOverlayContentNew(
-                    broadcast = broadcast,
-                    remainingSeconds = remainingSeconds,
-                    currentIndex = currentIndex,
-                    totalCount = totalCount,
-                    truckHoldStates = truckHoldStates,
-                    isSubmitEnabled = isSubmitEnabled,
-                    totalAcceptedQuantity = totalAcceptedQuantity,
-                    hasAnyHolding = hasAnyHolding,
-                    onAcceptTruck = ::handleAcceptTruck,
-                    onRejectTruck = ::handleRejectTruck,
-                    onSubmit = ::handleSubmit,
-                    onDismiss = ::handleDismiss,
-                    onPrevious = { BroadcastOverlayManager.showPreviousBroadcast() },
-                    onNext = { BroadcastOverlayManager.showNextBroadcast() }
-                )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // Main content (blurred when dismissed)
+                    BroadcastOverlayContentNew(
+                        broadcast = broadcast,
+                        remainingSeconds = remainingSeconds,
+                        currentIndex = currentIndex,
+                        totalCount = totalCount,
+                        truckHoldStates = truckHoldStates,
+                        isSubmitEnabled = isSubmitEnabled && dismissInfo == null,
+                        totalAcceptedQuantity = totalAcceptedQuantity,
+                        hasAnyHolding = hasAnyHolding,
+                        onAcceptTruck = ::handleAcceptTruck,
+                        onRejectTruck = ::handleRejectTruck,
+                        onSubmit = ::handleSubmit,
+                        onDismiss = ::handleDismiss,
+                        onPrevious = { BroadcastOverlayManager.showPreviousBroadcast() },
+                        onNext = { BroadcastOverlayManager.showNextBroadcast() }
+                    )
+                    
+                    // ======== DISMISS OVERLAY (blur + message) ========
+                    if (dismissInfo != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.7f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.padding(32.dp)
+                            ) {
+                                // Animated icon
+                                Text(
+                                    text = when (dismissInfo!!.reason) {
+                                        "customer_cancelled" -> "🚫"
+                                        "fully_filled" -> "✅"
+                                        else -> "⏰"
+                                    },
+                                    fontSize = 64.sp
+                                )
+                                Spacer(Modifier.height(16.dp))
+                                // Title
+                                Text(
+                                    text = when (dismissInfo!!.reason) {
+                                        "customer_cancelled" -> "ORDER CANCELLED"
+                                        "fully_filled" -> "FULLY ASSIGNED"
+                                        else -> "ORDER EXPIRED"
+                                    },
+                                    fontSize = 24.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = when (dismissInfo!!.reason) {
+                                        "customer_cancelled" -> Color(0xFFFF5252)
+                                        "fully_filled" -> Color(0xFF4CAF50)
+                                        else -> RapidoYellow
+                                    },
+                                    letterSpacing = 2.sp
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                // Message
+                                Text(
+                                    text = dismissInfo!!.message,
+                                    fontSize = 16.sp,
+                                    color = Color.White.copy(alpha = 0.9f),
+                                    textAlign = TextAlign.Center,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

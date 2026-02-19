@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -29,6 +30,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.weelo.logistics.ui.theme.*
@@ -41,6 +43,8 @@ import com.weelo.logistics.data.api.VerifyOTPRequest
 import com.weelo.logistics.data.api.VerifyOTPResponse
 import com.weelo.logistics.data.api.SendOTPRequest
 import com.weelo.logistics.WeeloApp
+import com.weelo.logistics.utils.SmsRetrieverHelper
+import com.weelo.logistics.utils.AppSignatureHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -86,6 +90,57 @@ fun OTPVerificationScreen(
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
     val context = androidx.compose.ui.platform.LocalContext.current
+    // Get real MainActivity via LocalView (LocalContext is locale-wrapped, can't cast directly)
+    val otpView = androidx.compose.ui.platform.LocalView.current
+    val otpMainActivity = remember {
+        var ctx: android.content.Context = otpView.context
+        while (ctx is android.content.ContextWrapper) {
+            if (ctx is com.weelo.logistics.MainActivity) return@remember ctx
+            ctx = ctx.baseContext
+        }
+        null
+    }
+    
+    // =========================================================================
+    // SMS AUTO-READ (Google SMS Retriever API — Zero Permission)
+    // =========================================================================
+    // Industry standard (Rapido/WhatsApp/GPay pattern):
+    // - TRANSPORTER login: OTP sent to own phone → auto-read works ✅
+    // - DRIVER login: OTP sent to transporter's phone → auto-read won't
+    //   trigger on driver's device (different phone), but enabling it is
+    //   harmless. If driver & transporter share a device, it works.
+    // - Graceful degradation: if auto-read fails, manual entry still works
+    // =========================================================================
+    val smsRetrieverHelper = remember {
+        SmsRetrieverHelper(context.applicationContext)
+    }
+    
+    // Start SMS Retriever & log app hash (for backend SMS format setup)
+    DisposableEffect(Unit) {
+        smsRetrieverHelper.start()
+        
+        // Log app hash once (for backend SMS format configuration)
+        // Only in debug builds — not needed in production
+        if (timber.log.Timber.treeCount > 0) {
+            AppSignatureHelper.getAppSignatures(context.applicationContext)
+        }
+        
+        onDispose {
+            smsRetrieverHelper.stop()
+        }
+    }
+    
+    // Auto-fill OTP when SMS Retriever reads it
+    val autoReadOtp by smsRetrieverHelper.otpCode.collectAsState()
+    val isSmsListening by smsRetrieverHelper.isListening.collectAsState()
+    LaunchedEffect(autoReadOtp) {
+        autoReadOtp?.let { otp ->
+            if (otp.length == 6 && otpValue.length < 6 && !isLoading) {
+                timber.log.Timber.i("📱 Auto-filling OTP from SMS: ${otp.take(2)}****")
+                otpValue = otp // This triggers the auto-verify LaunchedEffect below
+            }
+        }
+    }
     
     // Countdown timer
     LaunchedEffect(Unit) {
@@ -100,7 +155,7 @@ fun OTPVerificationScreen(
     LaunchedEffect(otpValue) {
         if (otpValue.length == 6) {
             keyboardController?.hide()
-            delay(50) // Minimal delay for keyboard to hide
+            // No delay — keyboard hides async, verification starts immediately
             
             val validation = InputValidator.validateOTP(otpValue)
             if (!validation.isValid) {
@@ -170,16 +225,41 @@ fun OTPVerificationScreen(
                                     .getInstance(context.applicationContext)
                                 
                                 // 1. Restore language from backend (if exists)
+                                // If backend has language → full save locally →
+                                // onboarding check will SKIP language screen.
+                                // If backend has no language → don't save →
+                                // onboarding check will SHOW language screen.
                                 val backendLang = it.driver.preferredLanguage
                                 if (!backendLang.isNullOrEmpty()) {
-                                    timber.log.Timber.i("🔑 Restoring language from backend: $backendLang")
+                                    timber.log.Timber.i("🔑 Restoring language from backend: $backendLang → skipping language screen")
                                     driverPrefs.saveLanguage(backendLang)
+                                } else {
+                                    timber.log.Timber.i("🔑 No language in backend → will show language selection screen")
                                 }
                                 
                                 // 2. Restore profile completion status from backend
                                 if (it.driver.isProfileCompleted == true) {
                                     timber.log.Timber.i("🔑 Restoring profile completed from backend")
                                     driverPrefs.markProfileCompleted()
+                                }
+                                
+                                // =========================================================
+                                // INSTANT LOCALE on Re-Login
+                                //
+                                // Apply backend language to locale IMMEDIATELY via
+                                // MainActivity.updateLocale(). No recreate(). No screen flash.
+                                // No WebSocket disruption.
+                                //
+                                // CompositionLocalProvider re-provides localized Context →
+                                // all stringResource() calls on dashboard resolve to
+                                // the correct language from the first frame.
+                                //
+                                // Normal flow continues: WebSocket + onVerifySuccess()
+                                // execute normally (no early return, no skipped code).
+                                // =========================================================
+                                if (!backendLang.isNullOrEmpty()) {
+                                    timber.log.Timber.i("🌐 Re-login with backend language '$backendLang' → instant locale update")
+                                    otpMainActivity?.updateLocale(backendLang)
                                 }
                             }
                         } else {
@@ -201,7 +281,7 @@ fun OTPVerificationScreen(
                         WeeloApp.getInstance()?.connectWebSocketIfLoggedIn()
                         
                         successMessage = "Verified successfully!"
-                        delay(150) // Quick success feedback ⚡
+                        // Zero delay — navigate instantly to dashboard
                         onVerifySuccess()
                     } else {
                         val errorMsg = if (role == "DRIVER") {
@@ -302,6 +382,16 @@ fun OTPVerificationScreen(
                 isLoading = isLoading
             )
             
+            // SMS Auto-Read Indicator (Rapido/GPay-style)
+            // Shows "Listening for SMS..." with animated dot while SMS Retriever is active
+            AnimatedVisibility(
+                visible = isSmsListening && otpValue.isEmpty() && !isLoading,
+                enter = fadeIn() + slideInVertically(),
+                exit = fadeOut() + slideOutVertically()
+            ) {
+                SmsListeningIndicator()
+            }
+            
             Spacer(modifier = Modifier.height(24.dp))
             
             // Success Message
@@ -326,6 +416,11 @@ fun OTPVerificationScreen(
                     errorMessage = ""
                     
                     scope.launch {
+                        // Restart SMS Retriever — fresh 5-min listening window
+                        // Without this, if 4+ min passed since first OTP request,
+                        // the resent SMS arrives but SmsRetriever has timed out
+                        smsRetrieverHelper.restart()
+                        
                         // Call resend OTP API
                         try {
                             withContext(Dispatchers.IO) {
@@ -684,6 +779,51 @@ private fun SuccessCard(message: String) {
                 fontWeight = FontWeight.SemiBold
             )
         }
+    }
+}
+
+// =============================================================================
+// SMS LISTENING INDICATOR — Rapido/GPay-style animated indicator
+// =============================================================================
+
+@Composable
+private fun SmsListeningIndicator() {
+    // Pulsing animation for the dot (industry standard — Rapido, GPay, PhonePe)
+    val infiniteTransition = rememberInfiniteTransition(label = "sms_pulse")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "sms_dot_alpha"
+    )
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Pulsing green dot
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .alpha(alpha)
+                .background(
+                    color = Success,
+                    shape = RoundedCornerShape(50)
+                )
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = "Waiting for OTP SMS...",
+            style = MaterialTheme.typography.bodySmall,
+            color = Success,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 

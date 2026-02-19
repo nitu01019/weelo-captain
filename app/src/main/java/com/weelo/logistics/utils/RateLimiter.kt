@@ -139,12 +139,19 @@ class RateLimiter(
         // =================================================================
         
         /**
-         * OTP: 3 requests per 5 minutes per phone number
-         * Security: Prevents OTP spam
+         * OTP: 5 requests per 2 minutes per phone number
+         * Matches backend exactly (5 OTPs / 2 min / phone)
+         * Security: Prevents OTP spam while allowing normal retries
+         * 
+         * WHY 5/2min (not 3/5min):
+         *   - Backend allows 5/2min — client must match or be slightly more permissive
+         *   - 3/5min was too aggressive — users hit rate limit after 1 real attempt
+         *     (was 1.5 due to double-counting bug, now fixed)
+         *   - Rapido/Ola use similar windows (~1-2 minutes)
          */
         fun forOTP() = RateLimiter(
-            maxRequests = 3,
-            windowMs = 5 * 60 * 1000 // 5 minutes
+            maxRequests = 5,
+            windowMs = 2 * 60 * 1000 // 2 minutes (matches backend)
         )
         
         /**

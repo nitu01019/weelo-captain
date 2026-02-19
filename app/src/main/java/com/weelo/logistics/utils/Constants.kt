@@ -105,12 +105,14 @@ object Constants {
         private const val STAGING_URL = "https://$STAGING_HOST$API_PATH"
         // TODO: CRITICAL — Change to HTTPS when SSL certificate is configured on ALB
         // Currently HTTP because ALB does not have SSL configured yet.
+        // TODO: CRITICAL — Change to HTTPS when SSL certificate is configured on ALB
         private const val PRODUCTION_URL = "http://$PRODUCTION_HOST$API_PATH"
         
         // WebSocket URLs (for Socket.IO real-time communication)
         private val WS_EMULATOR_URL = "http://$EMULATOR_HOST:$PORT"
         private val WS_DEVICE_URL = "http://$DEVICE_IP:$PORT"
         private const val WS_STAGING_URL = "wss://$STAGING_HOST"
+        // TODO: CRITICAL — Change to WSS when SSL certificate is configured on ALB
         // TODO: CRITICAL — Change to WSS when SSL certificate is configured on ALB
         private const val WS_PRODUCTION_URL = "ws://$PRODUCTION_HOST"
         

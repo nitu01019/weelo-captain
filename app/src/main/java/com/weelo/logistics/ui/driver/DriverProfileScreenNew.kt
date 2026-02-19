@@ -20,11 +20,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.weelo.logistics.R
 import com.weelo.logistics.ui.components.CameraCaptureScreen
 import com.weelo.logistics.ui.components.OptimizedNetworkImage
+import com.weelo.logistics.ui.components.SkeletonProfileLoading
 
 /**
  * =============================================================================
@@ -89,10 +92,10 @@ fun DriverProfileScreenWithPhotos(
     if (showCamera) {
         CameraCaptureScreen(
             title = when (photoTypeToUpdate) {
-                DriverProfileViewModel.PhotoType.PROFILE -> "Profile Photo"
-                DriverProfileViewModel.PhotoType.LICENSE_FRONT -> "License Front"
-                DriverProfileViewModel.PhotoType.LICENSE_BACK -> "License Back"
-                else -> "Take Photo"
+                DriverProfileViewModel.PhotoType.PROFILE -> stringResource(R.string.profile_photo_label)
+                DriverProfileViewModel.PhotoType.LICENSE_FRONT -> stringResource(R.string.license_front)
+                DriverProfileViewModel.PhotoType.LICENSE_BACK -> stringResource(R.string.license_back)
+                else -> stringResource(R.string.take_photo)
             },
             onImageCaptured = { uri ->
                 showCamera = false
@@ -125,10 +128,10 @@ fun DriverProfileScreenWithPhotos(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("My Profile") },
+                title = { Text(stringResource(R.string.my_profile)) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, "Back")
+                        Icon(Icons.Default.ArrowBack, stringResource(R.string.cd_back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -147,7 +150,7 @@ fun DriverProfileScreenWithPhotos(
         ) {
             when (val state = profileState) {
                 is ProfileState.Loading -> {
-                    CircularProgressIndicator(
+                    SkeletonProfileLoading(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
@@ -174,7 +177,7 @@ fun DriverProfileScreenWithPhotos(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Button(onClick = { viewModel.loadProfile() }) {
-                            Text("Retry")
+                            Text(stringResource(R.string.retry))
                         }
                     }
                 }
@@ -229,7 +232,7 @@ private fun ProfileContent(
                     ) {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp))
                         Spacer(modifier = Modifier.width(16.dp))
-                        Text("Uploading photo...")
+                        Text(stringResource(R.string.uploading_photo))
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
@@ -313,7 +316,7 @@ private fun ProfilePhotoSection(
                 // Profile photo with optimized caching
                 OptimizedNetworkImage(
                     imageUrl = photoUrl,
-                    contentDescription = "Profile Photo",
+                    contentDescription = stringResource(R.string.profile_photo_label),
                     modifier = Modifier
                         .size(120.dp)
                         .clip(CircleShape)
@@ -331,7 +334,7 @@ private fun ProfilePhotoSection(
                 ) {
                     Icon(
                         Icons.Default.Edit,
-                        contentDescription = "Edit",
+                        contentDescription = stringResource(R.string.cd_edit),
                         tint = Color.White,
                         modifier = Modifier.size(20.dp)
                     )
@@ -341,13 +344,13 @@ private fun ProfilePhotoSection(
             Spacer(modifier = Modifier.height(16.dp))
             
             Text(
-                text = "Profile Photo",
+                text = stringResource(R.string.profile_photo_label),
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold
             )
             
             Text(
-                text = "Visible to transporter",
+                text = stringResource(R.string.visible_to_transporter),
                 fontSize = 12.sp,
                 color = Color.Gray
             )
@@ -363,18 +366,18 @@ private fun DriverDetailsSection(profile: com.weelo.logistics.data.api.DriverPro
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Personal Information",
+                text = stringResource(R.string.personal_information),
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             
-            DetailRow("Name", profile.name)
-            DetailRow("Phone", profile.phone)
-            profile.email?.let { DetailRow("Email", it) }
-            profile.licenseNumber?.let { DetailRow("License Number", it) }
-            profile.vehicleType?.let { DetailRow("Vehicle Type", it) }
-            profile.address?.let { DetailRow("Address", it) }
+            DetailRow(stringResource(R.string.name), profile.name)
+            DetailRow(stringResource(R.string.phone), profile.phone)
+            profile.email?.let { DetailRow(stringResource(R.string.email), it) }
+            profile.licenseNumber?.let { DetailRow(stringResource(R.string.license_number), it) }
+            profile.vehicleType?.let { DetailRow(stringResource(R.string.vehicle_type), it) }
+            profile.address?.let { DetailRow(stringResource(R.string.address), it) }
         }
     }
 }
@@ -392,14 +395,14 @@ private fun LicensePhotosSection(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "License Photos",
+                text = stringResource(R.string.license_photos),
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
             
             Text(
-                text = "Only visible to you",
+                text = stringResource(R.string.only_visible_to_you),
                 fontSize = 12.sp,
                 color = Color.Gray,
                 modifier = Modifier.padding(bottom = 16.dp)
@@ -410,14 +413,14 @@ private fun LicensePhotosSection(
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 LicensePhotoCard(
-                    title = "Front",
+                    title = stringResource(R.string.front_label),
                     photoUrl = licenseFrontUrl,
                     onEditClick = onEditFront,
                     modifier = Modifier.weight(1f)
                 )
                 
                 LicensePhotoCard(
-                    title = "Back",
+                    title = stringResource(R.string.back_label),
                     photoUrl = licenseBackUrl,
                     onEditClick = onEditBack,
                     modifier = Modifier.weight(1f)
@@ -448,7 +451,7 @@ private fun LicensePhotoCard(
                 // License photo with optimized caching
                 OptimizedNetworkImage(
                     imageUrl = photoUrl,
-                    contentDescription = "License $title",
+                    contentDescription = stringResource(R.string.license_format, title),
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
@@ -463,7 +466,7 @@ private fun LicensePhotoCard(
                 ) {
                     Icon(
                         Icons.Default.Edit,
-                        contentDescription = "Edit",
+                        contentDescription = stringResource(R.string.cd_edit),
                         tint = Color(0xFF1A3A6B),
                         modifier = Modifier.size(18.dp)
                     )
@@ -510,11 +513,11 @@ private fun PhotoOptionsDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text("Update Photo", fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.update_photo), fontWeight = FontWeight.Bold)
         },
         text = {
             Column {
-                Text("Choose how to update your photo:")
+                Text(stringResource(R.string.choose_photo_method))
                 Spacer(modifier = Modifier.height(16.dp))
                 
                 // Camera option
@@ -531,8 +534,8 @@ private fun PhotoOptionsDialog(
                         Icon(Icons.Default.CameraAlt, null, modifier = Modifier.size(32.dp))
                         Spacer(modifier = Modifier.width(16.dp))
                         Column {
-                            Text("Take Photo", fontWeight = FontWeight.Bold)
-                            Text("Use camera", fontSize = 12.sp, color = Color.Gray)
+                            Text(stringResource(R.string.take_photo), fontWeight = FontWeight.Bold)
+                            Text(stringResource(R.string.use_camera), fontSize = 12.sp, color = Color.Gray)
                         }
                     }
                 }
@@ -553,8 +556,8 @@ private fun PhotoOptionsDialog(
                         Icon(Icons.Default.Image, null, modifier = Modifier.size(32.dp))
                         Spacer(modifier = Modifier.width(16.dp))
                         Column {
-                            Text("Choose from Gallery", fontWeight = FontWeight.Bold)
-                            Text("Select existing photo", fontSize = 12.sp, color = Color.Gray)
+                            Text(stringResource(R.string.choose_from_gallery), fontWeight = FontWeight.Bold)
+                            Text(stringResource(R.string.select_existing_photo), fontSize = 12.sp, color = Color.Gray)
                         }
                     }
                 }
@@ -562,7 +565,7 @@ private fun PhotoOptionsDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(stringResource(R.string.cancel))
             }
         }
     )

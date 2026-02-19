@@ -72,7 +72,7 @@ object NavAnimations {
     
     /**
      * Slide out to left - for navigating forward (current screen exits)
-     * OPTIMIZED: Smaller offset (1/5 instead of 1/4) for parallax effect
+     * OPTIMIZED: Pure slide without fade — eliminates alpha blending GPU overhead
      */
     val slideOutToLeft: ExitTransition = slideOutHorizontally(
         targetOffsetX = { fullWidth -> -fullWidth / 5 },
@@ -80,17 +80,11 @@ object NavAnimations {
             durationMillis = DURATION_STANDARD,
             easing = EasingFastOutLinearIn
         )
-    ) + fadeOut(
-        animationSpec = tween(
-            durationMillis = DURATION_FAST,
-            easing = LinearEasing
-        ),
-        targetAlpha = 0.7f  // Don't fade fully - reduces GPU work
     )
     
     /**
      * Slide in from left - for navigating back
-     * OPTIMIZED: No fade, pure hardware-accelerated slide
+     * OPTIMIZED: Pure slide without fade — eliminates alpha blending GPU overhead
      */
     val slideInFromLeft: EnterTransition = slideInHorizontally(
         initialOffsetX = { fullWidth -> -fullWidth / 5 },
@@ -98,12 +92,6 @@ object NavAnimations {
             durationMillis = DURATION_STANDARD,
             easing = EasingLinearOutSlowIn
         )
-    ) + fadeIn(
-        animationSpec = tween(
-            durationMillis = DURATION_FAST,
-            easing = LinearEasing
-        ),
-        initialAlpha = 0.7f
     )
     
     /**

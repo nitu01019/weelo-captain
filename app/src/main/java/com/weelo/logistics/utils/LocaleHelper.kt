@@ -39,25 +39,14 @@ object LocaleHelper {
         val configuration = Configuration(context.resources.configuration)
         configuration.setLocale(locale)
         
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            context.createConfigurationContext(configuration)
-        } else {
-            @Suppress("DEPRECATION")
-            context.resources.updateConfiguration(configuration, context.resources.displayMetrics)
-            context
-        }
+        return context.createConfigurationContext(configuration)
     }
     
     /**
      * Get current app locale
      */
     fun getCurrentLocale(context: Context): Locale {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            context.resources.configuration.locales[0]
-        } else {
-            @Suppress("DEPRECATION")
-            context.resources.configuration.locale
-        }
+        return context.resources.configuration.locales[0]
     }
     
     /**

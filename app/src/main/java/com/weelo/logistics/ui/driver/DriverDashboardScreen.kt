@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.components.rememberScreenConfig
@@ -32,7 +33,9 @@ import com.weelo.logistics.offline.NetworkMonitor
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.launch
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.collectAsState
+import com.weelo.logistics.R
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.roundToInt
@@ -70,6 +73,7 @@ fun DriverDashboardScreen(
 ) {
     val dashboardState by viewModel.dashboardState.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val isToggling by viewModel.isToggling.collectAsState()
     // NOTE: viewModel.isInitialLoad is available for future use (e.g., showing
     // different UI on first launch vs returning user). Currently, the conditional
     // drawer + AnimatedContent handles state transitions automatically.
@@ -129,20 +133,72 @@ fun DriverDashboardScreen(
     }
     
     // Optimize: Create menu items only when notificationCount changes
-    val menuItems = remember(notificationCount) {
+    // Extract strings outside remember {} since stringResource is @Composable
+    val dashboardStr = stringResource(R.string.dashboard)
+    val tripHistoryStr = stringResource(R.string.trip_history)
+    val earningsStr = stringResource(R.string.earnings_menu)
+    val documentsStr = stringResource(R.string.documents_menu)
+    val settingsStr = stringResource(R.string.settings)
+    
+    val menuItems = remember(notificationCount, dashboardStr, tripHistoryStr, earningsStr, documentsStr, settingsStr) {
         createDriverMenuItems(
-            onDashboard = { },
-            onTripHistory = { },
-            onEarnings = { },
-            onDocuments = { },
-            onSettings = { },
-            notificationCount = notificationCount
+            onDashboard = { /* Already on dashboard — just close drawer */ scope.launch { drawerState.close() } },
+            onTripHistory = { closeDrawerAndNavigate(onNavigateToTripHistory) },
+            onEarnings = { closeDrawerAndNavigate(onNavigateToEarnings) },
+            onDocuments = { closeDrawerAndNavigate(onNavigateToDocuments) },
+            onSettings = { closeDrawerAndNavigate(onNavigateToSettings) },
+            notificationCount = notificationCount,
+            strings = mapOf(
+                "dashboard" to dashboardStr,
+                "trip_history" to tripHistoryStr,
+                "earnings" to earningsStr,
+                "documents" to documentsStr,
+                "settings" to settingsStr
+            )
         )
     }
     
     // Load data when screen first opens
     LaunchedEffect(Unit) {
         viewModel.loadDashboardData()
+    }
+    
+    // =========================================================================
+    // ORDER CANCELLATION — Show snackbar with Call Customer action
+    // =========================================================================
+    val cancelSnackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
+    val driverContext = androidx.compose.ui.platform.LocalContext.current
+    var lastCancelledCustomerPhone by remember { mutableStateOf("") }
+    
+    LaunchedEffect(Unit) {
+        SocketIOService.orderCancelled.collect { notification ->
+            timber.log.Timber.w("🚫 Order cancelled on driver dashboard: ${notification.orderId}")
+            lastCancelledCustomerPhone = notification.customerPhone
+            
+            val customerInfo = if (notification.customerName.isNotBlank()) 
+                "${notification.customerName}: " else ""
+            
+            val result = cancelSnackbarHostState.showSnackbar(
+                message = "❌ ${customerInfo}${notification.reason}",
+                actionLabel = if (notification.customerPhone.isNotBlank()) "📞 Call" else null,
+                duration = androidx.compose.material3.SnackbarDuration.Long
+            )
+            
+            // If user tapped "Call" action on snackbar
+            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed && 
+                lastCancelledCustomerPhone.isNotBlank()) {
+                val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
+                    data = android.net.Uri.parse("tel:$lastCancelledCustomerPhone")
+                    // FLAG_ACTIVITY_NEW_TASK required when launching from non-Activity context
+                    // (e.g. locale-wrapped context from MainActivity.attachBaseContext)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                driverContext.startActivity(intent)
+            }
+            
+            // Refresh dashboard data
+            viewModel.loadDashboardData()
+        }
     }
     
     // BACK BUTTON DISABLED - User must explicitly logout from profile
@@ -183,43 +239,16 @@ fun DriverDashboardScreen(
         }
     }
     
-    when {
-        // =====================================================================
-        // IDLE / LOADING STATE — No drawer, just skeleton + top bar
-        // =====================================================================
-        // Idle = initial state before data fetch starts
-        // Loading = data fetch took > 150ms, showing skeleton
-        // Both show the same skeleton — no drawer overhead
-        // =====================================================================
-        dashboardState is DriverDashboardState.Idle || dashboardState is DriverDashboardState.Loading -> {
-            Scaffold(
-                topBar = {
-                    DriverDashboardTopBar(
-                        driverName = "Driver",
-                        unreadCount = 0,
-                        onMenuClick = { /* Drawer disabled during loading */ },
-                        onNotificationsClick = { },
-                        onProfileClick = { }
-                    )
-                }
-            ) { paddingValues ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues)
-                ) {
-                    DriverDashboardSkeleton()
-                }
-            }
-        }
-        
-        // =====================================================================
-        // SUCCESS / ERROR — Full drawer + content with smooth transitions
-        // =====================================================================
-        else -> {
+    // =========================================================================
+    // SINGLE COMPOSITION TREE — Drawer always present, content transitions
+    // smoothly via AnimatedContent. No visual jump between loading → content.
+    // Drawer gestures disabled during loading, enabled after content loads.
+    // =========================================================================
+    run {
+            val isContentReady = dashboardState is DriverDashboardState.Success || dashboardState is DriverDashboardState.Error
             ModalNavigationDrawer(
                 drawerState = drawerState,
-                gesturesEnabled = true,
+                gesturesEnabled = isContentReady,
                 drawerContent = {
                     ModalDrawerSheet(
                         modifier = if (isDrawerVisible) Modifier.width(280.dp) else Modifier.width(0.dp),
@@ -250,11 +279,15 @@ fun DriverDashboardScreen(
                     topBar = {
                         DriverDashboardTopBar(
                             driverName = "Driver",
-                            unreadCount = notificationCount,
-                            onMenuClick = remember(scope, drawerState) { { scope.launch { drawerState.open() } } },
-                            onNotificationsClick = onNavigateToNotifications,
-                            onProfileClick = onNavigateToProfile
+                            unreadCount = if (isContentReady) notificationCount else 0,
+                            onMenuClick = if (isContentReady) remember(scope, drawerState) { { scope.launch { drawerState.open() } } } else { {} },
+                            onNotificationsClick = if (isContentReady) onNavigateToNotifications else { {} },
+                            onProfileClick = if (isContentReady) onNavigateToProfile else { {} }
                         )
+                    },
+                    snackbarHost = {
+                        // Renders order-cancellation snackbar with "Call Customer" action
+                        androidx.compose.material3.SnackbarHost(hostState = cancelSnackbarHostState)
                     }
                 ) { paddingValues ->
                 Column(
@@ -298,7 +331,8 @@ fun DriverDashboardScreen(
                                         onOpenFullMap = onOpenFullMap,
                                         onNavigateToTripHistory = onNavigateToTripHistory,
                                         onMarkNotificationAsRead = { viewModel.markNotificationAsRead(it) },
-                                        isRefreshing = isRefreshing
+                                        isRefreshing = isRefreshing,
+                                        isToggling = isToggling
                                     )
                                 }
                             }
@@ -314,8 +348,8 @@ fun DriverDashboardScreen(
                             }
                             
                             else -> {
-                                // "loading" — shouldn't reach here (handled above)
-                                // but safety fallback
+                                // Loading state — shows skeleton inside same layout tree
+                                // No visual jump since Scaffold/TopBar are already rendered
                                 DriverDashboardSkeleton()
                             }
                         }
@@ -324,8 +358,7 @@ fun DriverDashboardScreen(
                 } // End Column
                 } // End Scaffold
             } // End ModalNavigationDrawer
-        }
-    } // End when
+    } // End run
 }
 
 /**
@@ -344,13 +377,14 @@ private fun DriverDashboardTopBar(
         title = {
             Column {
                 Text(
-                    text = "Welcome, ${driverName.split(" ").firstOrNull() ?: "Driver"}!",
+                    text = stringResource(R.string.welcome_format, driverName.split(" ").firstOrNull() ?: "Driver"),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary
                 )
+                val greetingContext = LocalContext.current
                 Text(
-                    text = getCurrentGreeting(),
+                    text = getCurrentGreeting(greetingContext),
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
@@ -360,7 +394,7 @@ private fun DriverDashboardTopBar(
             IconButton(onClick = onMenuClick) {
                 Icon(
                     imageVector = Icons.Default.Menu,
-                    contentDescription = "Menu",
+                    contentDescription = stringResource(R.string.cd_menu),
                     tint = TextPrimary
                 )
             }
@@ -371,7 +405,7 @@ private fun DriverDashboardTopBar(
                 Box {
                     Icon(
                         imageVector = Icons.Default.Notifications,
-                        contentDescription = "Notifications",
+                        contentDescription = stringResource(R.string.cd_notifications),
                         tint = TextPrimary
                     )
                     if (unreadCount > 0) {
@@ -391,7 +425,7 @@ private fun DriverDashboardTopBar(
             IconButton(onClick = onProfileClick) {
                 Icon(
                     imageVector = Icons.Default.AccountCircle,
-                    contentDescription = "Profile",
+                    contentDescription = stringResource(R.string.cd_profile),
                     tint = TextPrimary
                 )
             }
@@ -414,12 +448,13 @@ private fun DashboardTopBar(
         title = {
             Column {
                 Text(
-                    text = "Dashboard",
+                    text = stringResource(R.string.dashboard),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
+                val oldGreetingContext = LocalContext.current
                 Text(
-                    text = getCurrentGreeting(),
+                    text = getCurrentGreeting(oldGreetingContext),
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
@@ -430,7 +465,7 @@ private fun DashboardTopBar(
                 Box {
                     Icon(
                         imageVector = Icons.Default.Notifications,
-                        contentDescription = "Notifications"
+                        contentDescription = stringResource(R.string.cd_notifications)
                     )
                     if (unreadCount > 0) {
                         NotificationBadge(
@@ -444,7 +479,7 @@ private fun DashboardTopBar(
             IconButton(onClick = onProfileClick) {
                 Icon(
                     imageVector = Icons.Default.AccountCircle,
-                    contentDescription = "Profile"
+                    contentDescription = stringResource(R.string.cd_profile)
                 )
             }
         },
@@ -463,7 +498,8 @@ private fun DashboardContent(
     onOpenFullMap: (String) -> Unit,
     onNavigateToTripHistory: () -> Unit,
     onMarkNotificationAsRead: (String) -> Unit,
-    isRefreshing: Boolean
+    isRefreshing: Boolean,
+    isToggling: Boolean = false
 ) {
     // Responsive layout configuration
     val screenConfig = rememberScreenConfig()
@@ -485,7 +521,8 @@ private fun DashboardContent(
                 OnlineStatusToggle(
                     isOnline = data.isOnline,
                     onToggle = onToggleOnlineStatus,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    isToggling = isToggling
                 )
             }
             
@@ -547,16 +584,17 @@ private fun DashboardContent(
                 item {
                     EmptyState(
                         icon = Icons.Default.History,
-                        title = "No Trips Yet",
-                        message = "Your completed trips will appear here. Start accepting trips from transporters!",
+                        title = stringResource(R.string.no_trips_yet),
+                        message = stringResource(R.string.no_trips_message),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
             } else {
-                // OPTIMIZATION: Add keys to prevent unnecessary recompositions
+                // OPTIMIZATION: keys + contentType for efficient item recycling
                 items(
                     items = data.recentTrips.take(5),
-                    key = { it.tripId }
+                    key = { it.tripId },
+                    contentType = { "trip_history" }
                 ) { trip ->
                     TripHistoryItem(trip = trip)
                 }
@@ -565,7 +603,7 @@ private fun DashboardContent(
             // Notifications Preview
             item {
                 Text(
-                    text = "Recent Notifications",
+                    text = stringResource(R.string.recent_notifications),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(top = 8.dp)
@@ -576,16 +614,17 @@ private fun DashboardContent(
                 item {
                     EmptyState(
                         icon = Icons.Default.NotificationsNone,
-                        title = "No Notifications",
-                        message = "You're all caught up! New trip requests and updates will appear here.",
+                        title = stringResource(R.string.no_notifications),
+                        message = stringResource(R.string.no_notifications_message),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
             } else {
-                // OPTIMIZATION: Add keys to prevent unnecessary recompositions
+                // OPTIMIZATION: keys + contentType for efficient item recycling
                 items(
                     items = data.notifications.take(3),
-                    key = { it.id }
+                    key = { it.id },
+                    contentType = { "notification" }
                 ) { notification ->
                     NotificationItem(
                         notification = notification,
@@ -631,7 +670,7 @@ private fun EarningsCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Your Earnings",
+                    text = stringResource(R.string.your_earnings),
                     style = MaterialTheme.typography.titleMedium,
                     color = Secondary,  // Black text on yellow
                     fontWeight = FontWeight.Bold
@@ -662,13 +701,13 @@ private fun EarningsCard(
                         )
                     )
                     Text(
-                        text = "Start accepting trips to earn!",
+                        text = stringResource(R.string.start_accepting_trips),
                         style = MaterialTheme.typography.bodyMedium,
                         color = Secondary.copy(alpha = 0.7f),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                     Text(
-                        text = "Your earnings will be calculated automatically",
+                        text = stringResource(R.string.earnings_auto_calculated),
                         style = MaterialTheme.typography.bodySmall,
                         color = Secondary.copy(alpha = 0.5f),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -683,7 +722,7 @@ private fun EarningsCard(
                 ) {
                     Column {
                         Text(
-                            text = "Today",
+                            text = stringResource(R.string.today),
                             style = MaterialTheme.typography.bodySmall,
                             color = Secondary.copy(alpha = 0.7f)
                         )
@@ -696,7 +735,7 @@ private fun EarningsCard(
                             )
                         )
                         Text(
-                            text = "${earnings.todayTrips} trips",
+                            text = stringResource(R.string.trips_count, earnings.todayTrips),
                             style = MaterialTheme.typography.bodySmall,
                             color = Secondary.copy(alpha = 0.7f)
                         )
@@ -713,13 +752,13 @@ private fun EarningsCard(
                     horizontalArrangement = Arrangement.SpaceAround
                 ) {
                     EarningsPeriod(
-                        label = "This Week",
+                        label = stringResource(R.string.this_week),
                         amount = earnings.weekly,
                         trips = earnings.weeklyTrips
                     )
                     
                     EarningsPeriod(
-                        label = "This Month",
+                        label = stringResource(R.string.this_month),
                         amount = earnings.monthly,
                         trips = earnings.monthlyTrips
                     )
@@ -752,7 +791,7 @@ private fun EarningsCard(
                                 modifier = Modifier.size(20.dp)
                             )
                             Text(
-                                text = "Pending Payment",
+                                text = stringResource(R.string.pending_payment),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Secondary,
                                 fontWeight = FontWeight.Medium
@@ -795,7 +834,7 @@ private fun EarningsPeriod(
             )
         )
         Text(
-            text = "$trips trips",
+            text = stringResource(R.string.trips_count, trips),
             style = MaterialTheme.typography.bodySmall,
             color = White.copy(alpha = 0.8f)
         )
@@ -833,15 +872,16 @@ private fun ActiveTripCard(
                             .background(Success)
                     )
                     Text(
-                        text = "Active Trip",
+                        text = stringResource(R.string.active_trip),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = Success
                     )
                 }
                 
+                val statusContext = LocalContext.current
                 Text(
-                    text = getStatusText(trip.currentStatus),
+                    text = getStatusText(statusContext, trip.currentStatus),
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
@@ -894,12 +934,12 @@ private fun ActiveTripCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Time Elapsed: ${elapsedMinutes} mins",
+                    text = stringResource(R.string.time_elapsed_format, elapsedMinutes),
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
                 Text(
-                    text = "ETA: ${trip.estimatedDuration} mins",
+                    text = stringResource(R.string.eta_format, trip.estimatedDuration),
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
@@ -917,7 +957,7 @@ private fun TripStatsGrid(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            text = "Quick Stats",
+            text = stringResource(R.string.quick_stats),
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold
         )
@@ -931,7 +971,7 @@ private fun TripStatsGrid(
                 StatCard(
                     icon = Icons.Default.CheckCircle,
                     value = "${performance.totalTrips}",
-                    label = "Total Trips",
+                    label = stringResource(R.string.total_trips),
                     modifier = Modifier.weight(1f),
                     iconColor = Success
                 )
@@ -939,7 +979,7 @@ private fun TripStatsGrid(
                 StatCard(
                     icon = Icons.Default.Route,
                     value = "${performance.totalDistance.roundToInt()} km",
-                    label = "Distance",
+                    label = stringResource(R.string.distance_label),
                     modifier = Modifier.weight(1f),
                     iconColor = Secondary
                 )
@@ -947,7 +987,7 @@ private fun TripStatsGrid(
                 StatCard(
                     icon = Icons.Default.Star,
                     value = String.format("%.1f", performance.rating),
-                    label = "Rating",
+                    label = stringResource(R.string.rating_label),
                     modifier = Modifier.weight(1f),
                     iconColor = Warning
                 )
@@ -955,13 +995,14 @@ private fun TripStatsGrid(
                 StatCard(
                     icon = Icons.Default.Timer,
                     value = "${performance.onTimeDeliveryRate.roundToInt()}%",
-                    label = "On-Time",
+                    label = stringResource(R.string.on_time_label),
                     modifier = Modifier.weight(1f),
                     iconColor = Info
                 )
             }
         } else {
-            // Portrait - 2 columns
+            // Portrait — 2×2 grid: all 4 stats always visible
+            // Row 1: Trips + Distance
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -969,7 +1010,7 @@ private fun TripStatsGrid(
                 StatCard(
                     icon = Icons.Default.CheckCircle,
                     value = "${performance.totalTrips}",
-                    label = "Total Trips",
+                    label = stringResource(R.string.total_trips),
                     modifier = Modifier.weight(1f),
                     iconColor = Success
                 )
@@ -977,9 +1018,30 @@ private fun TripStatsGrid(
                 StatCard(
                     icon = Icons.Default.Route,
                     value = "${performance.totalDistance.roundToInt()} km",
-                    label = "Distance",
+                    label = stringResource(R.string.distance_label),
                     modifier = Modifier.weight(1f),
                     iconColor = Secondary
+                )
+            }
+            // Row 2: Rating + On-Time
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                StatCard(
+                    icon = Icons.Default.Star,
+                    value = String.format("%.1f", performance.rating),
+                    label = stringResource(R.string.rating_label),
+                    modifier = Modifier.weight(1f),
+                    iconColor = Warning
+                )
+                
+                StatCard(
+                    icon = Icons.Default.Timer,
+                    value = "${performance.onTimeDeliveryRate.roundToInt()}%",
+                    label = stringResource(R.string.on_time_label),
+                    modifier = Modifier.weight(1f),
+                    iconColor = Info
                 )
             }
         }
@@ -1000,7 +1062,7 @@ private fun PerformanceMetricsCard(performance: PerformanceMetrics) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                text = "Performance",
+                text = stringResource(R.string.performance),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
@@ -1019,12 +1081,12 @@ private fun PerformanceMetricsCard(performance: PerformanceMetrics) {
                         modifier = Modifier.size(48.dp)
                     )
                     Text(
-                        text = "No Performance Data",
+                        text = stringResource(R.string.no_performance_data),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Complete trips to build your performance metrics",
+                        text = stringResource(R.string.complete_trips_performance),
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -1037,19 +1099,19 @@ private fun PerformanceMetricsCard(performance: PerformanceMetrics) {
                 ) {
                     PerformanceIndicator(
                         percentage = (performance.rating / 5.0) * 100,
-                        label = "Rating\n${String.format("%.1f", performance.rating)}⭐",
+                        label = stringResource(R.string.rating_format, String.format("%.1f", performance.rating)),
                         color = Warning
                     )
                     
                     PerformanceIndicator(
                         percentage = performance.acceptanceRate,
-                        label = "Acceptance\nRate",
+                        label = stringResource(R.string.acceptance_rate),
                         color = Success
                     )
                     
                     PerformanceIndicator(
                         percentage = performance.onTimeDeliveryRate,
-                        label = "On-Time\nDelivery",
+                        label = stringResource(R.string.on_time_delivery),
                         color = Secondary
                     )
                 }
@@ -1066,13 +1128,13 @@ private fun RecentTripsHeader(onViewAll: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = "Recent Trips",
+            text = stringResource(R.string.recent_trips),
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold
         )
         
         TextButton(onClick = onViewAll) {
-            Text(text = "View All")
+            Text(text = stringResource(R.string.view_all))
             Icon(
                 imageVector = Icons.Default.ArrowForward,
                 contentDescription = null,
@@ -1196,8 +1258,9 @@ private fun NotificationItem(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
+                val timeAgoContext = LocalContext.current
                 Text(
-                    text = formatTimeAgo(notification.timestamp),
+                    text = formatTimeAgo(timeAgoContext, notification.timestamp),
                     style = MaterialTheme.typography.bodySmall,
                     color = TextDisabled
                 )
@@ -1244,7 +1307,7 @@ private fun ErrorState(
         Spacer(modifier = Modifier.height(16.dp))
         
         Text(
-            text = "Oops! Something went wrong",
+            text = stringResource(R.string.oops_something_wrong),
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold
         )
@@ -1261,7 +1324,7 @@ private fun ErrorState(
         Button(onClick = onRetry) {
             Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Retry")
+            Text(stringResource(R.string.retry))
         }
     }
 }

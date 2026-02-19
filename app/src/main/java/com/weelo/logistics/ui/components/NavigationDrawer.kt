@@ -26,8 +26,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.weelo.logistics.R
 import com.weelo.logistics.ui.theme.*
 
 /**
@@ -170,7 +172,7 @@ private fun DrawerContent(
         
         // App Version
         Text(
-            text = "Weelo Captain v1.0.0",
+            text = stringResource(R.string.app_version_format, "1.0.0"),
             style = MaterialTheme.typography.bodySmall,
             color = TextDisabled,
             modifier = Modifier
@@ -300,7 +302,7 @@ private fun DrawerHeader(
                 
                 // User Name
                 Text(
-                    text = userProfile.name.ifEmpty { "Set your name" },
+                    text = userProfile.name.ifEmpty { stringResource(R.string.set_your_name) },
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = Color.White,
@@ -378,7 +380,7 @@ private fun DrawerHeader(
                             Spacer(modifier = Modifier.width(6.dp))
                             Icon(
                                 imageVector = Icons.Default.Verified,
-                                contentDescription = "Verified",
+                                contentDescription = stringResource(R.string.cd_verified),
                                 tint = Color.White,
                                 modifier = Modifier.size(16.dp)
                             )
@@ -392,7 +394,7 @@ private fun DrawerHeader(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Tap to edit profile",
+                        text = stringResource(R.string.tap_edit_profile),
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.White.copy(alpha = 0.7f)
                     )
@@ -418,7 +420,7 @@ private fun DrawerHeader(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    text = "Not logged in",
+                    text = stringResource(R.string.not_logged_in),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = Color.White
@@ -504,13 +506,13 @@ private fun DrawerLogoutButton(onLogout: () -> Unit) {
         ) {
             Icon(
                 imageVector = Icons.Default.Logout,
-                contentDescription = "Logout",
+                contentDescription = stringResource(R.string.cd_logout),
                 tint = Error,
                 modifier = Modifier.size(24.dp)
             )
             Spacer(modifier = Modifier.width(12.dp))
             Text(
-                text = "Logout",
+                text = stringResource(R.string.logout),
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = Error
@@ -522,6 +524,9 @@ private fun DrawerLogoutButton(onLogout: () -> Unit) {
 /**
  * Helper function to create transporter menu items
  * NOTE: Broadcasts menu removed - broadcasts shown via overlay only
+ * 
+ * @param strings Map of localized strings. Required keys:
+ *   - "dashboard", "my_fleet", "my_drivers", "trips", "settings"
  */
 @Suppress("UNUSED_PARAMETER")
 fun createTransporterMenuItems(
@@ -531,32 +536,33 @@ fun createTransporterMenuItems(
     onTrips: () -> Unit,
     onBroadcasts: () -> Unit,  // Kept for compatibility, but not used
     onSettings: () -> Unit,
-    notificationCount: Int = 0
+    notificationCount: Int = 0,
+    strings: Map<String, String> = emptyMap()
 ): List<DrawerMenuItem> = listOf(
     DrawerMenuItem(
         id = "dashboard",
-        title = "Dashboard",
+        title = strings["dashboard"] ?: "Dashboard",
         icon = Icons.Outlined.Dashboard,
         selectedIcon = Icons.Filled.Dashboard,
         onClick = onDashboard
     ),
     DrawerMenuItem(
         id = "fleet",
-        title = "My Fleet",
+        title = strings["my_fleet"] ?: "My Fleet",
         icon = Icons.Outlined.LocalShipping,
         selectedIcon = Icons.Filled.LocalShipping,
         onClick = onFleet
     ),
     DrawerMenuItem(
         id = "drivers",
-        title = "My Drivers",
+        title = strings["my_drivers"] ?: "My Drivers",
         icon = Icons.Outlined.People,
         selectedIcon = Icons.Filled.People,
         onClick = onDrivers
     ),
     DrawerMenuItem(
         id = "trips",
-        title = "Trips",
+        title = strings["trips"] ?: "Trips",
         icon = Icons.Outlined.Route,
         selectedIcon = Icons.Filled.Route,
         onClick = onTrips
@@ -564,7 +570,7 @@ fun createTransporterMenuItems(
     // Broadcasts menu item REMOVED - broadcasts shown via overlay
     DrawerMenuItem(
         id = "settings",
-        title = "Settings",
+        title = strings["settings"] ?: "Settings",
         icon = Icons.Outlined.Settings,
         selectedIcon = Icons.Filled.Settings,
         onClick = onSettings
@@ -573,6 +579,9 @@ fun createTransporterMenuItems(
 
 /**
  * Helper function to create driver menu items
+ * 
+ * @param strings Map of localized strings. Required keys:
+ *   - "dashboard", "trip_history", "earnings", "documents", "settings"
  */
 @Suppress("UNUSED_PARAMETER")
 fun createDriverMenuItems(
@@ -581,39 +590,40 @@ fun createDriverMenuItems(
     onEarnings: () -> Unit,
     onDocuments: () -> Unit,
     onSettings: () -> Unit,
-    notificationCount: Int = 0
+    notificationCount: Int = 0,
+    strings: Map<String, String> = emptyMap()
 ): List<DrawerMenuItem> = listOf(
     DrawerMenuItem(
         id = "dashboard",
-        title = "Dashboard",
+        title = strings["dashboard"] ?: "Dashboard",
         icon = Icons.Outlined.Dashboard,
         selectedIcon = Icons.Filled.Dashboard,
         onClick = onDashboard
     ),
     DrawerMenuItem(
         id = "trips",
-        title = "Trip History",
+        title = strings["trip_history"] ?: "Trip History",
         icon = Icons.Outlined.History,
         selectedIcon = Icons.Filled.History,
         onClick = onTripHistory
     ),
     DrawerMenuItem(
         id = "earnings",
-        title = "Earnings",
+        title = strings["earnings"] ?: "Earnings",
         icon = Icons.Outlined.AccountBalanceWallet,
         selectedIcon = Icons.Filled.AccountBalanceWallet,
         onClick = onEarnings
     ),
     DrawerMenuItem(
         id = "documents",
-        title = "Documents",
+        title = strings["documents"] ?: "Documents",
         icon = Icons.Outlined.Description,
         selectedIcon = Icons.Filled.Description,
         onClick = onDocuments
     ),
     DrawerMenuItem(
         id = "settings",
-        title = "Settings",
+        title = strings["settings"] ?: "Settings",
         icon = Icons.Outlined.Settings,
         selectedIcon = Icons.Filled.Settings,
         onClick = onSettings

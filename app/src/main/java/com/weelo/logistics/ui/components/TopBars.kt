@@ -17,6 +17,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.weelo.logistics.R
 import com.weelo.logistics.ui.theme.*
 
 // =============================================================================
@@ -66,7 +68,7 @@ fun PrimaryTopBar(
             IconButton(onClick = onBackClick) {
                 Icon(
                     imageVector = Icons.Default.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = stringResource(R.string.cd_back),
                     tint = TextPrimary
                 )
             }
@@ -133,9 +135,9 @@ fun SimpleTopBar(
 @Composable
 fun DashboardTopBar(
     title: String,
-    subtitle: String? = null,
     onMenuClick: () -> Unit,
     modifier: Modifier = Modifier,
+    subtitle: String? = null,
     notificationCount: Int = 0,
     onNotificationsClick: (() -> Unit)? = null,
     onProfileClick: (() -> Unit)? = null,
@@ -167,7 +169,7 @@ fun DashboardTopBar(
             IconButton(onClick = onMenuClick) {
                 Icon(
                     imageVector = Icons.Default.Menu,
-                    contentDescription = "Menu",
+                    contentDescription = stringResource(R.string.cd_menu),
                     tint = TextPrimary
                 )
             }
@@ -181,7 +183,7 @@ fun DashboardTopBar(
                     Box {
                         Icon(
                             imageVector = Icons.Outlined.Notifications,
-                            contentDescription = "Notifications",
+                            contentDescription = stringResource(R.string.cd_notifications),
                             tint = TextPrimary
                         )
                         if (notificationCount > 0) {
@@ -207,7 +209,7 @@ fun DashboardTopBar(
                 IconButton(onClick = onProfileClick) {
                     Icon(
                         imageVector = Icons.Outlined.AccountCircle,
-                        contentDescription = "Profile",
+                        contentDescription = stringResource(R.string.cd_profile),
                         tint = TextPrimary
                     )
                 }
@@ -233,7 +235,7 @@ fun SearchTopBar(
     onSearchQueryChange: (String) -> Unit,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
-    placeholder: String = "Search...",
+    placeholder: String = stringResource(R.string.search_placeholder),
     onClearClick: () -> Unit = { onSearchQueryChange("") }
 ) {
     TopAppBar(
@@ -260,7 +262,7 @@ fun SearchTopBar(
                         IconButton(onClick = onClearClick) {
                             Icon(
                                 imageVector = Icons.Default.Clear,
-                                contentDescription = "Clear",
+                                contentDescription = stringResource(R.string.cd_clear),
                                 tint = TextSecondary
                             )
                         }
@@ -280,7 +282,7 @@ fun SearchTopBar(
             IconButton(onClick = onBackClick) {
                 Icon(
                     imageVector = Icons.Default.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = stringResource(R.string.cd_back),
                     tint = TextPrimary
                 )
             }
@@ -372,7 +374,7 @@ fun BrandedTopBar(
             IconButton(onClick = onBackClick) {
                 Icon(
                     imageVector = Icons.Default.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = stringResource(R.string.cd_back),
                     tint = OnPrimary
                 )
             }

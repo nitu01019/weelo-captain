@@ -1,5 +1,6 @@
 package com.weelo.logistics.core.notification
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
@@ -38,6 +39,7 @@ import kotlinx.coroutines.flow.StateFlow
  */
 class BroadcastSoundService private constructor(private val context: Context) {
     
+    @SuppressLint("StaticFieldLeak")
     companion object {
         private const val TAG = "BroadcastSound"
         private const val PREFS_NAME = "broadcast_sound_prefs"
@@ -121,7 +123,8 @@ class BroadcastSoundService private constructor(private val context: Context) {
             description = "Truck horn sound"
         );
         
-        companion object {
+        @SuppressLint("StaticFieldLeak")
+    companion object {
             fun fromId(id: String): SoundOption {
                 return values().find { it.id == id } ?: DEFAULT
             }
@@ -150,7 +153,8 @@ class BroadcastSoundService private constructor(private val context: Context) {
         URGENT("urgent", "Urgent", longArrayOf(0, 300, 100, 300, 100, 300)),
         SOS("sos", "SOS Pattern", longArrayOf(0, 100, 100, 100, 100, 100, 300, 100, 300, 100, 300, 100, 100, 100, 100, 100, 100));
         
-        companion object {
+        @SuppressLint("StaticFieldLeak")
+    companion object {
             fun fromId(id: String): VibrationPattern {
                 return values().find { it.id == id } ?: MEDIUM
             }

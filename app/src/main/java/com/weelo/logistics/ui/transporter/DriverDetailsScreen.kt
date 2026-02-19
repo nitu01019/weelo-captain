@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.api.DriverData
 import com.weelo.logistics.data.cache.AppCache
 import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +48,24 @@ fun DriverDetailsScreen(
     var driver by remember { mutableStateOf<DriverData?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    
+    // Phase 5: Real performance + earnings data (no more hardcoded 0s)
+    var performanceData by remember { mutableStateOf<com.weelo.logistics.data.api.PerformanceResponseData?>(null) }
+    var earningsThisMonth by remember { mutableStateOf(0.0) }
+    var earningsLastMonth by remember { mutableStateOf(0.0) }
+    var pendingPayment by remember { mutableStateOf(0.0) }
+    
+    // =========================================================================
+    // REAL-TIME: Listen for this driver's online/offline status changes
+    // =========================================================================
+    LaunchedEffect(driverId) {
+        SocketIOService.driverStatusChanged.collect { event ->
+            if (event.driverId == driverId) {
+                timber.log.Timber.i("📡 [DriverDetails] Real-time status: ${event.driverName} → ${if (event.isOnline) "ONLINE" else "OFFLINE"}")
+                driver = driver?.copy(isOnline = event.isOnline)
+            }
+        }
+    }
     
     // Try cache first (INSTANT)
     LaunchedEffect(driverId) {
@@ -84,6 +103,29 @@ fun DriverDetailsScreen(
                 } else if (driver == null) {
                     errorMessage = response.body()?.error?.message ?: "Failed to load driver"
                 }
+                
+                // Phase 5: Fetch real performance + earnings for this driver
+                try {
+                    val perfResponse = withContext(Dispatchers.IO) {
+                        RetrofitClient.driverApi.getDriverPerformance(driverId = driverId)
+                    }
+                    if (perfResponse.isSuccessful) {
+                        performanceData = perfResponse.body()?.data
+                    }
+                } catch (e: Exception) {
+                    timber.log.Timber.w("⚠️ Performance fetch failed: ${e.message}")
+                }
+                
+                try {
+                    val earningsResponse = withContext(Dispatchers.IO) {
+                        RetrofitClient.driverApi.getDriverEarnings(period = "month", driverId = driverId)
+                    }
+                    if (earningsResponse.isSuccessful) {
+                        earningsThisMonth = earningsResponse.body()?.data?.totalEarnings ?: 0.0
+                    }
+                } catch (e: Exception) {
+                    timber.log.Timber.w("⚠️ Earnings fetch failed: ${e.message}")
+                }
             } catch (e: Exception) {
                 timber.log.Timber.e(e, "❌ Fetch failed")
                 if (driver == null) {
@@ -99,9 +141,7 @@ fun DriverDetailsScreen(
         PrimaryTopBar(title = "Driver Details", onBackClick = onNavigateBack)
         
         if (isLoading) {
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                CircularProgressIndicator(color = Primary)
-            }
+            SkeletonProfileLoading(Modifier.fillMaxSize())
         } else if (errorMessage != null) {
             Box(Modifier.fillMaxSize(), Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
@@ -121,17 +161,41 @@ fun DriverDetailsScreen(
                 // Driver Profile Card
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(SecondaryLight)) {
                     Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        // Avatar with initial
+                        // Avatar with online/offline indicator dot
                         Box(
-                            Modifier.size(80.dp).background(Primary.copy(alpha = 0.1f), CircleShape),
+                            Modifier.size(86.dp),  // Slightly larger to accommodate dot
                             Alignment.Center
                         ) {
-                            val initial = (d.name?.firstOrNull() ?: d.phone.lastOrNull() ?: 'D').uppercase()
-                            Text(
-                                text = initial.toString(),
-                                style = MaterialTheme.typography.displaySmall,
-                                fontWeight = FontWeight.Bold,
-                                color = Primary
+                            Box(
+                                Modifier.size(80.dp).background(Primary.copy(alpha = 0.1f), CircleShape),
+                                Alignment.Center
+                            ) {
+                                val initial = (d.name?.firstOrNull() ?: d.phone.lastOrNull() ?: 'D').uppercase()
+                                Text(
+                                    text = initial.toString(),
+                                    style = MaterialTheme.typography.displaySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Primary
+                                )
+                            }
+                            // Online/Offline dot (WhatsApp/Rapido style)
+                            Box(
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .align(Alignment.BottomEnd)
+                                    .background(
+                                        color = White,
+                                        shape = CircleShape
+                                    )
+                                    .padding(2.dp)
+                                    .background(
+                                        color = when {
+                                            d.isOnTrip -> Warning   // Orange for on-trip
+                                            d.isOnline -> Success   // Green for online
+                                            else -> TextDisabled    // Grey for offline
+                                        },
+                                        shape = CircleShape
+                                    )
                             )
                         }
                         Spacer(Modifier.height(12.dp))
@@ -176,33 +240,46 @@ fun DriverDetailsScreen(
                     }
                 }
                 
-                // Performance - Shows real data or 0
+                // Performance - Phase 5: Real data from GET /api/v1/driver/performance?driverId=X
                 SectionCard("Performance") {
-                    DetailRow("Rating", "⭐ ${String.format("%.1f", d.rating ?: 0f)}")
+                    DetailRow("Rating", "⭐ ${String.format("%.1f", performanceData?.rating ?: d.rating?.toDouble() ?: 4.5)}")
                     Divider()
-                    DetailRow("Total Trips", "${d.totalTrips}")
+                    DetailRow("Total Trips", "${performanceData?.totalTrips ?: d.totalTrips}")
                     Divider()
-                    DetailRow("Completed Trips", "${d.totalTrips}") // Same as total for now
+                    DetailRow("Acceptance Rate", "${String.format("%.1f", performanceData?.acceptanceRate ?: 0.0)}%")
                     Divider()
-                    DetailRow("On-Time Rate", "0%") // Will connect to backend later
+                    DetailRow("Completion Rate", "${String.format("%.1f", performanceData?.completionRate ?: 0.0)}%")
+                    Divider()
+                    DetailRow("On-Time Rate", "${String.format("%.1f", performanceData?.onTimeDeliveryRate ?: 0.0)}%")
+                    Divider()
+                    DetailRow("Total Distance", "${String.format("%.1f", performanceData?.totalDistance ?: 0.0)} km")
                 }
                 
-                // Earnings Summary - Shows 0 for now
+                // Earnings Summary - Phase 5: Real data from GET /api/v1/driver/earnings?driverId=X
                 SectionCard("Earnings Summary") {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column {
                             Text("This Month", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
-                            Text("₹0", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Success)
+                            Text(
+                                "₹${String.format("%,.0f", earningsThisMonth)}",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = Success
+                            )
                         }
                         Column(horizontalAlignment = Alignment.End) {
                             Text("Last Month", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
-                            Text("₹0", style = MaterialTheme.typography.bodyLarge, color = TextSecondary)
+                            Text(
+                                "₹${String.format("%,.0f", earningsLastMonth)}",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = TextSecondary
+                            )
                         }
                     }
                     Spacer(Modifier.height(8.dp))
                     Divider()
                     Spacer(Modifier.height(8.dp))
-                    DetailRow("Pending Payment", "₹0")
+                    DetailRow("Pending Payment", "₹${String.format("%,.0f", pendingPayment)}")
                 }
                 
                 // Documents

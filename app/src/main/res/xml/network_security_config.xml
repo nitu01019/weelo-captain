@@ -73,12 +73,8 @@
         <domain includeSubdomains="false">127.0.0.1</domain>
     </domain-config>
     
-    <!-- 
-        AWS ALB Configuration
-        ==============================================================
-        TODO: CRITICAL — Set cleartextTrafficPermitted="false" when SSL cert is on ALB
-        Currently allowing cleartext because ALB does not have SSL configured yet.
-    -->
+    <!-- AWS ALB Configuration — Cleartext allowed, ALB does not have HTTPS listener yet -->
+    <!-- TODO: CRITICAL — Set cleartextTrafficPermitted="false" when SSL cert + HTTPS listener is on ALB -->
     <domain-config cleartextTrafficPermitted="true">
         <!-- AWS Application Load Balancer -->
         <domain includeSubdomains="true">weelo-alb-380596483.ap-south-1.elb.amazonaws.com</domain>

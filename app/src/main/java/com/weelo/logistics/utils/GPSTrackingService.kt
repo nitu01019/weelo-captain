@@ -83,6 +83,14 @@ class GPSTrackingService : Service() {
         // Batch settings
         private const val LOCATION_BATCH_SIZE = 5               // Send batch every 5 locations
         private const val LOCATION_BATCH_TIMEOUT_MS = 60_000L   // Or every 60 seconds
+        private const val MAX_BATCH_BUFFER = 1000               // Cap buffer to prevent unbounded growth
+
+        // Reusable ISO-8601 UTC formatter — avoids per-point allocation
+        private val ISO_UTC_FORMAT by lazy {
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }
+        }
         
         // Intent extras
         const val EXTRA_TRIP_ID = "extra_trip_id"
@@ -135,7 +143,10 @@ class GPSTrackingService : Service() {
     private var driverId: String = ""
     
     // Location batching
-    private val locationBatch = mutableListOf<LocationData>()
+    // SCALABILITY: CopyOnWriteArrayList is thread-safe for concurrent reads/writes.
+    // Location callback adds points while flush coroutine reads/clears simultaneously.
+    // Regular mutableListOf() would throw ConcurrentModificationException under load.
+    private val locationBatch = java.util.concurrent.CopyOnWriteArrayList<LocationData>()
     private var lastBatchSentTime = System.currentTimeMillis()
     
     // Current state
@@ -180,11 +191,23 @@ class GPSTrackingService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         timber.log.Timber.i("🛑 GPSTrackingService destroyed")
-        
+
         stopLocationUpdates()
-        flushLocationBatch() // Send any remaining locations
+        // Flush remaining batch SYNCHRONOUSLY before cancelling scope.
+        // flushLocationBatch() launches a coroutine in serviceScope — if we cancel
+        // the scope first, that coroutine is cancelled before it sends → location points lost.
+        // runBlocking(IO) ensures the HTTP call completes before onDestroy returns.
+        if (locationBatch.isNotEmpty()) {
+            try {
+                kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                    flushLocationBatchSync()
+                }
+            } catch (e: Exception) {
+                timber.log.Timber.e(e, "⚠️ Sync flush on destroy failed — points may be lost")
+            }
+        }
         serviceScope.cancel()
-        
+
         _isTracking.value = false
         _lastLocation.value = null
     }
@@ -409,18 +432,122 @@ class GPSTrackingService : Service() {
         
         serviceScope.launch {
             try {
-                // Send batch to API
-                // This will be implemented with the tracking API
-                timber.log.Timber.d("📤 Sending location batch: ${batchToSend.size} points")
-                
-                // TODO: Implement API call when tracking endpoint is ready
-                // RetrofitClient.trackingApi.sendLocationBatch(batchToSend)
-                
+                timber.log.Timber.d("📤 Sending location batch: ${batchToSend.size} points to POST /tracking/batch")
+
+                // Convert LocationData → BatchLocationPoint — reuse shared formatter (no per-point allocation)
+                val batchPoints = batchToSend.map { loc ->
+                    com.weelo.logistics.data.api.BatchLocationPoint(
+                        latitude = loc.latitude,
+                        longitude = loc.longitude,
+                        speed = loc.speed,
+                        bearing = loc.bearing,
+                        accuracy = loc.accuracy,
+                        timestamp = ISO_UTC_FORMAT.format(java.util.Date(loc.timestamp))
+                    )
+                }
+
+                // Get tripId from the first point (all points in batch have same tripId)
+                val batchTripId = batchToSend.firstOrNull()?.tripId
+                if (batchTripId == null) {
+                    timber.log.Timber.w("⚠️ Batch has no tripId — discarding ${batchToSend.size} points")
+                    return@launch
+                }
+
+                val request = com.weelo.logistics.data.api.BatchLocationRequest(
+                    tripId = batchTripId,
+                    points = batchPoints
+                )
+
+                val response = com.weelo.logistics.data.remote.RetrofitClient
+                    .trackingApi
+                    .uploadBatch(request)
+
+                if (response.isSuccessful) {
+                    val body = response.body()
+                    val result = body?.data
+                    if (body?.success == true) {
+                        timber.log.Timber.i("✅ Batch uploaded: ${result?.accepted}/${result?.processed} accepted")
+                    } else {
+                        // HTTP 200 but success=false — server rejected, retry with buffer cap
+                        timber.log.Timber.w("⚠️ Batch upload success=false — will retry")
+                        retryBatch(batchToSend)
+                    }
+                } else {
+                    val code = response.code()
+                    if (code == 401 || code == 403) {
+                        // Auth error — do NOT retry with stale token; discard batch
+                        timber.log.Timber.w("⚠️ Batch upload auth error $code — discarding batch (stale token)")
+                    } else {
+                        timber.log.Timber.w("⚠️ Batch upload failed: $code — will retry")
+                        retryBatch(batchToSend)
+                    }
+                }
+
             } catch (e: Exception) {
-                timber.log.Timber.e(e, "❌ Failed to send location batch")
-                // Re-add to batch for retry
-                locationBatch.addAll(0, batchToSend)
+                timber.log.Timber.e(e, "❌ Failed to send location batch — will retry")
+                retryBatch(batchToSend)
             }
+        }
+    }
+
+    /**
+     * Synchronous version of flushLocationBatch — used in onDestroy() so remaining points
+     * are sent before serviceScope is cancelled. Called from runBlocking(IO).
+     */
+    private suspend fun flushLocationBatchSync() {
+        val batchToSend = synchronized(locationBatch) {
+            if (locationBatch.isEmpty()) return
+            val copy = locationBatch.toList()
+            locationBatch.clear()
+            copy
+        }
+        try {
+            val token = RetrofitClient.getAccessToken() ?: run {
+                timber.log.Timber.w("⚠️ No token for sync flush — re-queueing ${batchToSend.size} points")
+                retryBatch(batchToSend)
+                return
+            }
+            val points = batchToSend.map { loc ->
+                com.weelo.logistics.data.api.BatchLocationPoint(
+                    latitude = loc.latitude,
+                    longitude = loc.longitude,
+                    speed = loc.speed,
+                    bearing = loc.bearing,
+                    accuracy = loc.accuracy,
+                    timestamp = ISO_UTC_FORMAT.format(java.util.Date(loc.timestamp))
+                )
+            }
+            val tripId = batchToSend.first().tripId
+            val res = RetrofitClient.trackingApi.uploadBatch(
+                com.weelo.logistics.data.api.BatchLocationRequest(tripId, points)
+            )
+            if (!(res.isSuccessful && res.body()?.success == true)) {
+                timber.log.Timber.w("⚠️ Sync flush failed ${res.code()} — points lost on destroy")
+            }
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "Sync flush error — ${batchToSend.size} points lost")
+        }
+    }
+
+    /**
+     * Re-queue a failed batch for retry, capped at MAX_BATCH_BUFFER to prevent unbounded growth.
+     * Drops oldest points if buffer is full (newest data is more valuable for live tracking).
+     *
+     * THREAD SAFETY: synchronized on locationBatch — CopyOnWriteArrayList's individual ops are
+     * thread-safe but the read-modify-write sequence (snapshot + clear + addAll) is NOT atomic.
+     * A concurrent location callback adding points between clear() and addAll() would lose those
+     * points. synchronized() makes the entire sequence atomic.
+     */
+    private fun retryBatch(failed: List<LocationData>) {
+        synchronized(locationBatch) {
+            val combined = failed + locationBatch.toList()
+            locationBatch.clear()
+            // Keep only the most recent MAX_BATCH_BUFFER points (newest = most valuable)
+            val capped = if (combined.size > MAX_BATCH_BUFFER) {
+                timber.log.Timber.w("⚠️ Buffer overflow: dropping ${combined.size - MAX_BATCH_BUFFER} oldest points")
+                combined.takeLast(MAX_BATCH_BUFFER)
+            } else combined
+            locationBatch.addAll(capped)
         }
     }
 }

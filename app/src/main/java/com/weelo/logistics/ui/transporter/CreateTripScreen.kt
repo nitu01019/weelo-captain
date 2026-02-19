@@ -1,6 +1,8 @@
 package com.weelo.logistics.ui.transporter
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.platform.LocalContext
+import com.weelo.logistics.R
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -13,15 +15,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
-import com.weelo.logistics.data.model.*
-import com.weelo.logistics.data.repository.MockDataRepository
+import com.weelo.logistics.data.api.DriverData
+import com.weelo.logistics.data.model.Trip
+import com.weelo.logistics.data.model.Location
+import com.weelo.logistics.data.model.TripStatus
+import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.ClickDebouncer
 import com.weelo.logistics.utils.InputValidator
 import com.weelo.logistics.utils.DataSanitizer
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import timber.log.Timber
 
 @Composable
 fun CreateTripScreen(
@@ -41,16 +46,51 @@ fun CreateTripScreen(
     var isLoading by remember { mutableStateOf(false) }
     
     val scope = rememberCoroutineScope()
-    val repository = remember { MockDataRepository() }
+    val context = LocalContext.current
     val clickDebouncer = remember { ClickDebouncer(500L) }
-    // TODO: Connect to real repository from backend
-    var vehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
-    var drivers by remember { mutableStateOf<List<Driver>>(emptyList()) }
-    
+    var vehicleNames by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) } // id → name
+    var driverNames by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) } // id → name
+
+    // Load vehicles and drivers from real API
     LaunchedEffect(Unit) {
-        scope.launch {
-            repository.getVehicles("t1").onSuccess { vehicles = it }
-            repository.getDrivers("t1").onSuccess { drivers = it }
+        try {
+            val vehicleResponse = RetrofitClient.vehicleApi.getVehicles()
+            val driverResponse = RetrofitClient.driverApi.getDriverList()
+
+            if (vehicleResponse.isSuccessful && vehicleResponse.body()?.success == true) {
+                val vehicleList = vehicleResponse.body()?.data?.vehicles
+                vehicleNames = vehicleList?.mapNotNull { v ->
+                    val id = v.id.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    val number = v.vehicleNumber.takeIf { it.isNotBlank() } ?: id
+                    Pair(id, number)
+                } ?: emptyList()
+            } else {
+                Timber.w("CreateTrip: Failed to load vehicles ${vehicleResponse.code()}")
+                errorMessage = "Failed to load vehicles"
+            }
+
+            if (driverResponse.isSuccessful && driverResponse.body()?.success == true) {
+                driverResponse.body()?.data?.let { data ->
+                    // name ?: phone ?: id — never display raw "null" in the picker
+                    driverNames = data.drivers.mapNotNull { d ->
+                        val id = d.id.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                        val label = d.name?.takeIf { it.isNotBlank() }
+                            ?: d.phone?.takeIf { it.isNotBlank() }
+                            ?: id
+                        Pair(id, label)
+                    }
+                }
+            } else {
+                Timber.w("CreateTrip: Failed to load drivers ${driverResponse.code()}")
+                // Show non-blocking warning — vehicle data still usable
+                if (errorMessage.isBlank()) errorMessage = "Could not load drivers. You can still create a trip without assigning one."
+            }
+
+            Timber.d("CreateTrip: Loaded ${vehicleNames.size} vehicles, ${driverNames.size} drivers")
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Timber.e(e, "CreateTrip: Failed to load data")
+            errorMessage = "Failed to load form data"
         }
     }
     
@@ -133,24 +173,24 @@ fun CreateTripScreen(
             Divider()
             Text("Select Vehicle", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             
-            vehicles.take(3).forEach { vehicle ->
+            vehicleNames.take(3).forEach { vehicle ->
                 SelectableCard(
-                    title = vehicle.vehicleNumber,
-                    subtitle = vehicle.displayName,
-                    isSelected = selectedVehicleId == vehicle.id,
-                    onClick = { selectedVehicleId = vehicle.id }
+                    title = vehicle.second,
+                    subtitle = vehicle.first,
+                    isSelected = selectedVehicleId == vehicle.first,
+                    onClick = { selectedVehicleId = vehicle.first }
                 )
             }
             
             Divider()
             Text("Select Driver", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             
-            drivers.take(3).forEach { driver ->
+            driverNames.take(3).forEach { driver ->
                 SelectableCard(
-                    title = driver.name,
-                    subtitle = driver.mobileNumber,
-                    isSelected = selectedDriverId == driver.id,
-                    onClick = { selectedDriverId = driver.id }
+                    title = driver.second,
+                    subtitle = driver.first,
+                    isSelected = selectedDriverId == driver.first,
+                    onClick = { selectedDriverId = driver.first }
                 )
             }
             
@@ -169,13 +209,13 @@ fun CreateTripScreen(
                     // Validate inputs
                     val nameValidation = InputValidator.validateName(customerName)
                     if (!nameValidation.isValid) {
-                        errorMessage = nameValidation.errorMessage!!
+                        errorMessage = nameValidation.errorMessage ?: context.getString(R.string.error_invalid_customer_name)
                         return@PrimaryButton
                     }
                     
                     val phoneValidation = InputValidator.validatePhoneNumber(customerMobile)
                     if (customerMobile.isNotEmpty() && !phoneValidation.isValid) {
-                        errorMessage = phoneValidation.errorMessage!!
+                        errorMessage = phoneValidation.errorMessage ?: context.getString(R.string.error_invalid_phone)
                         return@PrimaryButton
                     }
                     
@@ -183,27 +223,53 @@ fun CreateTripScreen(
                         pickupAddress.isEmpty() -> errorMessage = "Enter pickup address"
                         dropAddress.isEmpty() -> errorMessage = "Enter drop address"
                         selectedVehicleId == null -> errorMessage = "Select a vehicle"
-                        selectedDriverId == null -> errorMessage = "Select a driver"
+                        // Driver is optional — transporter can assign later
                         else -> {
                             isLoading = true
                             scope.launch {
-                                // Sanitize user inputs
-                                val trip = Trip(
-                                    id = "trip_${System.currentTimeMillis()}",
-                                    transporterId = "t1",
-                                    vehicleId = selectedVehicleId!!,
-                                    driverId = selectedDriverId,
-                                    pickupLocation = Location(0.0, 0.0, DataSanitizer.sanitizeForApi(pickupAddress) ?: ""),
-                                    dropLocation = Location(0.0, 0.0, DataSanitizer.sanitizeForApi(dropAddress) ?: ""),
-                                    customerName = DataSanitizer.sanitizeForApi(customerName) ?: "",
-                                    customerMobile = customerMobile,
-                                    goodsType = DataSanitizer.sanitizeForApi(goodsType) ?: "",
-                                    weight = weight,
-                                    fare = fare.toDoubleOrNull() ?: 0.0,
-                                    status = TripStatus.ASSIGNED
-                                )
-                                repository.createTrip(trip)
-                                onTripCreated()
+                                try {
+                                    // Sanitize user inputs
+                                    // Validate fare — must be a positive number
+                                    val parsedFare = fare.toDoubleOrNull()
+                                    if (parsedFare == null || parsedFare <= 0.0) {
+                                        errorMessage = "Please enter a valid fare amount"
+                                        isLoading = false
+                                        return@launch
+                                    }
+
+                                    val vehicleId = selectedVehicleId ?: run {
+                                        errorMessage = "Please select a vehicle"
+                                        isLoading = false
+                                        return@launch
+                                    }
+
+                                    val trip = Trip(
+                                        id = "trip_${System.currentTimeMillis()}",
+                                        transporterId = "t1",
+                                        vehicleId = vehicleId,
+                                        driverId = selectedDriverId,
+                                        pickupLocation = Location(0.0, 0.0, DataSanitizer.sanitizeForApi(pickupAddress) ?: ""),
+                                        dropLocation = Location(0.0, 0.0, DataSanitizer.sanitizeForApi(dropAddress) ?: ""),
+                                        customerName = DataSanitizer.sanitizeForApi(customerName) ?: "",
+                                        customerMobile = customerMobile,
+                                        goodsType = DataSanitizer.sanitizeForApi(goodsType) ?: "",
+                                        weight = weight,
+                                        fare = parsedFare,
+                                        status = TripStatus.ASSIGNED
+                                    )
+                                    // TODO: Replace with real API call when endpoint is ready
+                                    // val response = RetrofitClient.tripApi.createTrip(trip)
+                                    // if (!response.isSuccessful) { errorMessage = "Failed: ${response.code()}"; return@launch }
+                                    Timber.d("CreateTrip: Trip staged locally - $trip")
+                                    // Only navigate on success (not before API call)
+                                    onTripCreated()
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Timber.e(e, "CreateTrip: Failed to create trip")
+                                    errorMessage = "Failed to create trip"
+                                } finally {
+                                    isLoading = false
+                                }
                             }
                         }
                     }

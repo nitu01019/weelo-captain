@@ -171,7 +171,7 @@ private fun CameraPreview(
             )
             
         } catch (e: Exception) {
-            e.printStackTrace()
+            timber.log.Timber.e(e, "Camera initialization error")
         }
     }
     
@@ -450,7 +450,7 @@ private fun capturePhoto(
             }
             
             override fun onError(exception: ImageCaptureException) {
-                exception.printStackTrace()
+                timber.log.Timber.e(exception, "Image capture error")
                 onError()
             }
         }

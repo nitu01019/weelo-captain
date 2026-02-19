@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    RELEASE Network Security Config — Weelo Captain App
+    ====================================================
+    HTTPS enforced for ALL domains in release builds.
+    No cleartext traffic permitted — Play Store compliant.
+    When HTTPS listener is added to ALB, release builds automatically work.
+-->
+<network-security-config>
+
+    <!-- Default: HTTPS only — no cleartext in release ever -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Production domain — HTTPS enforced -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">weelo.in</domain>
+        <domain includeSubdomains="true">api.weelo.in</domain>
+        <domain includeSubdomains="true">weelo-alb-380596483.ap-south-1.elb.amazonaws.com</domain>
+        <domain includeSubdomains="true">amazonaws.com</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+        <!--
+            Certificate Pinning — enable when SSL cert is live on ALB:
+            <pin-set expiration="2027-12-31">
+                <pin digest="SHA-256">YOUR_LEAF_CERTIFICATE_PIN_HERE=</pin>
+                <pin digest="SHA-256">YOUR_INTERMEDIATE_CA_PIN_HERE=</pin>
+            </pin-set>
+        -->
+    </domain-config>
+
+</network-security-config>

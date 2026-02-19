@@ -144,6 +144,9 @@ fun LanguageSelectionScreen(
         LanguageViewModel(context.applicationContext as android.app.Application)
     }
 
+    // Default to Hindi — this screen only shows when backend has NO language,
+    // meaning it's a first-time user who hasn't selected a language yet.
+    // If backend had a language, onboarding check skips this screen entirely.
     var selectedCode by rememberSaveable { mutableStateOf("hi") }
     var hasSelected by rememberSaveable { mutableStateOf(false) }
 

@@ -97,11 +97,20 @@ class MainViewModel : ViewModel() {
     /**
      * Load all core data at app start
      * Called ONCE from MainActivity.onCreate()
+     * 
+     * ROLE-AWARE: Only loads transporter data (vehicles, drivers) when role is TRANSPORTER.
+     * Driver role uses its own DriverDashboardViewModel — loading here wastes network + memory.
      */
     fun initializeAppData() {
-        timber.log.Timber.d("🚀 Initializing app data...")
-        loadVehiclesIfNeeded()
-        loadDriversIfNeeded()
+        val userRole = com.weelo.logistics.data.remote.RetrofitClient.getUserRole()
+        timber.log.Timber.d("🚀 Initializing app data (role: $userRole)...")
+        
+        if (userRole?.uppercase() == "TRANSPORTER") {
+            loadVehiclesIfNeeded()
+            loadDriversIfNeeded()
+        } else {
+            timber.log.Timber.d("⏭️ Skipping vehicle/driver fetch — not a transporter (role: $userRole)")
+        }
     }
     
     // =========================================================================

@@ -23,6 +23,7 @@ import coil.compose.AsyncImage
 import com.weelo.logistics.data.api.DriverData
 import com.weelo.logistics.data.cache.AppCache
 import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.SearchDebouncer
@@ -117,6 +118,30 @@ fun DriverListScreen(
     LaunchedEffect(Unit) {
         if (AppCache.shouldRefreshDrivers()) {
             refreshDrivers()
+        }
+    }
+    
+    // =========================================================================
+    // REAL-TIME: Listen for driver online/offline status changes via WebSocket
+    // =========================================================================
+    // When a driver goes online/offline, backend emits 'driver_status_changed'.
+    // SocketIOService parses it → emits to driverStatusChanged flow.
+    // We update AppCache in-place so the list updates INSTANTLY (no API call).
+    // =========================================================================
+    LaunchedEffect(Unit) {
+        SocketIOService.driverStatusChanged.collect { event ->
+            timber.log.Timber.i("📡 [DriverList] Real-time status: ${event.driverName} → ${if (event.isOnline) "ONLINE" else "OFFLINE"}")
+            
+            // Update the specific driver's isOnline field in AppCache
+            val currentDrivers = AppCache.drivers.value
+            val updatedDrivers = currentDrivers.map { driver ->
+                if (driver.id == event.driverId) {
+                    driver.copy(isOnline = event.isOnline)
+                } else {
+                    driver
+                }
+            }
+            AppCache.setDrivers(updatedDrivers)
         }
     }
     
@@ -304,10 +329,10 @@ fun DriverCardFromApi(driver: DriverData, onClick: () -> Unit) {
                 .padding(16.dp), 
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Driver Avatar - show profile photo or initials fallback
+            // Driver Avatar with online/offline indicator dot
             Box(
                 Modifier
-                    .size(56.dp),
+                    .size(60.dp),  // Slightly larger to accommodate dot
                 Alignment.Center
             ) {
                 if (!driver.profilePhotoUrl.isNullOrBlank()) {
@@ -336,6 +361,26 @@ fun DriverCardFromApi(driver: DriverData, onClick: () -> Unit) {
                         )
                     }
                 }
+                
+                // Online/Offline indicator dot (WhatsApp/Rapido style)
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .align(Alignment.BottomEnd)
+                        .background(
+                            color = White,
+                            shape = androidx.compose.foundation.shape.CircleShape
+                        )
+                        .padding(2.dp)
+                        .background(
+                            color = when {
+                                driver.isOnTrip -> Warning   // Orange for on-trip
+                                driver.isOnline -> Success   // Green for online
+                                else -> TextDisabled         // Grey for offline
+                            },
+                            shape = androidx.compose.foundation.shape.CircleShape
+                        )
+                )
             }
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {

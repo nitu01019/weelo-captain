@@ -26,9 +26,18 @@ import com.weelo.logistics.data.repository.DriverRepository
 import com.weelo.logistics.data.repository.DriverResult
 import com.weelo.logistics.data.repository.VehicleRepository
 import com.weelo.logistics.data.repository.VehicleResult
+import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.launch
+
+private fun DriverAssignmentAvailability.chipStatus(): ChipStatus {
+    return when (this) {
+        DriverAssignmentAvailability.ACTIVE -> ChipStatus.AVAILABLE
+        DriverAssignmentAvailability.OFFLINE -> ChipStatus.OFFLINE
+        DriverAssignmentAvailability.ON_TRIP -> ChipStatus.IN_PROGRESS
+    }
+}
 
 /**
  * DRIVER ASSIGNMENT SCREEN
@@ -45,7 +54,7 @@ import kotlinx.coroutines.launch
  * CONNECTED TO REAL BACKEND:
  * - Fetches broadcast details via BroadcastRepository
  * - Fetches vehicles via VehicleRepository
- * - Fetches available drivers via DriverRepository
+ * - Fetches all drivers via DriverRepository
  * - Calls acceptBroadcast API to assign each vehicle+driver
  */
 @Composable
@@ -65,7 +74,7 @@ fun DriverAssignmentScreen(
     
     var broadcast by remember { mutableStateOf<BroadcastTrip?>(null) }
     var vehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
-    var availableDrivers by remember { mutableStateOf<List<Driver>>(emptyList()) }
+    var fleetDrivers by remember { mutableStateOf<List<Driver>>(emptyList()) }
     var driverAssignments by remember { mutableStateOf<Map<String, String>>(emptyMap()) } // vehicleId -> driverId
     var showDriverPicker by remember { mutableStateOf<String?>(null) } // vehicleId being assigned
     var isLoading by remember { mutableStateOf(true) }
@@ -73,6 +82,7 @@ fun DriverAssignmentScreen(
     var showSuccessDialog by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var successCount by remember { mutableStateOf(0) }
+    val fleetDriversById = remember(fleetDrivers) { fleetDrivers.associateBy { it.id } }
     
     // Fetch data from real backend
     LaunchedEffect(broadcastId, selectedVehicleIds) {
@@ -105,15 +115,19 @@ fun DriverAssignmentScreen(
                 is VehicleResult.Loading -> {}
             }
             
-            // Fetch available drivers
+            // Fetch drivers for assignment
             when (val driverResult = driverRepository.fetchDrivers(forceRefresh = true)) {
                 is DriverResult.Success -> {
-                    // Filter only available drivers (ACTIVE and not on trip)
-                    availableDrivers = driverResult.data.drivers.filter { 
-                        it.status == DriverStatus.ACTIVE && it.isAvailable
-                    }
+                    fleetDrivers = driverResult.data.drivers.sortedWith(compareBy<Driver>(
+                        { it.assignmentAvailability().sortOrder() },
+                        { it.name.lowercase() }
+                    ))
+                    val activeCount = fleetDrivers.count { it.assignmentAvailability() == DriverAssignmentAvailability.ACTIVE }
+                    val offlineCount = fleetDrivers.count { it.assignmentAvailability() == DriverAssignmentAvailability.OFFLINE }
+                    val onTripCount = fleetDrivers.count { it.assignmentAvailability() == DriverAssignmentAvailability.ON_TRIP }
                     timber.log.Timber.i(
-                        "✅ Found ${availableDrivers.size} available drivers out of ${driverResult.data.total}")
+                        "✅ Loaded ${fleetDrivers.size} drivers (active=$activeCount, offline=$offlineCount, onTrip=$onTripCount)"
+                    )
                 }
                 is DriverResult.Error -> {
                     errorMessage = driverResult.message
@@ -126,7 +140,58 @@ fun DriverAssignmentScreen(
         }
     }
     
-    val allAssigned = driverAssignments.size == vehicles.size
+    // =========================================================================
+    // REAL-TIME: Listen for driver online/offline changes during assignment
+    // Same pattern as DriverListScreen — update in-place, no API call
+    //
+    // EDGE CASE: If an ASSIGNED driver goes offline, the assignment becomes
+    // invalid (readyAssignments auto-excludes offline drivers). We show a
+    // toast so the transporter knows why their progress dropped.
+    // =========================================================================
+    LaunchedEffect(Unit) {
+        SocketIOService.driverStatusChanged.collect { event ->
+            timber.log.Timber.i("📡 [DriverAssignment] Real-time status: ${event.driverName} → ${if (event.isOnline) "ONLINE" else "OFFLINE"}")
+            
+            // Check if this driver is currently assigned to a vehicle
+            if (!event.isOnline) {
+                val isAssigned = driverAssignments.values.contains(event.driverId)
+                if (isAssigned) {
+                    timber.log.Timber.w("⚠️ Assigned driver ${event.driverName} went OFFLINE — assignment invalidated")
+                    Toast.makeText(
+                        context,
+                        "${event.driverName} went offline. Please reassign.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+            
+            fleetDrivers = fleetDrivers.map { driver ->
+                if (driver.id == event.driverId) {
+                    driver.copy(isAvailable = event.isOnline)
+                } else {
+                    driver
+                }
+            }.sortedWith(compareBy<Driver>(
+                { it.assignmentAvailability().sortOrder() },
+                { it.name.lowercase() }
+            ))
+        }
+    }
+    
+    val readyAssignments = remember(vehicles, driverAssignments, fleetDrivers) {
+        vehicles.mapNotNull { vehicle ->
+            val driverId = driverAssignments[vehicle.id] ?: return@mapNotNull null
+            val driver = fleetDriversById[driverId] ?: return@mapNotNull null
+            if (!driver.assignmentAvailability().isSelectableForAssignment()) return@mapNotNull null
+            vehicle.id to driverId
+        }
+    }
+    val allAssigned = readyAssignments.size == vehicles.size
+    val pendingAssignments = (vehicles.size - readyAssignments.size).coerceAtLeast(0)
+    val hasOnTripSelections = driverAssignments.values.any { driverId ->
+        val driver = fleetDriversById[driverId] ?: return@any false
+        driver.assignmentAvailability() == DriverAssignmentAvailability.ON_TRIP
+    }
     
     Column(
         modifier = Modifier
@@ -189,7 +254,7 @@ fun DriverAssignmentScreen(
                 // Progress Indicator
                 item {
                     LinearProgressIndicator(
-                        progress = driverAssignments.size.toFloat() / vehicles.size,
+                        progress = readyAssignments.size.toFloat() / vehicles.size.coerceAtLeast(1),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(8.dp)
@@ -199,7 +264,7 @@ fun DriverAssignmentScreen(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "${driverAssignments.size}/${vehicles.size} drivers assigned",
+                        "${readyAssignments.size}/${vehicles.size} drivers ready",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary
                     )
@@ -214,11 +279,14 @@ fun DriverAssignmentScreen(
                     )
                 }
                 
-                itemsIndexed(vehicles) { index, vehicle ->
+                itemsIndexed(
+                    items = vehicles,
+                    key = { _, vehicle -> vehicle.id }
+                ) { index, vehicle ->
                     VehicleDriverAssignmentCard(
                         vehicle = vehicle,
                         assignedDriver = driverAssignments[vehicle.id]?.let { driverId ->
-                            availableDrivers.find { it.id == driverId }
+                            fleetDriversById[driverId]
                         },
                         onAssignDriver = { showDriverPicker = vehicle.id },
                         onRemoveDriver = {
@@ -229,10 +297,10 @@ fun DriverAssignmentScreen(
                 }
                 
                 // Available Drivers Info
-                if (availableDrivers.isNotEmpty()) {
+                if (fleetDrivers.isNotEmpty()) {
                     item {
                         Text(
-                            "Available Drivers (${availableDrivers.size})",
+                            "Drivers (${fleetDrivers.size})",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = TextSecondary
@@ -264,7 +332,11 @@ fun DriverAssignmentScreen(
                                 Icon(Icons.Default.Warning, null, tint = Warning, modifier = Modifier.size(20.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    "${vehicles.size - driverAssignments.size} trucks still need drivers",
+                                    if (hasOnTripSelections) {
+                                        "Reassign on-trip drivers before sending"
+                                    } else {
+                                        "$pendingAssignments trucks still need valid drivers"
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = TextPrimary
                                 )
@@ -283,7 +355,7 @@ fun DriverAssignmentScreen(
                                 var hasError = false
                                 
                                 // Call acceptBroadcast for each vehicle+driver assignment
-                                for ((vehicleId, driverId) in driverAssignments) {
+                                for ((vehicleId, driverId) in readyAssignments) {
                                     timber.log.Timber.i(
                                         "📤 Accepting broadcast: $broadcastId with vehicle: $vehicleId, driver: $driverId")
                                     
@@ -338,7 +410,7 @@ fun DriverAssignmentScreen(
                             Icon(Icons.Default.Send, null)
                             Spacer(Modifier.width(8.dp))
                             Text(
-                                "Send to Drivers (${driverAssignments.size})",
+                                "Send to Drivers (${readyAssignments.size})",
                                 style = MaterialTheme.typography.titleMedium
                             )
                         }
@@ -351,7 +423,7 @@ fun DriverAssignmentScreen(
     // Driver Picker Bottom Sheet
     showDriverPicker?.let { vehicleId ->
         DriverPickerBottomSheet(
-            availableDrivers = availableDrivers.filter { driver ->
+            drivers = fleetDrivers.filter { driver ->
                 !driverAssignments.values.contains(driver.id) // Don't show already assigned drivers
             },
             onDriverSelected = { driver ->
@@ -383,7 +455,7 @@ fun DriverAssignmentScreen(
             },
             text = {
                 Column {
-                    Text("${driverAssignments.size} drivers have been notified")
+                    Text("${readyAssignments.size} drivers have been notified")
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "Drivers will receive notifications on their devices and can accept or decline the trip.",
@@ -499,6 +571,13 @@ fun VehicleDriverAssignmentCard(
             
             // Assigned Driver or Assignment Button
             if (assignedDriver != null) {
+                val assignedStatus = assignedDriver.assignmentAvailability()
+                val assignedStatusColor = when (assignedStatus) {
+                    DriverAssignmentAvailability.ACTIVE -> Success
+                    DriverAssignmentAvailability.OFFLINE -> TextSecondary
+                    DriverAssignmentAvailability.ON_TRIP -> Warning
+                }
+
                 // Show assigned driver
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -509,13 +588,13 @@ fun VehicleDriverAssignmentCard(
                         modifier = Modifier
                             .size(48.dp)
                             .clip(CircleShape)
-                            .background(Success.copy(alpha = 0.2f)),
+                            .background(assignedStatusColor.copy(alpha = 0.2f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             Icons.Default.Person,
                             null,
-                            tint = Success,
+                            tint = assignedStatusColor,
                             modifier = Modifier.size(28.dp)
                         )
                     }
@@ -528,6 +607,13 @@ fun VehicleDriverAssignmentCard(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
+                        Spacer(Modifier.height(4.dp))
+                        StatusChip(
+                            text = assignedStatus.displayName(),
+                            status = assignedStatus.chipStatus(),
+                            size = ChipSize.SMALL
+                        )
+                        Spacer(Modifier.height(4.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 Icons.Default.Star,
@@ -576,7 +662,7 @@ fun VehicleDriverAssignmentCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DriverPickerBottomSheet(
-    availableDrivers: List<Driver>,
+    drivers: List<Driver>,
     onDriverSelected: (Driver) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -604,14 +690,14 @@ fun DriverPickerBottomSheet(
                 Spacer(Modifier.height(8.dp))
                 
                 Text(
-                    "${availableDrivers.size} drivers available",
+                    "${drivers.size} drivers shown",
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary
                 )
                 
                 Spacer(Modifier.height(16.dp))
                 
-                if (availableDrivers.isEmpty()) {
+                if (drivers.isEmpty()) {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(WarningLight)
@@ -623,12 +709,12 @@ fun DriverPickerBottomSheet(
                             Icon(Icons.Default.Warning, null, tint = Warning, modifier = Modifier.size(48.dp))
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                "No available drivers",
+                                "No drivers available",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                "All drivers are assigned or unavailable",
+                                "All drivers are already assigned in this flow",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary
                             )
@@ -641,7 +727,7 @@ fun DriverPickerBottomSheet(
                     ) {
                         // OPTIMIZATION: Add keys to prevent unnecessary recompositions
                         items(
-                            items = availableDrivers,
+                            items = drivers,
                             key = { it.id }
                         ) { driver ->
                             DriverSelectCard(
@@ -669,10 +755,16 @@ fun DriverSelectCard(
     driver: Driver,
     onClick: () -> Unit
 ) {
+    val driverStatus = driver.assignmentAvailability()
+    val isSelectable = driverStatus.isSelectableForAssignment()
+
     Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = onClick,
-        colors = CardDefaults.cardColors(White),
+        onClick = { if (isSelectable) onClick() },
+        enabled = isSelectable,
+        colors = CardDefaults.cardColors(
+            if (isSelectable) White else SurfaceVariant
+        ),
         elevation = CardDefaults.cardElevation(2.dp)
     ) {
         Row(
@@ -686,13 +778,23 @@ fun DriverSelectCard(
                 modifier = Modifier
                     .size(56.dp)
                     .clip(CircleShape)
-                    .background(Primary.copy(alpha = 0.1f)),
+                    .background(
+                        when (driverStatus) {
+                            DriverAssignmentAvailability.ACTIVE -> Success.copy(alpha = 0.12f)
+                            DriverAssignmentAvailability.OFFLINE -> TextSecondary.copy(alpha = 0.12f)
+                            DriverAssignmentAvailability.ON_TRIP -> Warning.copy(alpha = 0.12f)
+                        }
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     Icons.Default.Person,
                     null,
-                    tint = Primary,
+                    tint = when (driverStatus) {
+                        DriverAssignmentAvailability.ACTIVE -> Success
+                        DriverAssignmentAvailability.OFFLINE -> TextSecondary
+                        DriverAssignmentAvailability.ON_TRIP -> Warning
+                    },
                     modifier = Modifier.size(32.dp)
                 )
             }
@@ -703,7 +805,8 @@ fun DriverSelectCard(
                 Text(
                     driver.name,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = if (isSelectable) TextPrimary else TextSecondary
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
@@ -720,12 +823,31 @@ fun DriverSelectCard(
                         color = TextSecondary
                     )
                 }
+                Spacer(Modifier.height(6.dp))
+                StatusChip(
+                    text = driverStatus.displayName(),
+                    status = driverStatus.chipStatus(),
+                    size = ChipSize.SMALL
+                )
+                if (!isSelectable) {
+                    val blockedReason = when (driverStatus) {
+                        DriverAssignmentAvailability.ON_TRIP -> "On trip, cannot assign right now"
+                        DriverAssignmentAvailability.OFFLINE -> "Offline, cannot assign right now"
+                        DriverAssignmentAvailability.ACTIVE -> "Unavailable for assignment"
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        blockedReason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Warning
+                    )
+                }
             }
             
             Icon(
-                Icons.Default.ArrowForward,
+                if (isSelectable) Icons.Default.ArrowForward else Icons.Default.Block,
                 null,
-                tint = Primary
+                tint = if (isSelectable) Primary else Warning
             )
         }
     }

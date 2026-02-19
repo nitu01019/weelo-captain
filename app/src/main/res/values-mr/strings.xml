@@ -1,0 +1,321 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App Name -->
+    <string name="app_name">वीलो कॅप्टन</string>
+    
+    <!-- Language Selection -->
+    <string name="welcome_to">येथे स्वागत आहे</string>
+    <string name="select_language">अॅप भाषा निवडा</string>
+    <string name="confirm">पुष्टी करा</string>
+    
+    <!-- Common -->
+    <string name="loading">लोड होत आहे…</string>
+    <string name="error">त्रुटी</string>
+    <string name="retry">पुन्हा प्रयत्न करा</string>
+    <string name="cancel">रद्द करा</string>
+    <string name="ok">ठीक आहे</string>
+    <string name="save">जतन करा</string>
+    <string name="edit">संपादित करा</string>
+    <string name="delete">हटवा</string>
+    <string name="back">मागे</string>
+    
+    <!-- Dashboard -->
+    <string name="dashboard">डॅशबोर्ड</string>
+    <string name="my_profile">माझी प्रोफाइल</string>
+    <string name="settings">सेटिंग्ज</string>
+    <string name="logout">लॉगआउट</string>
+    <string name="help">मदत</string>
+    
+    <!-- Profile -->
+    <string name="profile_photo">प्रोफाइल फोटो</string>
+    <string name="license_photos">लायसन्स फोटो</string>
+    <string name="license_front">लायसन्स समोर</string>
+    <string name="license_back">लायसन्स मागे</string>
+    <string name="personal_information">वैयक्तिक माहिती</string>
+    <string name="name">नाव</string>
+    <string name="phone">फोन</string>
+    <string name="email">ईमेल</string>
+    <string name="license_number">लायसन्स क्रमांक</string>
+    <string name="vehicle_type">वाहन प्रकार</string>
+    <string name="address">पत्ता</string>
+    
+    <!-- Settings -->
+    <string name="notifications">सूचना</string>
+    <string name="push_notifications">पुश सूचना</string>
+    <string name="preferences">प्राधान्यक्रम</string>
+    <string name="language">भाषा</string>
+    <string name="theme">थीम</string>
+    <string name="account">खाते</string>
+    <string name="privacy_policy">गोपनीयता धोरण</string>
+    <string name="terms_conditions">अटी आणि शर्ती</string>
+    <string name="support">सहाय्य</string>
+    <string name="help_support">मदत आणि सहाय्य</string>
+    <string name="about">बद्दल</string>
+    <string name="version">आवृत्ती %1$s</string>
+    
+    <!-- Logout -->
+    <string name="logout_confirmation">तुम्हाला खात्रीपूर्वक लॉगआउट करायचे आहे का?</string>
+    <string name="logout_message">तुमच्या खात्यातून साइन आउट करा</string>
+    
+    <!-- Notifications Settings -->
+    <string name="receive_notifications">ट्रिप आणि पेमेंट सूचना प्राप्त करा</string>
+    
+    <!-- Onboarding -->
+    <string name="skip">वगळा</string>
+    <string name="next">पुढे</string>
+    <string name="get_started">सुरू करा</string>
+    <string name="onboarding_title_1">जलद आणि विश्वसनीय लॉजिस्टिक्स</string>
+    <string name="onboarding_desc_1">ग्राहकांशी जुळवा आणि तुमचा लॉजिस्टिक्स व्यवसाय कार्यक्षमतेने व्यवस्थापित करा</string>
+    <string name="onboarding_title_2">रिअल-टाइम ट्रॅकिंग</string>
+    <string name="onboarding_desc_2">आमच्या प्रगत प्रणालीसह तुमच्या डिलिव्हरी आणि फ्लीटचा रिअल-टाइममध्ये मागोवा घ्या</string>
+    <string name="onboarding_title_3">अधिक कमवा</string>
+    <string name="onboarding_desc_3">स्मार्ट राउटिंग आणि फ्लीट व्यवस्थापनासह तुमची कमाई वाढवा</string>
+    
+    <!-- Errors -->
+    <string name="error_loading_profile">प्रोफाइल लोड करण्यात अयशस्वी</string>
+    <string name="error_saving_language">भाषा प्राधान्य जतन करण्यात अयशस्वी</string>
+    <string name="error_network">नेटवर्क त्रुटी. कृपया तुमचे कनेक्शन तपासा.</string>
+    <string name="error_loading_earnings">कमाई लोड करण्यात अयशस्वी</string>
+    <string name="error_loading_performance">कामगिरी डेटा लोड करण्यात अयशस्वी</string>
+    <string name="error_loading_notifications">सूचना लोड करण्यात अयशस्वी</string>
+    <string name="error_loading_trips">ट्रिप इतिहास लोड करण्यात अयशस्वी</string>
+    <string name="error_generic">काहीतरी चूक झाली. कृपया पुन्हा प्रयत्न करा.</string>
+    
+    <!-- ================================================================== -->
+    <!-- PHASE 1: Dashboard Localization — New String Keys                   -->
+    <!-- ================================================================== -->
+    
+    <!-- Dashboard — Top Bar & Greeting -->
+    <string name="welcome_format">स्वागत आहे, %1$s!</string>
+    <string name="good_morning">सुप्रभात</string>
+    <string name="good_afternoon">शुभ दुपार</string>
+    <string name="good_evening">शुभ संध्याकाळ</string>
+    <string name="menu">मेनू</string>
+    
+    <!-- Dashboard — Earnings Card -->
+    <string name="your_earnings">तुमची कमाई</string>
+    <string name="today">आज</string>
+    <string name="this_week">हा आठवडा</string>
+    <string name="this_month">हा महिना</string>
+    <string name="trips_count">%1$d ट्रिप्स</string>
+    <string name="pending_payment">प्रलंबित पेमेंट</string>
+    <string name="start_accepting_trips">कमाई करण्यासाठी ट्रिप्स स्वीकारणे सुरू करा!</string>
+    <string name="earnings_auto_calculated">तुमची कमाई आपोआप मोजली जाईल</string>
+    
+    <!-- Dashboard — Active Trip -->
+    <string name="active_trip">सक्रिय ट्रिप</string>
+    <string name="time_elapsed_format">गेलेला वेळ: %1$d मिनिटे</string>
+    <string name="eta_format">ईटीए: %1$d मिनिटे</string>
+    
+    <!-- Dashboard — Stats Grid -->
+    <string name="quick_stats">द्रुत आकडेवारी</string>
+    <string name="total_trips">एकूण ट्रिप्स</string>
+    <string name="distance_label">अंतर</string>
+    <string name="rating_label">रेटिंग</string>
+    <string name="on_time_label">वेळेवर</string>
+    
+    <!-- Dashboard — Performance -->
+    <string name="performance">कामगिरी</string>
+    <string name="no_performance_data">कामगिरी डेटा नाही</string>
+    <string name="complete_trips_performance">तुमचे कामगिरी मेट्रिक्स तयार करण्यासाठी ट्रिप्स पूर्ण करा</string>
+    <string name="acceptance_rate">स्वीकृती\nदर</string>
+    <string name="on_time_delivery">वेळेवर\nडिलिव्हरी</string>
+    <string name="rating_format">रेटिंग\n%1$s⭐</string>
+    
+    <!-- Dashboard — Recent Trips -->
+    <string name="recent_trips">अलीकडील ट्रिप्स</string>
+    <string name="view_all">सर्व पहा</string>
+    <string name="no_trips_yet">अद्याप ट्रिप्स नाहीत</string>
+    <string name="no_trips_message">तुमच्या पूर्ण झालेल्या ट्रिप्स येथे दिसतील. ट्रान्सपोर्टर्सकडून ट्रिप्स स्वीकारणे सुरू करा!</string>
+    
+    <!-- Dashboard — Notifications -->
+    <string name="recent_notifications">अलीकडील सूचना</string>
+    <string name="no_notifications">सूचना नाहीत</string>
+    <string name="no_notifications_message">तुम्ही सर्व अद्ययावत आहात! नवीन ट्रिप विनंत्या आणि अपडेट्स येथे दिसतील.</string>
+    
+    <!-- Dashboard — Error State -->
+    <string name="oops_something_wrong">अरेरे! काहीतरी चूक झाली</string>
+    
+    <!-- Trip Status -->
+    <string name="heading_to_pickup">पिकअपकडे जात आहे</string>
+    <string name="at_pickup_location">पिकअप ठिकाणी</string>
+    <string name="in_transit_status">प्रवासात</string>
+    <string name="at_drop_location">ड्रॉप ठिकाणी</string>
+    <string name="completed_status">पूर्ण झाले</string>
+    
+    <!-- Trip Status Labels (Transporter) -->
+    <string name="status_pending">प्रलंबित</string>
+    <string name="status_assigned">नियुक्त केले</string>
+    <string name="status_accepted">स्वीकारले</string>
+    <string name="status_at_pickup">पिकअपवर</string>
+    <string name="status_loaded">लोड केले</string>
+    <string name="status_in_progress">प्रगतीपथावर</string>
+    <string name="status_completed">पूर्ण झाले</string>
+    <string name="status_rejected">नाकारले</string>
+    <string name="status_cancelled">रद्द केले</string>
+    
+    <!-- Time Ago -->
+    <string name="just_now">आत्ताच</string>
+    <string name="min_ago_format">%1$d मिनिट आधी</string>
+    <string name="hour_ago_format">%1$d तास आधी</string>
+    <string name="hours_ago_format">%1$d तास आधी</string>
+    <string name="day_ago_format">%1$d दिवस आधी</string>
+    <string name="days_ago_format">%1$d दिवस आधी</string>
+    
+    <!-- Navigation Drawer -->
+    <string name="trip_history">ट्रिप इतिहास</string>
+    <string name="earnings_menu">कमाई</string>
+    <string name="documents_menu">कागदपत्रे</string>
+    <string name="my_fleet">माझी फ्लीट</string>
+    <string name="my_drivers">माझे ड्रायव्हर</string>
+    <string name="trips_menu">ट्रिप्स</string>
+    <string name="not_logged_in">लॉग इन केलेले नाही</string>
+    <string name="tap_edit_profile">प्रोफाइल संपादित करण्यासाठी टॅप करा</string>
+    <string name="set_your_name">तुमचे नाव सेट करा</string>
+    <string name="app_version_format">वीलो कॅप्टन v%1$s</string>
+    
+    <!-- Settings — Descriptions -->
+    <string name="push_notifications_desc">ट्रिप आणि पेमेंट सूचना प्राप्त करा</string>
+    <string name="receive_driver_notifications">ट्रिप आणि ड्रायव्हर सूचना प्राप्त करा</string>
+    <string name="change_language">भाषा बदला</string>
+    <string name="theme_light">हलका</string>
+    <string name="privacy_policy_desc">आमचे गोपनीयता धोरण पहा</string>
+    <string name="terms_desc">सेवा अटी पहा</string>
+    <string name="help_support_desc">मदत मिळवा किंवा आम्हाला संपर्क करा</string>
+    <string name="about_version_format">आवृत्ती %1$s</string>
+    <string name="logout_confirmation_title">लॉगआउट</string>
+    <string name="logout_subtitle">तुमच्या खात्यातून साइन आउट करा</string>
+    
+    <!-- Online/Offline Toggle -->
+    <string name="online">ऑनलाइन</string>
+    <string name="offline">ऑफलाइन</string>
+    <string name="you_are_online">तुम्ही ऑनलाइन आहात</string>
+    <string name="you_are_offline">तुम्ही ऑफलाइन आहात</string>
+    <string name="switching_status">बदलत आहे…</string>
+    <string name="please_wait">कृपया प्रतीक्षा करा</string>
+    <string name="accepting_trip_requests">ट्रिप विनंत्या स्वीकारत आहे</string>
+    <string name="not_accepting_trips">ट्रिप्स स्वीकारत नाही</string>
+    <string name="receiving_booking_requests">बुकिंग विनंत्या प्राप्त करत आहे</string>
+    <string name="not_receiving_requests">विनंत्या प्राप्त करत नाही</string>
+    <string name="no_internet_connection">इंटरनेट कनेक्शन नाही</string>
+    <string name="offline_banner_message">तुम्ही ऑफलाइन आहात. काही वैशिष्ट्ये कार्य करू शकत नाहीत.</string>
+    <string name="no_network">नेटवर्क नाही</string>
+    
+    <!-- Map & Components -->
+    <string name="pickup_label">पिकअप</string>
+    <string name="drop_label">ड्रॉप</string>
+    <string name="map_view">नकाशा दृश्य</string>
+    <string name="tap_to_open_map">संपूर्ण नकाशा उघडण्यासाठी टॅप करा</string>
+    <string name="search_placeholder">शोधा…</string>
+    <string name="clear">साफ करा</string>
+    <string name="profile">प्रोफाइल</string>
+    
+    <!-- Transporter Dashboard -->
+    <string name="total_vehicles">एकूण वाहने</string>
+    <string name="total_drivers">एकूण ड्रायव्हर</string>
+    <string name="quick_actions">द्रुत क्रिया</string>
+    <string name="add_vehicle">वाहन जोडा</string>
+    <string name="add_driver">ड्रायव्हर जोडा</string>
+    <string name="cannot_connect_backend">बॅकएंडशी कनेक्ट होऊ शकत नाही</string>
+    <string name="order_cancelled">ऑर्डर रद्द केली</string>
+    <string name="trucks_released_format">%1$d ट्रक सोडले</string>
+    <string name="call_action">कॉल करा</string>
+    
+    <!-- Content Descriptions -->
+    <string name="cd_notifications">सूचना</string>
+    <string name="cd_profile">प्रोफाइल</string>
+    <string name="cd_menu">मेनू</string>
+    <string name="cd_back">मागे</string>
+    <string name="cd_clear">साफ करा</string>
+    <string name="cd_verified">सत्यापित</string>
+    <string name="cd_map">नकाशा</string>
+    <string name="cd_logout">लॉगआउट</string>
+    <string name="cd_download">डाउनलोड</string>
+    <string name="cd_refresh">रिफ्रेश</string>
+    <string name="cd_edit">संपादित करा</string>
+    <string name="cd_search">शोधा</string>
+    <!-- PHASE 2 -->
+    <string name="earnings_title">कमाई</string>
+    <string name="period_today">आज</string>
+    <string name="period_week">आठवडा</string>
+    <string name="period_month">महिना</string>
+    <string name="total_earnings_format">एकूण कमाई (%1$s)</string>
+    <string name="trips_label">ट्रिप</string>
+    <string name="avg_per_trip">सरासरी/ट्रिप</string>
+    <string name="pending_payments">बाकी पेमेंट</string>
+    <string name="pending_amount">बाकी रक्कम</string>
+    <string name="request_payment">विनंती</string>
+    <string name="trip_wise_breakdown">ट्रिप-निहाय तपशील</string>
+    <string name="status_paid">भरले</string>
+    <string name="performance_title">कामगिरी</string>
+    <string name="overall_rating">एकूण रेटिंग</string>
+    <string name="based_on_trips_format">%1$d ट्रिपच्या आधारावर</string>
+    <string name="trip_statistics">ट्रिप आकडेवारी</string>
+    <string name="total_label">एकूण</string>
+    <string name="completed_label">पूर्ण</string>
+    <string name="cancelled_label">रद्द</string>
+    <string name="performance_metrics">कामगिरी मेट्रिक्स</string>
+    <string name="on_time_delivery_rate">वेळेवर डिलिव्हरी</string>
+    <string name="acceptance_rate_label">स्वीकृती दर</string>
+    <string name="distance_covered">कापलेले अंतर</string>
+    <string name="completion_rate">पूर्णता दर</string>
+    <string name="monthly_trends">मासिक ट्रेंड</string>
+    <string name="last_months_format">मागील %1$d महिने</string>
+    <string name="recent_trips_label">अलीकडील ट्रिप</string>
+    <string name="notifications_title">सूचना</string>
+    <string name="filter_all">सर्व</string>
+    <string name="filter_unread">न वाचलेले</string>
+    <string name="filter_trips">ट्रिप</string>
+    <string name="filter_payments">पेमेंट</string>
+    <string name="no_notifications_label">सूचना नाहीत</string>
+    <string name="time_m_ago_format">%1$d मि. पूर्वी</string>
+    <string name="time_h_ago_format">%1$d ता. पूर्वी</string>
+    <string name="time_d_ago_format">%1$d दि. पूर्वी</string>
+    <string name="trip_history_title">ट्रिप इतिहास</string>
+    <string name="search_customer_location">ग्राहक किंवा स्थानानुसार शोधा</string>
+    <string name="filter_completed">पूर्ण</string>
+    <string name="filter_cancelled">रद्द</string>
+    <string name="no_trip_history">अजून ट्रिप इतिहास नाही</string>
+    <string name="no_trips_found">ट्रिप सापडल्या नाहीत</string>
+    <string name="total_summary">एकूण</string>
+    <string name="earned_label">कमावले</string>
+    <string name="in_progress_label">सुरू आहे</string>
+    <string name="km_format">%1$s कि.मी.</string>
+    <string name="profile_photo_label">प्रोफाइल फोटो</string>
+    <string name="visible_to_transporter">ट्रान्सपोर्टरला दिसेल</string>
+    <string name="only_visible_to_you">फक्त तुम्हाला दिसेल</string>
+    <string name="update_photo">फोटो अपडेट करा</string>
+    <string name="choose_photo_method">फोटो कसा अपडेट करायचा ते निवडा:</string>
+    <string name="take_photo">फोटो घ्या</string>
+    <string name="use_camera">कॅमेरा वापरा</string>
+    <string name="choose_from_gallery">गॅलरीतून निवडा</string>
+    <string name="select_existing_photo">विद्यमान फोटो निवडा</string>
+    <string name="uploading_photo">फोटो अपलोड होत आहे…</string>
+    <string name="front_label">पुढे</string>
+    <string name="back_label">मागे</string>
+    <string name="license_format">लायसन्स %1$s</string>
+    <string name="my_documents">माझी कागदपत्रे</string>
+    <string name="upload_documents_info">पडताळणीसाठी तुमच्या कागदपत्रांचे स्पष्ट फोटो अपलोड करा</string>
+    <string name="driving_license">ड्रायव्हिंग लायसन्स</string>
+    <string name="aadhar_card">आधार कार्ड</string>
+    <string name="pan_card">पॅन कार्ड</string>
+    <string name="vehicle_rc_optional">वाहन आरसी (पर्यायी)</string>
+    <string name="vehicle_insurance_optional">वाहन विमा (पर्यायी)</string>
+    <string name="doc_verified">पडताळलेले</string>
+    <string name="doc_pending">प्रलंबित</string>
+    <string name="doc_not_uploaded">अपलोड केले नाही</string>
+    <string name="view_button">पहा</string>
+    <string name="upload_button">अपलोड</string>
+    <string name="reupload_button">पुन्हा अपलोड</string>
+    <string name="documents_note">टीप: ट्रिप सुरू करण्यापूर्वी आवश्यक कागदपत्रे पडताळली जाणे आवश्यक आहे.</string>
+    <string name="valid_till_format">वैध तारीख: %1$s</string>
+    <string name="distance">अंतर</string>
+    <string name="speed">वेग</string>
+    <string name="fare">भाडे</string>
+    <string name="distance_km_format">%.1f km</string>
+    <string name="speed_kmh_format">%d km/h</string>
+    <string name="fare_amount_format">₹%.0f</string>
+    <string name="lat_lng_format">Lat: %.4f, Lng: %.4f</string>
+    <string name="error_invalid_customer_name">अवैध ग्राहक नाव</string>
+    <string name="error_invalid_phone">अवैध फोन नंबर</string>
+</resources>
