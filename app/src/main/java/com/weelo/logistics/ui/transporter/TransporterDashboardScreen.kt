@@ -420,10 +420,13 @@ fun TransporterDashboardScreen(
             }
         }
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Surface)
+        ) {
+        Column(
+            modifier = Modifier.fillMaxSize()
         ) {
             // Offline Banner - Shows when device is offline
             OfflineBanner(
@@ -634,7 +637,13 @@ fun TransporterDashboardScreen(
                     }
                 }
             }
-        }
+        } // end Column
+        // SnackbarHost — renders cancellation snackbar at bottom of screen
+        androidx.compose.material3.SnackbarHost(
+            hostState = cancelSnackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
+        } // end Box
     }
 }
 

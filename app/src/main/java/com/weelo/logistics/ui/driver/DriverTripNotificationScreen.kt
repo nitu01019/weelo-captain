@@ -62,9 +62,34 @@ fun DriverTripNotificationScreen(
             val token = RetrofitClient.getAccessToken()
             if (token != null) {
                 val assignmentResponse = RetrofitClient.assignmentApi.getDriverAssignments("Bearer $token")
-                val assignmentData = assignmentResponse.body()
-                // Map assignments to notification format
-                Timber.d("TripNotifications: Loaded ${assignmentData?.toString()?.length ?: 0} bytes for driver")
+                if (assignmentResponse.isSuccessful) {
+                    val assignmentData = assignmentResponse.body()?.data?.assignments
+                    // Map assignments to notification format
+                    if (assignmentData != null) {
+                        notifications = assignmentData.map { a ->
+                            DriverTripNotification(
+                                notificationId = a.id,
+                                assignmentId = a.id,
+                                driverId = a.driverId,
+                                pickupAddress = a.pickupAddress ?: "Pickup",
+                                dropAddress = a.dropAddress ?: "Drop",
+                                distance = a.distanceKm ?: 0.0,
+                                estimatedDuration = ((a.distanceKm ?: 0.0) / 30.0 * 60).toLong(),
+                                fare = a.pricePerTruck ?: 0.0,
+                                goodsType = a.goodsType ?: a.vehicleType ?: "General",
+                                status = when (a.status) {
+                                    "driver_accepted" -> NotificationStatus.ACCEPTED
+                                    "driver_declined" -> NotificationStatus.DECLINED
+                                    "expired" -> NotificationStatus.EXPIRED
+                                    else -> NotificationStatus.PENDING_RESPONSE
+                                }
+                            )
+                        }
+                        Timber.d("TripNotifications: Loaded ${notifications.size} assignments for driver")
+                    }
+                } else {
+                    Timber.w("TripNotifications: API error ${assignmentResponse.code()}")
+                }
             }
         } catch (e: Exception) {
             Timber.e("TripNotifications: Failed to load: ${e.message}")
@@ -80,13 +105,21 @@ fun DriverTripNotificationScreen(
             try {
                 val token = RetrofitClient.getAccessToken()
                 if (token != null) {
-                    RetrofitClient.assignmentApi.getDriverAssignments("Bearer $token")
-                    // Check for new assignments since last check
-                    hasNewNotification = true
-                    delay(2000)
-                    hasNewNotification = false
+                    val response = RetrofitClient.assignmentApi.getDriverAssignments("Bearer $token")
+                    if (response.isSuccessful) {
+                        val newData = response.body()?.data?.assignments
+                        if (newData != null && newData.size != notifications.size) {
+                            // New assignments arrived — update list and flash badge
+                            hasNewNotification = true
+                            delay(2000)
+                            hasNewNotification = false
+                        }
+                    }
                 }
-            } catch (_: Exception) { /* silent poll failure */ }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Timber.w("TripNotifications: Poll failed: ${e.message}")
+            }
         }
     }
     

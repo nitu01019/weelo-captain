@@ -62,18 +62,25 @@ fun LiveTrackingScreen(
     LaunchedEffect(tripId) {
         try {
             val activeResponse = RetrofitClient.driverApi.getActiveTrip()
-            val tripData = activeResponse.body()?.data?.trip
-            if (tripData != null) {
-                tripPickup = tripData.pickup.address
-                tripDrop = tripData.drop.address
-                tripFare = tripData.fare
-                tripDistance = tripData.distanceKm
-                tripStatus = tripData.status
+            if (activeResponse.isSuccessful) {
+                val tripData = activeResponse.body()?.data?.trip
+                if (tripData != null) {
+                    tripPickup = tripData.pickup.address
+                    tripDrop = tripData.drop.address
+                    tripFare = tripData.fare
+                    tripDistance = tripData.distanceKm
+                    tripStatus = tripData.status
+                } else {
+                    errorMessage = "Trip data not found"
+                }
+            } else {
+                errorMessage = "Failed to load trip (${activeResponse.code()})"
+                Timber.w("LiveTracking: API error ${activeResponse.code()}")
             }
-            isLoading = false
         } catch (e: Exception) {
             Timber.e(e, "LiveTracking: Failed to load trip details")
-            errorMessage = e.message
+            errorMessage = e.message ?: "Network error"
+        } finally {
             isLoading = false
         }
     }
@@ -83,12 +90,17 @@ fun LiveTrackingScreen(
         while (true) {
             try {
                 val response = RetrofitClient.trackingApi.getTripTracking(tripId)
-                val data = response.body()?.data
-                if (data != null) {
-                    trackingData = data
-                    tripStatus = data.status
+                if (response.isSuccessful) {
+                    val data = response.body()?.data
+                    if (data != null) {
+                        trackingData = data
+                        tripStatus = data.status
+                    }
+                } else {
+                    Timber.w("LiveTracking: Poll error ${response.code()}")
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Timber.w("LiveTracking: Location poll failed: ${e.message}")
             }
             delay(5_000)

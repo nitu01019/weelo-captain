@@ -76,10 +76,21 @@ fun TripStatusManagementScreen(
             kotlinx.coroutines.delay(5000)
             isRefreshing = true
             try {
-                RetrofitClient.assignmentApi.getAssignmentById("", assignmentId)
-                Timber.d("TripStatus: Refreshed assignment data")
-            } catch (_: Exception) { /* silent refresh failure */ }
-            isRefreshing = false
+                val token = RetrofitClient.getAccessToken()
+                if (token != null) {
+                    val response = RetrofitClient.assignmentApi.getAssignmentById("Bearer $token", assignmentId)
+                    if (response.isSuccessful) {
+                        Timber.d("TripStatus: Refreshed assignment data")
+                    } else {
+                        Timber.w("TripStatus: Refresh failed ${response.code()}")
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Timber.w("TripStatus: Refresh error: ${e.message}")
+            } finally {
+                isRefreshing = false
+            }
         }
     }
     

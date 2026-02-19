@@ -441,8 +441,15 @@ class GPSTrackingService : Service() {
                     .uploadBatch(request)
                 
                 if (response.isSuccessful) {
-                    val result = response.body()?.data
-                    timber.log.Timber.i("✅ Batch uploaded: ${result?.accepted}/${result?.processed} accepted")
+                    val body = response.body()
+                    val result = body?.data
+                    if (body?.success == true) {
+                        timber.log.Timber.i("✅ Batch uploaded: ${result?.accepted}/${result?.processed} accepted")
+                    } else {
+                        // HTTP 200 but success=false — server rejected, retry
+                        timber.log.Timber.w("⚠️ Batch upload success=false — will retry")
+                        locationBatch.addAll(0, batchToSend)
+                    }
                 } else {
                     timber.log.Timber.w("⚠️ Batch upload failed: ${response.code()} — will retry")
                     // Re-add to batch for retry on next flush
