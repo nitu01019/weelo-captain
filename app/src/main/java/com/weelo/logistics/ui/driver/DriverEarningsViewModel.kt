@@ -97,8 +97,20 @@ class DriverEarningsViewModel : ViewModel() {
                 val earningsResponse = driverApi.getDriverEarnings(apiPeriod)
                 val tripsResponse = driverApi.getDriverTrips(status = "completed", limit = 20)
 
+                if (!earningsResponse.isSuccessful) {
+                    _earningsState.value = EarningsState.Error("API error ${earningsResponse.code()}")
+                    Timber.w("$TAG: Earnings API error ${earningsResponse.code()} for $period")
+                    return@launch
+                }
+                if (earningsResponse.body()?.success != true) {
+                    _earningsState.value = EarningsState.Error("Failed to load earnings")
+                    Timber.w("$TAG: success=false for $period")
+                    return@launch
+                }
+
                 val earningsData = earningsResponse.body()?.data
-                val tripsData = tripsResponse.body()?.data
+                val tripsData = if (tripsResponse.isSuccessful && tripsResponse.body()?.success == true)
+                    tripsResponse.body()?.data else null
 
                 if (earningsData != null) {
                     val result = EarningsData(

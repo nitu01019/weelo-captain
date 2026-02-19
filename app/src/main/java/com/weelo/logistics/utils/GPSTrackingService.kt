@@ -83,6 +83,14 @@ class GPSTrackingService : Service() {
         // Batch settings
         private const val LOCATION_BATCH_SIZE = 5               // Send batch every 5 locations
         private const val LOCATION_BATCH_TIMEOUT_MS = 60_000L   // Or every 60 seconds
+        private const val MAX_BATCH_BUFFER = 1000               // Cap buffer to prevent unbounded growth
+
+        // Reusable ISO-8601 UTC formatter — avoids per-point allocation
+        private val ISO_UTC_FORMAT by lazy {
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }
+        }
         
         // Intent extras
         const val EXTRA_TRIP_ID = "extra_trip_id"
@@ -413,8 +421,8 @@ class GPSTrackingService : Service() {
         serviceScope.launch {
             try {
                 timber.log.Timber.d("📤 Sending location batch: ${batchToSend.size} points to POST /tracking/batch")
-                
-                // Convert LocationData → BatchLocationPoint for the API
+
+                // Convert LocationData → BatchLocationPoint — reuse shared formatter (no per-point allocation)
                 val batchPoints = batchToSend.map { loc ->
                     com.weelo.logistics.data.api.BatchLocationPoint(
                         latitude = loc.latitude,
@@ -422,46 +430,63 @@ class GPSTrackingService : Service() {
                         speed = loc.speed,
                         bearing = loc.bearing,
                         accuracy = loc.accuracy,
-                        timestamp = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
-                            timeZone = java.util.TimeZone.getTimeZone("UTC")
-                        }.format(java.util.Date(loc.timestamp))
+                        timestamp = ISO_UTC_FORMAT.format(java.util.Date(loc.timestamp))
                     )
                 }
-                
+
                 // Get tripId from the first point (all points in batch have same tripId)
                 val batchTripId = batchToSend.firstOrNull()?.tripId ?: return@launch
-                
+
                 val request = com.weelo.logistics.data.api.BatchLocationRequest(
                     tripId = batchTripId,
                     points = batchPoints
                 )
-                
+
                 val response = com.weelo.logistics.data.remote.RetrofitClient
                     .trackingApi
                     .uploadBatch(request)
-                
+
                 if (response.isSuccessful) {
                     val body = response.body()
                     val result = body?.data
                     if (body?.success == true) {
                         timber.log.Timber.i("✅ Batch uploaded: ${result?.accepted}/${result?.processed} accepted")
                     } else {
-                        // HTTP 200 but success=false — server rejected, retry
+                        // HTTP 200 but success=false — server rejected, retry with buffer cap
                         timber.log.Timber.w("⚠️ Batch upload success=false — will retry")
-                        locationBatch.addAll(0, batchToSend)
+                        retryBatch(batchToSend)
                     }
                 } else {
-                    timber.log.Timber.w("⚠️ Batch upload failed: ${response.code()} — will retry")
-                    // Re-add to batch for retry on next flush
-                    locationBatch.addAll(0, batchToSend)
+                    val code = response.code()
+                    if (code == 401 || code == 403) {
+                        // Auth error — do NOT retry with stale token; discard batch
+                        timber.log.Timber.w("⚠️ Batch upload auth error $code — discarding batch (stale token)")
+                    } else {
+                        timber.log.Timber.w("⚠️ Batch upload failed: $code — will retry")
+                        retryBatch(batchToSend)
+                    }
                 }
-                
+
             } catch (e: Exception) {
                 timber.log.Timber.e(e, "❌ Failed to send location batch — will retry")
-                // Re-add to batch for retry
-                locationBatch.addAll(0, batchToSend)
+                retryBatch(batchToSend)
             }
         }
+    }
+
+    /**
+     * Re-queue a failed batch for retry, capped at MAX_BATCH_BUFFER to prevent unbounded growth.
+     * Drops oldest points if buffer is full (newest data is more valuable for live tracking).
+     */
+    private fun retryBatch(failed: List<LocationData>) {
+        val combined = failed + locationBatch
+        locationBatch.clear()
+        // Keep only the most recent MAX_BATCH_BUFFER points
+        val capped = if (combined.size > MAX_BATCH_BUFFER) {
+            timber.log.Timber.w("⚠️ Buffer overflow: dropping ${combined.size - MAX_BATCH_BUFFER} oldest points")
+            combined.takeLast(MAX_BATCH_BUFFER)
+        } else combined
+        locationBatch.addAll(capped)
     }
 }
 

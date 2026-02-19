@@ -101,6 +101,17 @@ class DriverTripHistoryViewModel : ViewModel() {
                     offset = 0
                 )
 
+                if (!response.isSuccessful) {
+                    _tripHistoryState.value = TripHistoryState.Error("API error ${response.code()}")
+                    Timber.w("$TAG: API error ${response.code()} for filter=$filter")
+                    return@launch
+                }
+                if (response.body()?.success != true) {
+                    _tripHistoryState.value = TripHistoryState.Error("Failed to load trips")
+                    Timber.w("$TAG: success=false for filter=$filter")
+                    return@launch
+                }
+
                 val tripsData = response.body()?.data
 
                 if (tripsData != null) {

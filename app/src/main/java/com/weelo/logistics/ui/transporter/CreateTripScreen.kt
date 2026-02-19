@@ -54,24 +54,31 @@ fun CreateTripScreen(
             val vehicleResponse = RetrofitClient.vehicleApi.getVehicles()
             val driverResponse = RetrofitClient.driverApi.getDriverList()
 
-            vehicleResponse.body()?.let { resp ->
-                if (resp.success) {
-                    vehicleNames = (resp.data as? List<*>)?.mapNotNull { v ->
-                        val map = v as? Map<*, *>
-                        val id = map?.get("id")?.toString() ?: return@mapNotNull null
-                        val number = map["vehicleNumber"]?.toString() ?: map["registrationNumber"]?.toString() ?: id
-                        Pair(id, number)
-                    } ?: emptyList()
-                }
+            if (vehicleResponse.isSuccessful && vehicleResponse.body()?.success == true) {
+                val vehicleList = vehicleResponse.body()?.data?.vehicles
+                vehicleNames = vehicleList?.mapNotNull { v ->
+                    val id = v.id.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    val number = v.vehicleNumber.takeIf { it.isNotBlank() } ?: id
+                    Pair(id, number)
+                } ?: emptyList()
+            } else {
+                Timber.w("CreateTrip: Failed to load vehicles ${vehicleResponse.code()}")
+                errorMessage = "Failed to load vehicles"
             }
 
-            driverResponse.body()?.data?.let { data ->
-                driverNames = data.drivers.map { Pair(it.id, it.name ?: it.phone) }
+            if (driverResponse.isSuccessful && driverResponse.body()?.success == true) {
+                driverResponse.body()?.data?.let { data ->
+                    driverNames = data.drivers.map { Pair(it.id, it.name ?: it.phone) }
+                }
+            } else {
+                Timber.w("CreateTrip: Failed to load drivers ${driverResponse.code()}")
             }
 
             Timber.d("CreateTrip: Loaded ${vehicleNames.size} vehicles, ${driverNames.size} drivers")
         } catch (e: Exception) {
-            Timber.e("CreateTrip: Failed to load data: ${e.message}")
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Timber.e(e, "CreateTrip: Failed to load data")
+            errorMessage = "Failed to load form data"
         }
     }
     
@@ -224,11 +231,15 @@ fun CreateTripScreen(
                                         fare = fare.toDoubleOrNull() ?: 0.0,
                                         status = TripStatus.ASSIGNED
                                     )
-                                    // TODO: Call API to create trip when backend endpoint is ready
-                                    Timber.d("CreateTrip: Trip created - $trip")
+                                    // TODO: Replace with real API call when endpoint is ready
+                                    // val response = RetrofitClient.tripApi.createTrip(trip)
+                                    // if (!response.isSuccessful) { errorMessage = "Failed: ${response.code()}"; return@launch }
+                                    Timber.d("CreateTrip: Trip staged locally - $trip")
+                                    // Only navigate on success (not before API call)
                                     onTripCreated()
                                 } catch (e: Exception) {
-                                    Timber.e("CreateTrip: Failed to create trip: ${e.message}")
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Timber.e(e, "CreateTrip: Failed to create trip")
                                     errorMessage = "Failed to create trip"
                                 } finally {
                                     isLoading = false

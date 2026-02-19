@@ -46,6 +46,33 @@ import timber.log.Timber
  * - Auto-refresh list when new notification arrives
  * - Handle notification expiry (e.g., 5 minutes timeout)
  */
+// =============================================================================
+// HELPERS
+// =============================================================================
+
+/** Maps backend AssignmentData list → DriverTripNotification list. Single source of truth. */
+private fun mapAssignmentsToNotifications(
+    assignments: List<com.weelo.logistics.data.api.AssignmentData>
+): List<DriverTripNotification> = assignments.map { a ->
+    DriverTripNotification(
+        notificationId = a.id,
+        assignmentId = a.id,
+        driverId = a.driverId,
+        pickupAddress = a.pickupAddress ?: "Pickup",
+        dropAddress = a.dropAddress ?: "Drop",
+        distance = a.distanceKm ?: 0.0,
+        estimatedDuration = ((a.distanceKm ?: 0.0) / 30.0 * 60).toLong(),
+        fare = a.pricePerTruck ?: 0.0,
+        goodsType = a.goodsType ?: a.vehicleType ?: "General",
+        status = when (a.status) {
+            "driver_accepted" -> NotificationStatus.ACCEPTED
+            "driver_declined" -> NotificationStatus.DECLINED
+            "expired" -> NotificationStatus.EXPIRED
+            else -> NotificationStatus.PENDING_RESPONSE
+        }
+    )
+}
+
 @Composable
 fun DriverTripNotificationScreen(
     driverId: String,
@@ -62,37 +89,17 @@ fun DriverTripNotificationScreen(
             val token = RetrofitClient.getAccessToken()
             if (token != null) {
                 val assignmentResponse = RetrofitClient.assignmentApi.getDriverAssignments("Bearer $token")
-                if (assignmentResponse.isSuccessful) {
+                if (assignmentResponse.isSuccessful && assignmentResponse.body()?.success == true) {
                     val assignmentData = assignmentResponse.body()?.data?.assignments
-                    // Map assignments to notification format
-                    if (assignmentData != null) {
-                        notifications = assignmentData.map { a ->
-                            DriverTripNotification(
-                                notificationId = a.id,
-                                assignmentId = a.id,
-                                driverId = a.driverId,
-                                pickupAddress = a.pickupAddress ?: "Pickup",
-                                dropAddress = a.dropAddress ?: "Drop",
-                                distance = a.distanceKm ?: 0.0,
-                                estimatedDuration = ((a.distanceKm ?: 0.0) / 30.0 * 60).toLong(),
-                                fare = a.pricePerTruck ?: 0.0,
-                                goodsType = a.goodsType ?: a.vehicleType ?: "General",
-                                status = when (a.status) {
-                                    "driver_accepted" -> NotificationStatus.ACCEPTED
-                                    "driver_declined" -> NotificationStatus.DECLINED
-                                    "expired" -> NotificationStatus.EXPIRED
-                                    else -> NotificationStatus.PENDING_RESPONSE
-                                }
-                            )
-                        }
-                        Timber.d("TripNotifications: Loaded ${notifications.size} assignments for driver")
-                    }
+                    notifications = mapAssignmentsToNotifications(assignmentData.orEmpty())
+                    Timber.d("TripNotifications: Loaded ${notifications.size} assignments for driver")
                 } else {
                     Timber.w("TripNotifications: API error ${assignmentResponse.code()}")
                 }
             }
         } catch (e: Exception) {
-            Timber.e("TripNotifications: Failed to load: ${e.message}")
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Timber.e(e, "TripNotifications: Failed to load")
         } finally {
             isLoading = false
         }
@@ -106,10 +113,15 @@ fun DriverTripNotificationScreen(
                 val token = RetrofitClient.getAccessToken()
                 if (token != null) {
                     val response = RetrofitClient.assignmentApi.getDriverAssignments("Bearer $token")
-                    if (response.isSuccessful) {
-                        val newData = response.body()?.data?.assignments
-                        if (newData != null && newData.size != notifications.size) {
-                            // New assignments arrived — update list and flash badge
+                    if (response.isSuccessful && response.body()?.success == true) {
+                        val newList = mapAssignmentsToNotifications(
+                            response.body()?.data?.assignments.orEmpty()
+                        )
+                        // Only update state + flash badge when IDs actually changed
+                        val oldIds = notifications.map { it.notificationId }
+                        val newIds = newList.map { it.notificationId }
+                        if (newIds != oldIds) {
+                            notifications = newList
                             hasNewNotification = true
                             delay(2000)
                             hasNewNotification = false

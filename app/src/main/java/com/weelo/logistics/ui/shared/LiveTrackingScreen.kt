@@ -62,7 +62,7 @@ fun LiveTrackingScreen(
     LaunchedEffect(tripId) {
         try {
             val activeResponse = RetrofitClient.driverApi.getActiveTrip()
-            if (activeResponse.isSuccessful) {
+            if (activeResponse.isSuccessful && activeResponse.body()?.success == true) {
                 val tripData = activeResponse.body()?.data?.trip
                 if (tripData != null) {
                     tripPickup = tripData.pickup.address
@@ -78,6 +78,7 @@ fun LiveTrackingScreen(
                 Timber.w("LiveTracking: API error ${activeResponse.code()}")
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Timber.e(e, "LiveTracking: Failed to load trip details")
             errorMessage = e.message ?: "Network error"
         } finally {
@@ -90,7 +91,7 @@ fun LiveTrackingScreen(
         while (true) {
             try {
                 val response = RetrofitClient.trackingApi.getTripTracking(tripId)
-                if (response.isSuccessful) {
+                if (response.isSuccessful && response.body()?.success == true) {
                     val data = response.body()?.data
                     if (data != null) {
                         trackingData = data
