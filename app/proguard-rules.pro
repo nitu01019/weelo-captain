@@ -23,7 +23,27 @@
     public static *** d(...);
     public static *** v(...);
     public static *** i(...);
+    public static *** w(...);
 }
+
+# Strip Timber logs in release builds
+-assumenosideeffects class timber.log.Timber {
+    public static *** d(...);
+    public static *** v(...);
+    public static *** i(...);
+    public static *** w(...);
+    public static *** e(...);
+}
+-assumenosideeffects class timber.log.Timber$Tree {
+    public *** d(...);
+    public *** v(...);
+    public *** i(...);
+    public *** w(...);
+    public *** e(...);
+}
+
+# Keep Timber class (but strip method bodies above)
+-keep class timber.log.Timber { *; }
 
 # Optimize code
 -optimizationpasses 5

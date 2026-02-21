@@ -1,5 +1,6 @@
 package com.weelo.logistics.offline
 
+import android.annotation.SuppressLint
 import android.content.Context
 import com.weelo.logistics.data.remote.RetrofitClient
 import kotlinx.coroutines.*
@@ -40,6 +41,7 @@ class OfflineSyncService private constructor(
     private var syncJob: Job? = null
     private var isMonitoring = false
     
+    @SuppressLint("StaticFieldLeak")
     companion object {
         private const val TAG = "OfflineSyncService"
         private const val SYNC_DEBOUNCE_MS = 2000L  // Wait 2s after coming online

@@ -60,6 +60,15 @@ class WeeloFirebaseService : FirebaseMessagingService() {
         const val TYPE_NEW_BROADCAST = "new_broadcast"
         const val TYPE_ASSIGNMENT_UPDATE = "assignment_update"
         const val TYPE_TRIP_UPDATE = "trip_update"
+        const val TYPE_TRIP_ASSIGNED = "trip_assigned"
+        const val TYPE_DRIVER_TIMEOUT = "driver_timeout"
+        const val TYPE_BOOKING_CANCELLED = "booking_cancelled"
+        const val TYPE_BOOKING_EXPIRED = "booking_expired"
+        const val TYPE_TRIP_STATUS_UPDATE = "trip_status_update"
+        const val TYPE_DRIVER_ACCEPTED = "driver_accepted"
+        const val TYPE_TRUCKS_CONFIRMED = "trucks_confirmed"
+        const val TYPE_BOOKING_COMPLETED = "booking_completed"
+        const val TYPE_DRIVER_OFFLINE = "driver_offline"
         const val TYPE_PAYMENT = "payment"
         const val TYPE_GENERAL = "general"
         
@@ -135,6 +144,19 @@ class WeeloFirebaseService : FirebaseMessagingService() {
             _foregroundNotifications.emit(fcmNotification)
         }
         
+        // ================================================================
+        // FCM-TRIGGERED BROADCAST REMOVAL
+        // When booking is cancelled/expired, remove from overlay immediately
+        // This covers the case where socket was disconnected but FCM arrived
+        // ================================================================
+        if (type == TYPE_BOOKING_CANCELLED || type == TYPE_BOOKING_EXPIRED) {
+            val broadcastIdToRemove = fcmNotification.broadcastId
+            if (!broadcastIdToRemove.isNullOrEmpty()) {
+                timber.log.Timber.i("🚫 FCM: Removing broadcast $broadcastIdToRemove (type=$type)")
+                com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(broadcastIdToRemove)
+            }
+        }
+        
         // Show notification (for background or if app wants to show it)
         showNotification(fcmNotification)
     }
@@ -200,6 +222,16 @@ class WeeloFirebaseService : FirebaseMessagingService() {
         val channelId = when (notification.type) {
             TYPE_NEW_BROADCAST -> CHANNEL_BROADCASTS
             TYPE_TRIP_UPDATE -> CHANNEL_TRIPS
+            TYPE_TRIP_ASSIGNED -> CHANNEL_TRIPS        // New trip assigned — HIGH priority
+            TYPE_DRIVER_TIMEOUT -> CHANNEL_TRIPS       // Driver didn't respond — HIGH priority
+            TYPE_ASSIGNMENT_UPDATE -> CHANNEL_TRIPS    // Accept/decline update
+            TYPE_TRIP_STATUS_UPDATE -> CHANNEL_TRIPS   // Phase 5: Trip status change
+            TYPE_DRIVER_ACCEPTED -> CHANNEL_TRIPS      // Phase 5: Driver accepted trip
+            TYPE_TRUCKS_CONFIRMED -> CHANNEL_TRIPS     // Phase 5: Trucks confirmed for customer
+            TYPE_BOOKING_COMPLETED -> CHANNEL_TRIPS    // Phase 5: All deliveries complete
+            TYPE_DRIVER_OFFLINE -> CHANNEL_TRIPS       // Phase 5: Driver may be offline
+            TYPE_BOOKING_CANCELLED -> CHANNEL_BROADCASTS
+            TYPE_BOOKING_EXPIRED -> CHANNEL_BROADCASTS
             TYPE_PAYMENT -> CHANNEL_PAYMENTS
             else -> CHANNEL_GENERAL
         }
@@ -232,10 +264,12 @@ class WeeloFirebaseService : FirebaseMessagingService() {
             .setSound(defaultSoundUri)
             .setContentIntent(pendingIntent)
             .setPriority(
-                if (notification.type == TYPE_NEW_BROADCAST) 
-                    NotificationCompat.PRIORITY_HIGH 
-                else 
-                    NotificationCompat.PRIORITY_DEFAULT
+                when (notification.type) {
+                    TYPE_NEW_BROADCAST, TYPE_TRIP_ASSIGNED, TYPE_DRIVER_TIMEOUT -> 
+                        NotificationCompat.PRIORITY_HIGH
+                    else -> 
+                        NotificationCompat.PRIORITY_DEFAULT
+                }
             )
         
         // Add big text style for longer messages

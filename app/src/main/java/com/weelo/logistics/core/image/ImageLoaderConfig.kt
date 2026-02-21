@@ -47,21 +47,24 @@ object ImageLoaderConfig {
                     .maxSizePercent(0.25) // Use 25% of available RAM
                     .build()
             }
-            // Disk Cache Configuration
+            // Disk Cache Configuration — 100MB for profile photos, license images, fleet photos
             .diskCache {
                 DiskCache.Builder()
                     .directory(context.cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(50 * 1024 * 1024) // 50 MB
+                    .maxSizeBytes(100 * 1024 * 1024) // 100 MB
                     .build()
             }
             // Cache Policies
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
             .networkCachePolicy(CachePolicy.ENABLED)
-            // Respect cache headers from server
-            .respectCacheHeaders(true)
-            // Logging for debugging (remove in production)
-            .crossfade(true) // Smooth image loading animation
+            // Instagram-style: Don't respect S3 cache headers.
+            // S3 pre-signed URLs have short expiry headers which force re-fetches.
+            // We control cache invalidation via URL-based cache keys instead.
+            // New photo upload = new S3 path = automatic cache miss = fresh fetch.
+            .respectCacheHeaders(false)
+            // Smooth crossfade transition (300ms — Instagram standard)
+            .crossfade(300)
             .build()
     }
     

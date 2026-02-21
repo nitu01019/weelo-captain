@@ -127,10 +127,14 @@ class UserPreferencesRepository(private val context: Context) {
         
         // Also save to SharedPreferences for synchronous startup access
         // This enables fast, non-blocking language loading in attachBaseContext()
+        //
+        // MUST USE commit() (synchronous), NOT apply() (async).
+        // WHY: Activity.recreate() may be called immediately after this write.
+        // commit() guarantees the write is flushed before recreate() reads it.
         context.getSharedPreferences("weelo_prefs", Context.MODE_PRIVATE)
             .edit()
             .putString("preferred_language", languageCode)
-            .apply()
+            .commit()
     }
     
     /**
