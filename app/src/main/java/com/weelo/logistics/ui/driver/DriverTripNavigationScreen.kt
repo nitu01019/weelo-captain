@@ -113,21 +113,71 @@ fun DriverTripNavigationScreen(
     var tripCancelCustomerPhone by remember { mutableStateOf("") }
     var tripCancelPickupAddress by remember { mutableStateOf("") }
     var tripCancelDropAddress by remember { mutableStateOf("") }
+    var lastHandledCancelKey by remember { mutableStateOf("") }
     
-    LaunchedEffect(Unit) {
+    fun applyTripCancellation(
+        orderId: String,
+        eventTripId: String,
+        reason: String,
+        message: String,
+        cancelledAt: String,
+        customerName: String,
+        customerPhone: String,
+        pickupAddress: String,
+        dropAddress: String
+    ) {
+        if (eventTripId.isBlank() || eventTripId != tripId) {
+            timber.log.Timber.d("Ignoring cancel event for other trip: eventTripId=$eventTripId currentTripId=$tripId orderId=$orderId")
+            return
+        }
+        
+        val eventKey = "$orderId:$eventTripId:$cancelledAt:$reason"
+        if (eventKey == lastHandledCancelKey || showTripCancelledDialog) return
+        lastHandledCancelKey = eventKey
+        
+        tripCancelReason = reason.ifBlank { message.ifBlank { "Trip cancelled" } }
+        tripCancelCustomerName = customerName
+        tripCancelCustomerPhone = customerPhone
+        tripCancelPickupAddress = pickupAddress
+        tripCancelDropAddress = dropAddress
+        showTripCancelledDialog = true
+        timber.log.Timber.w("🚫 Active trip cancelled by customer: order=$orderId trip=$eventTripId reason=$tripCancelReason")
+        
+        // Stop GPS tracking immediately
+        try {
+            GPSTrackingService.stopTracking(context)
+        } catch (_: Exception) {}
+    }
+    
+    LaunchedEffect(tripId) {
+        SocketIOService.tripCancelled.collect { notification ->
+            applyTripCancellation(
+                orderId = notification.orderId,
+                eventTripId = notification.tripId,
+                reason = notification.reason,
+                message = notification.message,
+                cancelledAt = notification.cancelledAt,
+                customerName = notification.customerName,
+                customerPhone = notification.customerPhone,
+                pickupAddress = notification.pickupAddress,
+                dropAddress = notification.dropAddress
+            )
+        }
+    }
+    
+    LaunchedEffect(tripId) {
         SocketIOService.orderCancelled.collect { notification ->
-            tripCancelReason = notification.reason
-            tripCancelCustomerName = notification.customerName
-            tripCancelCustomerPhone = notification.customerPhone
-            tripCancelPickupAddress = notification.pickupAddress
-            tripCancelDropAddress = notification.dropAddress
-            showTripCancelledDialog = true
-            timber.log.Timber.w("🚫 Active trip cancelled by customer: ${notification.orderId} — ${notification.reason}")
-            
-            // Stop GPS tracking immediately
-            try {
-                GPSTrackingService.stopTracking(context)
-            } catch (_: Exception) {}
+            applyTripCancellation(
+                orderId = notification.orderId,
+                eventTripId = notification.tripId,
+                reason = notification.reason,
+                message = notification.message,
+                cancelledAt = notification.cancelledAt,
+                customerName = notification.customerName,
+                customerPhone = notification.customerPhone,
+                pickupAddress = notification.pickupAddress,
+                dropAddress = notification.dropAddress
+            )
         }
     }
     

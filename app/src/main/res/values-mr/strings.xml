@@ -217,10 +217,10 @@
     <string name="add_vehicle">वाहन जोडा</string>
     <string name="add_driver">ड्रायव्हर जोडा</string>
     <string name="cannot_connect_backend">बॅकएंडशी कनेक्ट होऊ शकत नाही</string>
-    <string name="order_cancelled">❌ ఆర్డర్ రద్దు</string>
-    <string name="trucks_released_format">• %1$d ట్రక్కు(లు) విడుదల చేయబడింది</string>
+    <string name="order_cancelled">❌ Order cancelled</string>
+    <string name="trucks_released_format">• %1$d truck(s) released</string>
     <string name="by_customer_format">by %1$s</string>
-    <string name="call_customer">📞 కాల్ చేయండి</string>
+    <string name="call_customer">📞 Call</string>
     <string name="call_action">कॉल करा</string>
     
     <!-- Content Descriptions -->
@@ -317,7 +317,7 @@
     <string name="distance_km_format">%.1f km</string>
     <string name="speed_kmh_format">%d km/h</string>
     <string name="fare_amount_format">₹%.0f</string>
-    <string name="lat_lng_format">Lat: %.4f, Lng: %.4f</string>
+    <string name="lat_lng_format">Lat: %1$.4f, Lng: %2$.4f</string>
     <string name="error_invalid_customer_name">अवैध ग्राहक नाव</string>
     <string name="error_invalid_phone">अवैध फोन नंबर</string>
 </resources>

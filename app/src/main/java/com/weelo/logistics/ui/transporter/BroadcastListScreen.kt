@@ -207,6 +207,7 @@ fun BroadcastListScreen(
                     customerName = notification.customerName
                 )
                 val currentIndex = broadcasts.indexOfFirst { it.broadcastId == broadcastId }
+                val wasLastCard = broadcasts.size == 1 && broadcasts.any { it.broadcastId == broadcastId }
                 dismissedCards = dismissedCards + (broadcastId to dismissNotification)
 
                 scope.launch {
@@ -218,8 +219,9 @@ fun BroadcastListScreen(
                     }
                     dismissedCards = dismissedCards - broadcastId
                     fetchBroadcasts(forceRefresh = true)
-                    delay(300L)
-                    if (broadcasts.isEmpty()) {
+
+                    // Avoid relying on broadcasts state update timing right after async refresh.
+                    if (wasLastCard) {
                         timber.log.Timber.i("🏠 No broadcasts left after customer cancel — navigating back to dashboard")
                         onNavigateBack()
                     }
@@ -239,6 +241,7 @@ fun BroadcastListScreen(
 
                 // 2. Find current card index for scroll-to-next logic
                 val currentIndex = broadcasts.indexOfFirst { it.broadcastId == broadcastId }
+                val wasLastCard = broadcasts.size == 1 && broadcasts.any { it.broadcastId == broadcastId }
 
                 // 3. After 1s (user reads "Sorry" message), scroll to next card then remove
                 scope.launch {
@@ -255,10 +258,8 @@ fun BroadcastListScreen(
                     dismissedCards = dismissedCards - broadcastId
                     fetchBroadcasts(forceRefresh = true)
 
-                    // 4. Auto-navigate to dashboard if no more broadcasts remain
-                    // Give fetchBroadcasts 300ms to update state, then check
-                    delay(300L)
-                    if (broadcasts.isEmpty()) {
+                    // 4. Auto-navigate using pre-dismiss snapshot to avoid async state races.
+                    if (wasLastCard) {
                         timber.log.Timber.i("🏠 No broadcasts left after cancel — navigating back to dashboard")
                         onNavigateBack()
                     }

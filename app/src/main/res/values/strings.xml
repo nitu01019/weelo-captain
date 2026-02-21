@@ -219,6 +219,7 @@
     <string name="cannot_connect_backend">Cannot connect to backend</string>
     <string name="order_cancelled">❌ Order cancelled</string>
     <string name="by_customer_format">by %1$s</string>
+    <string name="cancel_reason_bullet_format">• Reason: %1$s</string>
     <string name="trucks_released_format">• %1$d truck(s) released</string>
     <string name="call_customer">📞 Call</string>
     <string name="call_action">Call</string>
@@ -300,7 +301,7 @@
     <string name="distance_km_format">%.1f km</string>
     <string name="speed_kmh_format">%d km/h</string>
     <string name="fare_amount_format">₹%.0f</string>
-    <string name="lat_lng_format">Lat: %.4f, Lng: %.4f</string>
+    <string name="lat_lng_format">Lat: %1$.4f, Lng: %2$.4f</string>
     <string name="error_invalid_customer_name">Invalid customer name</string>
     <string name="error_invalid_phone">Invalid phone number</string>
     

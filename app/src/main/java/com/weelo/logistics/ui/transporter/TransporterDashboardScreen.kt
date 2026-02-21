@@ -119,13 +119,31 @@ fun TransporterDashboardScreen(
             withContext(Dispatchers.IO) {
                 coroutineScope {
                     val profileDeferred = async {
-                        try { RetrofitClient.profileApi.getProfile() } catch (e: Exception) { null }
+                        try {
+                            RetrofitClient.profileApi.getProfile()
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            timber.log.Timber.w(e, "Profile refresh failed")
+                            null
+                        }
                     }
                     val vehicleDeferred = async {
-                        try { RetrofitClient.vehicleApi.getVehicles() } catch (e: Exception) { null }
+                        try {
+                            RetrofitClient.vehicleApi.getVehicles()
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            timber.log.Timber.w(e, "Vehicle refresh failed")
+                            null
+                        }
                     }
                     val driverDeferred = async {
-                        try { RetrofitClient.driverApi.getDriverList() } catch (e: Exception) { null }
+                        try {
+                            RetrofitClient.driverApi.getDriverList()
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            timber.log.Timber.w(e, "Driver refresh failed")
+                            null
+                        }
                     }
                     
                     // Process responses
@@ -143,6 +161,10 @@ fun TransporterDashboardScreen(
                     val newDriverStats = if (driverResponse?.isSuccessful == true && driverResponse.body()?.success == true) {
                         driverResponse.body()?.data
                     } else null
+
+                    var cacheProfile = cachedData.profile
+                    var cacheVehicles = cachedData.vehicleStats
+                    var cacheDrivers = cachedData.driverStats
                     
                     // Update UI state on Main thread
                     withContext(Dispatchers.Main) {
@@ -156,13 +178,18 @@ fun TransporterDashboardScreen(
                         if (!isBackendConnected && cachedData.profile == null) {
                             errorMessage = context.getString(R.string.cannot_connect_backend)
                         }
+
+                        // Capture Compose state on main thread for cache persistence.
+                        cacheProfile = newProfile ?: userProfile
+                        cacheVehicles = newVehicleStats ?: vehicleStats
+                        cacheDrivers = newDriverStats ?: driverStats
                     }
                     
                     // Save to cache for next time
                     offlineCache.saveDashboardData(
-                        profile = newProfile ?: userProfile,
-                        vehicleStats = newVehicleStats ?: vehicleStats,
-                        driverStats = newDriverStats ?: driverStats
+                        profile = cacheProfile,
+                        vehicleStats = cacheVehicles,
+                        driverStats = cacheDrivers
                     )
                     
                     timber.log.Timber.i("🔄 Refreshed data from API")
@@ -278,7 +305,9 @@ fun TransporterDashboardScreen(
             if (notification.customerName.isNotBlank()) {
                 parts.add(context.getString(R.string.by_customer_format, notification.customerName))
             }
-            parts.add("• ${notification.reason}")
+            if (notification.reason.isNotBlank()) {
+                parts.add(context.getString(R.string.cancel_reason_bullet_format, notification.reason))
+            }
             if (notification.assignmentsCancelled > 0) {
                 parts.add(context.getString(R.string.trucks_released_format, notification.assignmentsCancelled))
             }

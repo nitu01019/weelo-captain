@@ -313,7 +313,7 @@
     <string name="distance_km_format">%.1f km</string>
     <string name="speed_kmh_format">%d km/h</string>
     <string name="fare_amount_format">₹%.0f</string>
-    <string name="lat_lng_format">Lat: %.4f, Lng: %.4f</string>
+    <string name="lat_lng_format">Lat: %1$.4f, Lng: %2$.4f</string>
     <string name="error_invalid_customer_name">చెల్లని కస్టమర్ పేరు</string>
     <string name="error_invalid_phone">చెల్లని ఫోన్ నంబర్</string>
 </resources>

@@ -188,10 +188,10 @@
     <string name="add_vehicle">যানবাহন যোগ করুন</string>
     <string name="add_driver">ড্রাইভার যোগ করুন</string>
     <string name="cannot_connect_backend">ব্যাকএন্ডে সংযোগ করা যাচ্ছে না</string>
-    <string name="order_cancelled">❌ ఆర్డర్ రద్దు</string>
-    <string name="trucks_released_format">• %1$d ట్రక్కు(లు) విడుదల చేయబడింది</string>
-    <string name="by_customer_format">by %1$s</string>
-    <string name="call_customer">📞 కాల్ చేయండి</string>
+    <string name="order_cancelled">❌ অর্ডার বাতিল</string>
+    <string name="trucks_released_format">• %1$dটি ট্রাক মুক্ত হয়েছে</string>
+    <string name="by_customer_format">%1$s দ্বারা</string>
+    <string name="call_customer">📞 কল করুন</string>
     <string name="call_action">কল করুন</string>
     <!-- Content Descriptions -->
     <string name="cd_notifications">বিজ্ঞপ্তি</string>
@@ -302,7 +302,7 @@
     <string name="distance_km_format">%.1f km</string>
     <string name="speed_kmh_format">%d km/h</string>
     <string name="fare_amount_format">₹%.0f</string>
-    <string name="lat_lng_format">Lat: %.4f, Lng: %.4f</string>
+    <string name="lat_lng_format">Lat: %1$.4f, Lng: %2$.4f</string>
     <string name="error_invalid_customer_name">অবৈধ গ্রাহকের নাম</string>
     <string name="error_invalid_phone">অবৈধ ফোন নম্বর</string>
 </resources>

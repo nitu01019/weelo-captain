@@ -90,6 +90,9 @@ object SocketIOService {
     private val _driverTimeout = MutableSharedFlow<DriverTimeoutNotification>(replay = 1, extraBufferCapacity = 10)
     val driverTimeout: SharedFlow<DriverTimeoutNotification> = _driverTimeout.asSharedFlow()
     
+    private val _tripCancelled = MutableSharedFlow<TripCancelledNotification>(replay = 1, extraBufferCapacity = 10)
+    val tripCancelled: SharedFlow<TripCancelledNotification> = _tripCancelled.asSharedFlow()
+    
     // ==========================================================================
     // ORDER CANCELLATION EVENTS - Customer cancels order
     // ==========================================================================
@@ -232,6 +235,7 @@ object SocketIOService {
         // This is how drivers learn about new trips assigned to them
         const val TRIP_ASSIGNED = "trip_assigned"
         const val DRIVER_TIMEOUT = "driver_timeout"       // Driver didn't respond in time
+        const val TRIP_CANCELLED = "trip_cancelled"       // Driver trip cancelled (new primary contract)
         
         // Order lifecycle events
         const val ORDER_CANCELLED = "order_cancelled"  // When customer cancels order
@@ -432,6 +436,11 @@ object SocketIOService {
             // Order expired (timeout) - Remove from UI
             on(Events.ORDER_EXPIRED) { args ->
                 handleOrderExpired(args)
+            }
+            
+            // Driver trip cancelled (timeout/cancel compatibility path)
+            on(Events.TRIP_CANCELLED) { args ->
+                handleTripCancelled(args)
             }
             
             // =================================================================
@@ -801,6 +810,35 @@ object SocketIOService {
             
         } catch (e: Exception) {
             timber.log.Timber.e(e, "Error parsing driver_timeout: ${e.message}")
+        }
+    }
+    
+    /**
+     * Handle trip_cancelled event from backend.
+     *
+     * Driver-specific cancel/expiry contract for in-flight or pending trip decisions.
+     */
+    private fun handleTripCancelled(args: Array<Any>) {
+        try {
+            val data = args.firstOrNull() as? JSONObject ?: return
+
+            val notification = TripCancelledNotification(
+                orderId = data.optString("orderId", data.optString("broadcastId", "")),
+                tripId = data.optString("tripId", ""),
+                reason = data.optString("reason", "cancelled"),
+                message = data.optString("message", "Trip cancelled by customer"),
+                cancelledAt = data.optString("cancelledAt", ""),
+                customerName = data.optString("customerName", ""),
+                customerPhone = data.optString("customerPhone", ""),
+                pickupAddress = data.optString("pickupAddress", ""),
+                dropAddress = data.optString("dropAddress", "")
+            )
+
+            CoroutineScope(Dispatchers.IO).launch {
+                _tripCancelled.emit(notification)
+            }
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "Error parsing trip_cancelled: ${e.message}")
         }
     }
     
@@ -1209,6 +1247,7 @@ object SocketIOService {
         try {
             val data = args.firstOrNull() as? JSONObject ?: return
             val orderId = data.optString("orderId", data.optString("broadcastId", ""))
+            val tripId = data.optString("tripId", "")
             val reason = data.optString("reason", "Cancelled by customer")
             val cancelledAt = data.optString("cancelledAt", "")
             val message = data.optString("message", "Sorry, this order was cancelled by the customer")
@@ -1244,6 +1283,7 @@ object SocketIOService {
             // 3. Emit to dedicated orderCancelled flow (for driver/transporter screens)
             val cancelNotification = OrderCancelledNotification(
                 orderId = orderId,
+                tripId = tripId,
                 reason = reason,
                 message = message,
                 cancelledAt = cancelledAt,
@@ -1756,6 +1796,24 @@ data class DriverTimeoutNotification(
     val message: String              // Human-readable message
 )
 
+/**
+ * Trip Cancelled Notification — driver-focused cancellation contract.
+ *
+ * Backend emits: "trip_cancelled"
+ * Target: Assigned drivers
+ */
+data class TripCancelledNotification(
+    val orderId: String,
+    val tripId: String,
+    val reason: String,
+    val message: String,
+    val cancelledAt: String,
+    val customerName: String = "",
+    val customerPhone: String = "",
+    val pickupAddress: String = "",
+    val dropAddress: String = ""
+)
+
 // =============================================================================
 // ORDER CANCELLATION NOTIFICATION
 // =============================================================================
@@ -1780,6 +1838,7 @@ data class DriverTimeoutNotification(
  */
 data class OrderCancelledNotification(
     val orderId: String,                  // Order that was cancelled
+    val tripId: String = "",              // Optional trip identifier for strict matching
     val reason: String,                   // Why customer cancelled (from CancellationBottomSheet)
     val message: String,                  // Human-readable message
     val cancelledAt: String,              // ISO timestamp
