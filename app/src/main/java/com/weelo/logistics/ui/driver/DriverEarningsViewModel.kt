@@ -63,6 +63,7 @@ class DriverEarningsViewModel : ViewModel() {
     /** Cache per period — switching tabs doesn't re-fetch */
     private val earningsCache = mutableMapOf<String, EarningsData>()
     private var loadJob: Job? = null
+    private var activeDriverId: String? = null
 
     // =========================================================================
     // PUBLIC API
@@ -73,14 +74,17 @@ class DriverEarningsViewModel : ViewModel() {
      *
      * @param period "Today", "Week", or "Month" (UI labels)
      */
-    fun loadEarnings(period: String) {
+    fun loadEarnings(period: String, driverId: String? = null) {
         loadJob?.cancel()
+        val requestedDriverId = driverId?.takeIf { it.isNotBlank() }
+        activeDriverId = requestedDriverId
         _selectedPeriod.value = period
+        val cacheKey = "${requestedDriverId ?: "__self__"}::$period"
 
         // Check cache
-        earningsCache[period]?.let { cached ->
+        earningsCache[cacheKey]?.let { cached ->
             _earningsState.value = EarningsState.Success(cached)
-            Timber.d("$TAG: Cache HIT for $period")
+            Timber.d("$TAG: Cache HIT for period=$period driver=${requestedDriverId ?: "self"}")
             return
         }
 
@@ -98,10 +102,10 @@ class DriverEarningsViewModel : ViewModel() {
                 }
 
                 // Fetch earnings summary + completed trips in parallel
-                val earningsResponse = driverApi.getDriverEarnings(apiPeriod)
+                val earningsResponse = driverApi.getDriverEarnings(apiPeriod, requestedDriverId)
                 val tripsResponse = driverApi.getDriverTrips(status = "completed", limit = 20)
 
-                if (_selectedPeriod.value != requestedPeriod) return@launch
+                if (_selectedPeriod.value != requestedPeriod || activeDriverId != requestedDriverId) return@launch
 
                 if (!earningsResponse.isSuccessful) {
                     _earningsState.value = EarningsState.Error("API error ${earningsResponse.code()}")
@@ -136,21 +140,21 @@ class DriverEarningsViewModel : ViewModel() {
                         } ?: emptyList()
                     )
 
-                    if (_selectedPeriod.value != requestedPeriod) return@launch
+                    if (_selectedPeriod.value != requestedPeriod || activeDriverId != requestedDriverId) return@launch
 
                     // Cache it
-                    earningsCache[requestedPeriod] = result
+                    earningsCache[cacheKey] = result
                     _earningsState.value = EarningsState.Success(result)
-                    Timber.d("$TAG: Loaded $requestedPeriod — ₹${result.totalEarnings}, ${result.tripCount} trips")
+                    Timber.d("$TAG: Loaded period=$requestedPeriod driver=${requestedDriverId ?: "self"} — ₹${result.totalEarnings}, ${result.tripCount} trips")
                 } else {
-                    if (_selectedPeriod.value != requestedPeriod) return@launch
+                    if (_selectedPeriod.value != requestedPeriod || activeDriverId != requestedDriverId) return@launch
                     _earningsState.value = EarningsState.Error("Failed to load earnings")
                     Timber.w("$TAG: API returned null data for $requestedPeriod")
                 }
 
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                if (_selectedPeriod.value != requestedPeriod) return@launch
+                if (_selectedPeriod.value != requestedPeriod || activeDriverId != requestedDriverId) return@launch
                 Timber.e(e, "$TAG: Failed to load earnings for $requestedPeriod")
                 _earningsState.value = EarningsState.Error(e.message ?: "Network error")
             }
@@ -161,8 +165,10 @@ class DriverEarningsViewModel : ViewModel() {
      * Force refresh — clears cache for current period.
      */
     fun refresh() {
-        earningsCache.remove(_selectedPeriod.value)
-        loadEarnings(_selectedPeriod.value)
+        val currentPeriod = _selectedPeriod.value
+        val cacheKey = "${activeDriverId ?: "__self__"}::$currentPeriod"
+        earningsCache.remove(cacheKey)
+        loadEarnings(currentPeriod, activeDriverId)
     }
 }
 

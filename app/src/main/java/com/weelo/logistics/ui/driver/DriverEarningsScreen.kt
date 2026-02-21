@@ -36,17 +36,18 @@ import com.weelo.logistics.ui.theme.*
  * =============================================================================
  */
 @Composable
-fun DriverEarningsScreen(@Suppress("UNUSED_PARAMETER") 
+fun DriverEarningsScreen(
     driverId: String,
     onNavigateBack: () -> Unit,
     viewModel: DriverEarningsViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val earningsState by viewModel.earningsState.collectAsState()
     val selectedPeriod by viewModel.selectedPeriod.collectAsState()
+    val requestedDriverId = remember(driverId) { driverId.takeIf { it.isNotBlank() } }
 
     // Load data on first composition
-    LaunchedEffect(Unit) {
-        viewModel.loadEarnings(selectedPeriod)
+    LaunchedEffect(selectedPeriod, requestedDriverId) {
+        viewModel.loadEarnings(selectedPeriod, requestedDriverId)
     }
     
     Column(Modifier.fillMaxSize().background(Surface)) {
@@ -77,7 +78,7 @@ fun DriverEarningsScreen(@Suppress("UNUSED_PARAMETER")
                 periodLabels.forEach { (key, label) ->
                     FilterChip(
                         selected = selectedPeriod == key,
-                        onClick = { viewModel.loadEarnings(key) },
+                        onClick = { viewModel.loadEarnings(key, requestedDriverId) },
                         label = { Text(label) }
                     )
                 }

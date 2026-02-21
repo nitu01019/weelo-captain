@@ -237,10 +237,9 @@ class DriverRepository private constructor(
             normalizedStatus in ON_TRIP_STATUSES
         val isSuspended = normalizedStatus in SUSPENDED_STATUSES
         val isExplicitlyOffline = normalizedStatus in OFFLINE_STATUSES
-        val hasExplicitAvailability = data.isAvailable != null
         val hasOnlineSignal = data.isOnline ||
             data.isAvailable == true ||
-            ((normalizedStatus in ONLINE_STATUSES) && hasExplicitAvailability)
+            (normalizedStatus in ONLINE_STATUSES)
         val isOnline = hasOnlineSignal && !isOnTrip && !isSuspended && !isExplicitlyOffline
         val isAvailableForAssignment = if (isOnTrip) false else (data.isAvailable ?: isOnline)
 

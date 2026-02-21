@@ -73,7 +73,18 @@ class DriverNotificationsViewModel : ViewModel() {
 
                 // Fetch recent trips (generates trip notifications)
                 val tripsResponse = driverApi.getDriverTrips(limit = 20)
-                val trips = tripsResponse.body()?.data?.trips ?: emptyList()
+                val tripsBody = tripsResponse.body()
+                if (!tripsResponse.isSuccessful || tripsBody?.success != true) {
+                    val backendMessage = tripsBody?.error?.message?.takeIf { it.isNotBlank() }
+                        ?: runCatching { tripsResponse.errorBody()?.string() }.getOrNull()?.takeIf { it.isNotBlank() }
+                    val statusMessage = "Failed to load notifications (${tripsResponse.code()})"
+                    val errorMessage = backendMessage?.let { "$statusMessage: $it" } ?: statusMessage
+                    Timber.w("$TAG: $errorMessage")
+                    allNotifications = emptyList()
+                    _notificationsState.value = NotificationsState.Error(errorMessage)
+                    return@launch
+                }
+                val trips = tripsBody.data?.trips ?: emptyList()
 
                 // Build notifications from real trip data
                 val notifications = mutableListOf<NotificationItem>()
@@ -146,6 +157,7 @@ class DriverNotificationsViewModel : ViewModel() {
                 Timber.d("$TAG: Loaded ${notifications.size} notifications from ${trips.size} trips")
 
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Timber.e(e, "$TAG: Failed to load notifications")
                 _notificationsState.value = NotificationsState.Error(e.message ?: "Network error")
             }

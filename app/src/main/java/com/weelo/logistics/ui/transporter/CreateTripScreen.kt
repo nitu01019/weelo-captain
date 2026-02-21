@@ -173,7 +173,7 @@ fun CreateTripScreen(
             Divider()
             Text("Select Vehicle", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             
-            vehicleNames.take(3).forEach { vehicle ->
+            vehicleNames.forEach { vehicle ->
                 SelectableCard(
                     title = vehicle.second,
                     subtitle = vehicle.first,
@@ -185,7 +185,7 @@ fun CreateTripScreen(
             Divider()
             Text("Select Driver", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             
-            driverNames.take(3).forEach { driver ->
+            driverNames.forEach { driver ->
                 SelectableCard(
                     title = driver.second,
                     subtitle = driver.first,

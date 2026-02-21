@@ -34,6 +34,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.weelo.logistics.R
 import com.weelo.logistics.data.preferences.DriverPreferences
 import com.weelo.logistics.ui.components.PrimaryTopBar
@@ -97,13 +99,14 @@ fun DriverSettingsScreen(
     val driverPrefs = remember { DriverPreferences.getInstance(context) }
     val currentLanguage by driverPrefs.selectedLanguage.collectAsState(initial = "en")
     
-    // LanguageViewModel for async backend save
-    val languageViewModel = remember {
-        LanguageViewModel(
-            (context as? Activity)?.application
-                ?: (context.applicationContext as android.app.Application)
-        )
+    val application = remember(context) {
+        (context as? Activity)?.application
+            ?: (context.applicationContext as android.app.Application)
     }
+    // LanguageViewModel for async backend save
+    val languageViewModel: LanguageViewModel = viewModel(
+        factory = ViewModelProvider.AndroidViewModelFactory(application)
+    )
     
     // Responsive layout
     val horizontalPadding = responsiveHorizontalPadding()

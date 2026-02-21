@@ -34,15 +34,16 @@ import com.weelo.logistics.ui.theme.*
  */
 @Composable
 fun DriverPerformanceScreen(
-    @Suppress("UNUSED_PARAMETER") driverId: String,
+    driverId: String,
     onNavigateBack: () -> Unit,
     viewModel: DriverPerformanceViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 ) {
     val performanceState by viewModel.performanceState.collectAsState()
+    val requestedDriverId = remember(driverId) { driverId.takeIf { it.isNotBlank() } }
 
     // Load data on first composition
-    LaunchedEffect(Unit) {
-        viewModel.loadPerformance()
+    LaunchedEffect(requestedDriverId) {
+        viewModel.loadPerformance(requestedDriverId)
     }
 
     Column(Modifier.fillMaxSize().background(Surface)) {
