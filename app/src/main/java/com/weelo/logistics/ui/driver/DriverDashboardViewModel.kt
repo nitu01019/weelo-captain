@@ -416,7 +416,6 @@ class DriverDashboardViewModel : ViewModel() {
             val currentState = _dashboardState.value
             if (currentState is DriverDashboardState.Success) {
                 _isToggling.value = true
-                hasUserToggledThisSession = true  // Mark that user has interacted with toggle
                 val newIsOnline = !currentState.data.isOnline
 
                 try {
@@ -440,6 +439,9 @@ class DriverDashboardViewModel : ViewModel() {
                             com.weelo.logistics.data.api.UpdateAvailabilityRequest(isOnline = newIsOnline)
                         )
                         if (response.isSuccessful) {
+                            // Mark session toggled ONLY after backend confirms — prevents
+                            // cold-start safeguard from being disabled on failed toggles
+                            hasUserToggledThisSession = true
                             timber.log.Timber.i("✅ Driver is now ${if (newIsOnline) "ONLINE" else "OFFLINE"} (API confirmed)")
                         } else if (response.code() == 429) {
                             // Rate limited — goOnline/goOffline was NOT called on backend

@@ -85,7 +85,8 @@ fun AvailabilityToggle(
             .clickable(enabled = !isToggling) {
                 scope.launch {
                     availabilityManager.toggleAvailability()
-                    onStatusChanged?.invoke(!isAvailable)
+                    // Use committed state AFTER toggle completes — not pre-toggle value
+                    onStatusChanged?.invoke(availabilityManager.isAvailable.value)
                 }
             },
         colors = CardDefaults.cardColors(containerColor = backgroundColor),
@@ -236,7 +237,8 @@ fun AvailabilityToggleCompact(
             .clickable(enabled = !isToggling) {
                 scope.launch {
                     availabilityManager.toggleAvailability()
-                    onStatusChanged?.invoke(!isAvailable)
+                    // Use committed state AFTER toggle completes — not pre-toggle value
+                    onStatusChanged?.invoke(availabilityManager.isAvailable.value)
                 }
             },
         contentAlignment = Alignment.CenterStart
