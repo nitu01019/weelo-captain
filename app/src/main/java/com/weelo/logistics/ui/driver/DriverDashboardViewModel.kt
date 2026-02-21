@@ -206,6 +206,7 @@ class DriverDashboardViewModel : ViewModel() {
                 val performanceResponse = try {
                     driverApi.getDriverPerformance()
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     timber.log.Timber.w("⚠️ Performance API failed, using defaults: ${e.message}")
                     null
                 }
@@ -227,6 +228,7 @@ class DriverDashboardViewModel : ViewModel() {
                 val availabilityResponse = try {
                     driverApi.getAvailability()
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     timber.log.Timber.w("⚠️ Availability API failed: ${e.message}")
                     null
                 }
@@ -326,7 +328,7 @@ class DriverDashboardViewModel : ViewModel() {
                             startTime = startTime,
                             estimatedDistance = trip.distanceKm,
                             estimatedDuration = estimatedDuration,
-                            currentStatus = when (trip.status.lowercase()) {
+                            currentStatus = when (trip.status.lowercase(java.util.Locale.US)) {
                                 "heading_to_pickup", "driver_accepted" -> TripProgressStatus.EN_ROUTE_TO_PICKUP
                                 "at_pickup", "loading_complete" -> TripProgressStatus.AT_PICKUP
                                 "in_transit" -> TripProgressStatus.IN_TRANSIT
@@ -376,6 +378,7 @@ class DriverDashboardViewModel : ViewModel() {
                 
                 timber.log.Timber.d("✅ Dashboard data loaded (skeleton skipped: ${loadingGraceJob?.isCancelled})")
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 // Cancel grace timer on error too
                 loadingGraceJob?.cancel()
                 
@@ -500,6 +503,7 @@ class DriverDashboardViewModel : ViewModel() {
                             cachedDashboardData = revertedData
                         }
                     } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         timber.log.Timber.e(e, "❌ Availability API failed")
                         // Revert heartbeat + UI on error
                         com.weelo.logistics.data.remote.SocketIOService.setOnlineLocally(!newIsOnline)

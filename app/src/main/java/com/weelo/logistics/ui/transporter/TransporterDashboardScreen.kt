@@ -304,18 +304,24 @@ fun TransporterDashboardScreen(
                     // MAJOR FIX: Wrap network calls in withContext(Dispatchers.IO).
                     // scope.launch{} uses the main dispatcher by default — running Retrofit
                     // calls on main thread risks ANR and UI jank.
-                    withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        val vehicleResponse = api.getVehicles()
-                        if (vehicleResponse.isSuccessful) {
-                            vehicleStats = vehicleResponse.body()?.data
+                    // State mutations (vehicleStats, driverStats) must happen on Main thread —
+                    // so fetch on IO, then assign back on Main (withContext returns to caller's dispatcher).
+                    val (vehicleResponse, driverResponse) = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val v = try { api.getVehicles() } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            null
                         }
-                        
-                        val driverResponse = driverApi.getDriverList()
-                        if (driverResponse.isSuccessful) {
-                            driverStats = driverResponse.body()?.data
+                        val d = try { driverApi.getDriverList() } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            null
                         }
+                        v to d
                     }
+                    // Back on Main thread — safe to mutate Compose state
+                    if (vehicleResponse?.isSuccessful == true) vehicleStats = vehicleResponse.body()?.data
+                    if (driverResponse?.isSuccessful == true) driverStats = driverResponse.body()?.data
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     timber.log.Timber.w("Failed to refresh after cancel: ${e.message}")
                 } finally {
                     isRefreshing = false
