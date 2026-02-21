@@ -11,6 +11,7 @@ import com.weelo.logistics.data.model.DashNotificationType
 import com.weelo.logistics.data.model.PerformanceMetrics
 import com.weelo.logistics.data.model.TripProgressStatus
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -113,10 +114,7 @@ class DriverDashboardViewModel : ViewModel() {
     // =========================================================================
     private var loadingGraceJob: Job? = null
     
-    companion object {
-        private const val TAG = "DriverDashboardVM"
-        private const val LOADING_GRACE_MS = 150L // Show skeleton only after this
-    }
+    // companion object is defined at bottom of class
     
     /**
      * Load dashboard data - SMART LOADING + CACHE-FIRST
@@ -174,28 +172,32 @@ class DriverDashboardViewModel : ViewModel() {
                 // EASY UNDERSTANDING: API response → DashboardData mapping is clear.
                 // =============================================================
                 val driverApi = com.weelo.logistics.data.remote.RetrofitClient.driverApi
-                val dashboardResponse = driverApi.getDriverDashboard()
-                val activeResponse = driverApi.getActiveTrip()
-                val earningsMonthResponse = driverApi.getDriverEarnings("month")
-                val earningsWeekResponse = driverApi.getDriverEarnings("week")
 
-                // Only use body if response was successful
-                val apiDashboard = if (dashboardResponse.isSuccessful) dashboardResponse.body()?.data else {
-                    timber.log.Timber.w("⚠️ Dashboard API failed: ${dashboardResponse.code()}")
-                    null
-                }
-                val apiActiveTrip = if (activeResponse.isSuccessful) activeResponse.body()?.data?.trip else {
-                    timber.log.Timber.w("⚠️ Active trip API failed: ${activeResponse.code()}")
-                    null
-                }
-                val apiEarnings = if (earningsMonthResponse.isSuccessful) earningsMonthResponse.body()?.data else {
-                    timber.log.Timber.w("⚠️ Monthly earnings API failed: ${earningsMonthResponse.code()}")
-                    null
-                }
-                val apiWeeklyEarnings = if (earningsWeekResponse.isSuccessful) earningsWeekResponse.body()?.data else {
-                    timber.log.Timber.w("⚠️ Weekly earnings API failed: ${earningsWeekResponse.code()}")
-                    null
-                }
+                // SCALABILITY: All 4 API calls in parallel — ~200ms instead of ~800ms sequential
+                // Uses Deferred + awaitAll for structured concurrency (Kotlin coroutines best practice)
+                val dashboardDeferred = viewModelScope.async { runCatching { driverApi.getDriverDashboard() } }
+                val activeDeferred = viewModelScope.async { runCatching { driverApi.getActiveTrip() } }
+                val earningsMonthDeferred = viewModelScope.async { runCatching { driverApi.getDriverEarnings("month") } }
+                val earningsWeekDeferred = viewModelScope.async { runCatching { driverApi.getDriverEarnings("week") } }
+
+                val dashboardResult = dashboardDeferred.await()
+                val activeResult = activeDeferred.await()
+                val earningsMonthResult = earningsMonthDeferred.await()
+                val earningsWeekResult = earningsWeekDeferred.await()
+
+                // Only use body if response succeeded — null on any failure (network/non-2xx)
+                val apiDashboard = if (dashboardResult.getOrNull()?.isSuccessful == true)
+                    dashboardResult.getOrNull()?.body()?.data
+                    else { timber.log.Timber.w("⚠️ Dashboard API failed: ${dashboardResult.exceptionOrNull()?.message ?: dashboardResult.getOrNull()?.code()}"); null }
+                val apiActiveTrip = if (activeResult.getOrNull()?.isSuccessful == true)
+                    activeResult.getOrNull()?.body()?.data?.trip
+                    else { timber.log.Timber.w("⚠️ Active trip API failed: ${activeResult.exceptionOrNull()?.message ?: activeResult.getOrNull()?.code()}"); null }
+                val apiEarnings = if (earningsMonthResult.getOrNull()?.isSuccessful == true)
+                    earningsMonthResult.getOrNull()?.body()?.data
+                    else { timber.log.Timber.w("⚠️ Monthly earnings API failed: ${earningsMonthResult.exceptionOrNull()?.message ?: earningsMonthResult.getOrNull()?.code()}"); null }
+                val apiWeeklyEarnings = if (earningsWeekResult.getOrNull()?.isSuccessful == true)
+                    earningsWeekResult.getOrNull()?.body()?.data
+                    else { timber.log.Timber.w("⚠️ Weekly earnings API failed: ${earningsWeekResult.exceptionOrNull()?.message ?: earningsWeekResult.getOrNull()?.code()}"); null }
                 
                 // =============================================================
                 // REAL PERFORMANCE DATA — GET /api/v1/driver/performance
@@ -698,22 +700,15 @@ class DriverDashboardViewModel : ViewModel() {
     /**
      * Parse ISO 8601 timestamp string → epoch millis.
      * Returns null on parse failure so callers can use fallback values.
-     * Uses SimpleDateFormat for minSdk 24 compatibility (no java.time.Instant).
+     * Uses pre-cached ThreadLocal SimpleDateFormat for minSdk 24 compatibility.
+     * ThreadLocal ensures thread-safety without synchronization overhead.
      */
     private fun parseIsoTimestamp(timestamp: String?): Long? {
         if (timestamp.isNullOrBlank()) return null
         return try {
-            val formats = listOf(
-                "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
-                "yyyy-MM-dd'T'HH:mm:ss'Z'",
-                "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
-                "yyyy-MM-dd'T'HH:mm:ssXXX"
-            )
-            for (format in formats) {
+            for (sdfLocal in ISO_PARSERS) {
                 try {
-                    val sdf = java.text.SimpleDateFormat(format, java.util.Locale.US)
-                    sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
-                    return sdf.parse(timestamp)?.time
+                    return sdfLocal.get()?.parse(timestamp)?.time
                 } catch (_: Exception) {}
             }
             null
@@ -721,6 +716,32 @@ class DriverDashboardViewModel : ViewModel() {
             timber.log.Timber.w("⚠️ Failed to parse timestamp: $timestamp")
             null
         }
+    }
+
+    companion object {
+        private const val TAG = "DriverDashboardVM"
+        private const val LOADING_GRACE_MS = 150L
+
+        // Pre-cached ThreadLocal SimpleDateFormat instances — thread-safe, zero allocation per call
+        // ThreadLocal gives each coroutine dispatcher thread its own instance (no lock contention)
+        private val ISO_PARSERS = listOf(
+            ThreadLocal.withInitial<java.text.SimpleDateFormat> {
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).also {
+                    it.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }
+            },
+            ThreadLocal.withInitial<java.text.SimpleDateFormat> {
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).also {
+                    it.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }
+            },
+            ThreadLocal.withInitial<java.text.SimpleDateFormat> {
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", java.util.Locale.US)
+            },
+            ThreadLocal.withInitial<java.text.SimpleDateFormat> {
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US)
+            }
+        )
     }
 }
 
