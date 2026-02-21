@@ -10,6 +10,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollableDefaults
@@ -54,6 +55,7 @@ import com.weelo.logistics.data.repository.BroadcastRepository
 import com.weelo.logistics.data.repository.BroadcastResult
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 private const val TAG = "BroadcastOverlay"
@@ -173,24 +175,27 @@ fun BroadcastOverlayScreen(
     var dismissInfo by remember { mutableStateOf<BroadcastDismissedNotification?>(null) }
     
     // Listen for broadcast dismissals
+    // CRITICAL FIX: Use collectLatest so a new dismissal event cancels the
+    // in-flight 2s delay job from the previous dismissal. Without this, rapid
+    // successive dismissals each launch independent jobs that all call
+    // showNextBroadcast(), causing the carousel to skip broadcasts.
     LaunchedEffect(Unit) {
-        SocketIOService.broadcastDismissed.collect { notification ->
+        SocketIOService.broadcastDismissed.collectLatest { notification ->
             val current = BroadcastOverlayManager.currentBroadcast.value
             if (current != null && current.broadcastId == notification.broadcastId) {
                 // Current broadcast is being dismissed — show overlay
                 dismissInfo = notification
                 
-                // After 2s, auto-advance to next or hide overlay
-                scope.launch {
-                    delay(2000L)
-                    dismissInfo = null
-                    
-                    // If more broadcasts, advance to next; otherwise overlay hides naturally
-                    if (BroadcastOverlayManager.totalBroadcastCount.value > 1) {
-                        BroadcastOverlayManager.showNextBroadcast()
-                    }
-                    // Note: removeBroadcast is already scheduled by SocketIOService (2s delay)
+                // After 2s, auto-advance to next or hide overlay.
+                // collectLatest cancels this delay if a new dismissal arrives first.
+                delay(2000L)
+                dismissInfo = null
+                
+                // If more broadcasts, advance to next; otherwise overlay hides naturally
+                if (BroadcastOverlayManager.totalBroadcastCount.value > 1) {
+                    BroadcastOverlayManager.showNextBroadcast()
                 }
+                // Note: removeBroadcast is already scheduled by SocketIOService (2s delay)
             }
         }
     }
@@ -355,7 +360,13 @@ fun BroadcastOverlayScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.7f)),
+                                .background(Color.Black.copy(alpha = 0.7f))
+                                // CRITICAL FIX: Consume all pointer input so taps don't fall
+                                // through to accept/reject buttons behind this overlay.
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { /* consume taps — intentional no-op */ },
                             contentAlignment = Alignment.Center
                         ) {
                             Column(
@@ -798,6 +809,7 @@ private fun BroadcastOverlayContent(
                                     
                                     val mapIntent = Intent(Intent.ACTION_VIEW, uri).apply {
                                         setPackage("com.google.android.apps.maps")
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                     }
                                     
                                     try {
@@ -805,7 +817,9 @@ private fun BroadcastOverlayContent(
                                     } catch (e: Exception) {
                                         // Fallback to browser if Google Maps not installed
                                         val webUri = Uri.parse("https://www.google.com/maps/dir/?api=1&origin=$pickupLat,$pickupLng&destination=$dropLat,$dropLng&travelmode=driving")
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, webUri))
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, webUri).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        })
                                     }
                                 }
                                 .background(RapidoYellow, RoundedCornerShape(12.dp))
@@ -846,7 +860,9 @@ private fun BroadcastOverlayContent(
                                     } else {
                                         Uri.parse("https://www.google.com/maps/dir/?api=1&origin=$origin&destination=$destination&travelmode=driving")
                                     }
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    })
                                 }
                                 .padding(12.dp),
                             horizontalArrangement = Arrangement.Center,
@@ -1021,7 +1037,9 @@ private fun BroadcastOverlayContentNew(
                                 val pickup = broadcast.pickupLocation
                                 val drop = broadcast.dropLocation
                                 val uri = Uri.parse("https://www.google.com/maps/dir/?api=1&origin=${pickup.latitude},${pickup.longitude}&destination=${drop.latitude},${drop.longitude}&travelmode=driving")
-                                context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                                context.startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                })
                             }
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         contentAlignment = Alignment.Center

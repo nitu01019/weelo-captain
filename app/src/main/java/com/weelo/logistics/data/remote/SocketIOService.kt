@@ -90,6 +90,9 @@ object SocketIOService {
     private val _driverTimeout = MutableSharedFlow<DriverTimeoutNotification>(replay = 1, extraBufferCapacity = 10)
     val driverTimeout: SharedFlow<DriverTimeoutNotification> = _driverTimeout.asSharedFlow()
     
+    private val _tripCancelled = MutableSharedFlow<TripCancelledNotification>(replay = 1, extraBufferCapacity = 10)
+    val tripCancelled: SharedFlow<TripCancelledNotification> = _tripCancelled.asSharedFlow()
+    
     // ==========================================================================
     // ORDER CANCELLATION EVENTS - Customer cancels order
     // ==========================================================================
@@ -232,6 +235,7 @@ object SocketIOService {
         // This is how drivers learn about new trips assigned to them
         const val TRIP_ASSIGNED = "trip_assigned"
         const val DRIVER_TIMEOUT = "driver_timeout"       // Driver didn't respond in time
+        const val TRIP_CANCELLED = "trip_cancelled"       // Driver trip cancelled (new primary contract)
         
         // Order lifecycle events
         const val ORDER_CANCELLED = "order_cancelled"  // When customer cancels order
@@ -272,6 +276,17 @@ object SocketIOService {
         if (_connectionState.value is SocketConnectionState.Connected) {
             timber.log.Timber.w("⚠️ Already connected, skipping reconnect")
             return
+        }
+        
+        // CRITICAL FIX: Disconnect stale socket before creating a new one.
+        // The guard above only catches Connected state — if we're still in Connecting
+        // (e.g., previous attempt timed out), we'd create a second socket instance
+        // with duplicate listeners and events. Always clean up first.
+        if (socket != null && _connectionState.value !is SocketConnectionState.Connected) {
+            timber.log.Timber.w("⚠️ Cleaning up stale socket before creating a new connection")
+            socket?.off()
+            socket?.disconnect()
+            socket = null
         }
         
         serverUrl = url
@@ -421,6 +436,11 @@ object SocketIOService {
             // Order expired (timeout) - Remove from UI
             on(Events.ORDER_EXPIRED) { args ->
                 handleOrderExpired(args)
+            }
+            
+            // Driver trip cancelled (timeout/cancel compatibility path)
+            on(Events.TRIP_CANCELLED) { args ->
+                handleTripCancelled(args)
             }
             
             // =================================================================
@@ -794,6 +814,35 @@ object SocketIOService {
     }
     
     /**
+     * Handle trip_cancelled event from backend.
+     *
+     * Driver-specific cancel/expiry contract for in-flight or pending trip decisions.
+     */
+    private fun handleTripCancelled(args: Array<Any>) {
+        try {
+            val data = args.firstOrNull() as? JSONObject ?: return
+
+            val notification = TripCancelledNotification(
+                orderId = data.optString("orderId", data.optString("broadcastId", "")),
+                tripId = data.optString("tripId", ""),
+                reason = data.optString("reason", "cancelled"),
+                message = data.optString("message", "Trip cancelled by customer"),
+                cancelledAt = data.optString("cancelledAt", ""),
+                customerName = data.optString("customerName", ""),
+                customerPhone = data.optString("customerPhone", ""),
+                pickupAddress = data.optString("pickupAddress", ""),
+                dropAddress = data.optString("dropAddress", "")
+            )
+
+            CoroutineScope(Dispatchers.IO).launch {
+                _tripCancelled.emit(notification)
+            }
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "Error parsing trip_cancelled: ${e.message}")
+        }
+    }
+    
+    /**
      * Handle new broadcast event
      * Shows full-screen overlay via BroadcastOverlayManager
      * 
@@ -868,24 +917,42 @@ object SocketIOService {
                 pickupCity = data.optJSONObject("pickupLocation")?.optString("city", "")
                     ?: data.optString("pickupCity", ""),
                 // CRITICAL FIX: Parse lat/lng from pickupLocation/pickup objects
-                // Backend sends coordinates in both formats for compatibility
-                pickupLatitude = data.optJSONObject("pickupLocation")?.optDouble("latitude", 0.0)
-                    ?: data.optJSONObject("pickup")?.optDouble("latitude", 0.0)
-                    ?: 0.0,
-                pickupLongitude = data.optJSONObject("pickupLocation")?.optDouble("longitude", 0.0)
-                    ?: data.optJSONObject("pickup")?.optDouble("longitude", 0.0)
-                    ?: 0.0,
+                // Backend sends coordinates in latitude/longitude keys OR lat/lng keys depending on path.
+                // Fall back through all variants to avoid 0.0 defaults breaking navigation.
+                pickupLatitude = data.optJSONObject("pickupLocation")?.let {
+                    it.optDouble("latitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lat", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: data.optJSONObject("pickup")?.let {
+                    it.optDouble("latitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lat", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: 0.0,
+                pickupLongitude = data.optJSONObject("pickupLocation")?.let {
+                    it.optDouble("longitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lng", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: data.optJSONObject("pickup")?.let {
+                    it.optDouble("longitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lng", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: 0.0,
                 dropAddress = data.optJSONObject("dropLocation")?.optString("address", "")
                     ?: data.optString("dropAddress", ""),
                 dropCity = data.optJSONObject("dropLocation")?.optString("city", "")
                     ?: data.optString("dropCity", ""),
                 // CRITICAL FIX: Parse lat/lng from dropLocation/drop objects
-                dropLatitude = data.optJSONObject("dropLocation")?.optDouble("latitude", 0.0)
-                    ?: data.optJSONObject("drop")?.optDouble("latitude", 0.0)
-                    ?: 0.0,
-                dropLongitude = data.optJSONObject("dropLocation")?.optDouble("longitude", 0.0)
-                    ?: data.optJSONObject("drop")?.optDouble("longitude", 0.0)
-                    ?: 0.0,
+                // Fall back through latitude/longitude AND lat/lng keys for full compatibility.
+                dropLatitude = data.optJSONObject("dropLocation")?.let {
+                    it.optDouble("latitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lat", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: data.optJSONObject("drop")?.let {
+                    it.optDouble("latitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lat", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: 0.0,
+                dropLongitude = data.optJSONObject("dropLocation")?.let {
+                    it.optDouble("longitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lng", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: data.optJSONObject("drop")?.let {
+                    it.optDouble("longitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lng", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: 0.0,
                 distanceKm = data.optInt("distance", data.optInt("distanceKm", 0)),
                 goodsType = data.optString("goodsType", "General"),
                 isUrgent = data.optBoolean("isUrgent", false),
@@ -1165,10 +1232,22 @@ object SocketIOService {
      * 
      * Uses broadcastDismissed flow for UI blur + BroadcastOverlayManager scheduled removal
      */
+    /**
+     * Handle order_cancelled event from backend.
+     *
+     * THREE surfaces must be cleaned up simultaneously:
+     * 1. Full-screen overlay (BroadcastOverlayManager) — instant removal via removeBroadcast()
+     * 2. BroadcastListScreen card — animated blur overlay via _broadcastDismissed
+     * 3. Driver/Transporter dashboards — snackbar via _orderCancelled
+     *
+     * SCALABILITY: All operations are O(1). removeBroadcast() uses mutex-protected
+     * ConcurrentLinkedQueue. Flows use SharedFlow with extraBufferCapacity=20 — never blocks.
+     */
     private fun handleOrderCancelled(args: Array<Any>) {
         try {
             val data = args.firstOrNull() as? JSONObject ?: return
             val orderId = data.optString("orderId", data.optString("broadcastId", ""))
+            val tripId = data.optString("tripId", "")
             val reason = data.optString("reason", "Cancelled by customer")
             val cancelledAt = data.optString("cancelledAt", "")
             val message = data.optString("message", "Sorry, this order was cancelled by the customer")
@@ -1182,7 +1261,16 @@ object SocketIOService {
             timber.log.Timber.w("║  Assignments Released: $assignmentsCancelled")
             timber.log.Timber.w("╚══════════════════════════════════════════════════════════════╝")
             
-            // 1. Emit dismiss notification for graceful fade (instead of instant remove)
+            // 1. INSTANT removal from full-screen overlay (BroadcastOverlayManager).
+            //    removeBroadcast() is thread-safe (mutex-protected) and O(1) for current + O(n) queue.
+            //    Must run on Main thread as BroadcastOverlayManager uses MainScope internally.
+            CoroutineScope(Dispatchers.Main).launch {
+                com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(orderId)
+                timber.log.Timber.i("   ✓ Instantly removed broadcast $orderId from full-screen overlay")
+            }
+
+            // 2. Emit dismiss notification for graceful fade on BroadcastListScreen card.
+            //    BroadcastListScreen observes this → shows animated "Sorry" overlay → auto-removes after 1s.
             CoroutineScope(Dispatchers.IO).launch {
                 _broadcastDismissed.emit(BroadcastDismissedNotification(
                     broadcastId = orderId,
@@ -1192,16 +1280,10 @@ object SocketIOService {
                 ))
             }
             
-            // 2. Schedule delayed removal from overlay (2s for graceful fade)
-            CoroutineScope(Dispatchers.Main).launch {
-                kotlinx.coroutines.delay(2000)
-                com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(orderId)
-                timber.log.Timber.i("   ✓ Removed broadcast $orderId from overlay after graceful delay")
-            }
-            
             // 3. Emit to dedicated orderCancelled flow (for driver/transporter screens)
             val cancelNotification = OrderCancelledNotification(
                 orderId = orderId,
+                tripId = tripId,
                 reason = reason,
                 message = message,
                 cancelledAt = cancelledAt,
@@ -1714,6 +1796,24 @@ data class DriverTimeoutNotification(
     val message: String              // Human-readable message
 )
 
+/**
+ * Trip Cancelled Notification — driver-focused cancellation contract.
+ *
+ * Backend emits: "trip_cancelled"
+ * Target: Assigned drivers
+ */
+data class TripCancelledNotification(
+    val orderId: String,
+    val tripId: String,
+    val reason: String,
+    val message: String,
+    val cancelledAt: String,
+    val customerName: String = "",
+    val customerPhone: String = "",
+    val pickupAddress: String = "",
+    val dropAddress: String = ""
+)
+
 // =============================================================================
 // ORDER CANCELLATION NOTIFICATION
 // =============================================================================
@@ -1738,6 +1838,7 @@ data class DriverTimeoutNotification(
  */
 data class OrderCancelledNotification(
     val orderId: String,                  // Order that was cancelled
+    val tripId: String = "",              // Optional trip identifier for strict matching
     val reason: String,                   // Why customer cancelled (from CancellationBottomSheet)
     val message: String,                  // Human-readable message
     val cancelledAt: String,              // ISO timestamp

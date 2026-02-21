@@ -27,9 +27,9 @@
 
     <!-- AWS ALB — HTTP only until HTTPS listener + ACM cert is added -->
     <!-- TODO: Remove this block once ALB has HTTPS configured -->
+    <!-- Only the specific ALB domain — NOT the broad amazonaws.com wildcard -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">weelo-alb-380596483.ap-south-1.elb.amazonaws.com</domain>
-        <domain includeSubdomains="true">amazonaws.com</domain>
     </domain-config>
 
     <!-- Trust user CAs in debug for Charles/Proxyman proxy debugging -->

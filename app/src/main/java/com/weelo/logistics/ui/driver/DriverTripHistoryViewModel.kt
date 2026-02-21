@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.weelo.logistics.data.api.TripData
 import com.weelo.logistics.data.remote.RetrofitClient
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -62,6 +63,7 @@ class DriverTripHistoryViewModel : ViewModel() {
 
     /** Cache per filter — switching tabs doesn't re-fetch */
     private val tripsCache = mutableMapOf<String, List<TripHistoryItem>>()
+    private var loadJob: Job? = null
 
     // =========================================================================
     // PUBLIC API
@@ -74,22 +76,24 @@ class DriverTripHistoryViewModel : ViewModel() {
      */
     fun loadTrips(filter: String = "All") {
         _selectedFilter.value = filter
+        val requestedFilter = filter
 
         // Check cache
-        tripsCache[filter]?.let { cached ->
+        tripsCache[requestedFilter]?.let { cached ->
             _tripHistoryState.value = TripHistoryState.Success(
                 filterBySearch(cached, _searchQuery.value)
             )
-            Timber.d("$TAG: Cache HIT for filter=$filter")
+            Timber.d("$TAG: Cache HIT for filter=$requestedFilter")
             return
         }
 
-        viewModelScope.launch {
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
             _tripHistoryState.value = TripHistoryState.Loading
 
             try {
                 val driverApi = RetrofitClient.driverApi
-                val apiStatus = when (filter) {
+                val apiStatus = when (requestedFilter) {
                     "Completed" -> "completed"
                     "Cancelled" -> "cancelled"
                     else -> null // All trips
@@ -101,14 +105,16 @@ class DriverTripHistoryViewModel : ViewModel() {
                     offset = 0
                 )
 
+                if (_selectedFilter.value != requestedFilter) return@launch
+
                 if (!response.isSuccessful) {
                     _tripHistoryState.value = TripHistoryState.Error("API error ${response.code()}")
-                    Timber.w("$TAG: API error ${response.code()} for filter=$filter")
+                    Timber.w("$TAG: API error ${response.code()} for filter=$requestedFilter")
                     return@launch
                 }
                 if (response.body()?.success != true) {
                     _tripHistoryState.value = TripHistoryState.Error("Failed to load trips")
-                    Timber.w("$TAG: success=false for filter=$filter")
+                    Timber.w("$TAG: success=false for filter=$requestedFilter")
                     return@launch
                 }
 
@@ -130,21 +136,25 @@ class DriverTripHistoryViewModel : ViewModel() {
                         )
                     }
 
+                    if (_selectedFilter.value != requestedFilter) return@launch
+
                     // Cache it
-                    tripsCache[filter] = items
+                    tripsCache[requestedFilter] = items
                     _tripHistoryState.value = TripHistoryState.Success(
                         filterBySearch(items, _searchQuery.value)
                     )
-                    Timber.d("$TAG: Loaded $filter — ${items.size} trips")
+                    Timber.d("$TAG: Loaded $requestedFilter — ${items.size} trips")
                 } else {
                     // null data from API is an error — don't silently show empty list
+                    if (_selectedFilter.value != requestedFilter) return@launch
                     _tripHistoryState.value = TripHistoryState.Error("Failed to load trips")
-                    Timber.w("$TAG: API returned null data for filter=$filter")
+                    Timber.w("$TAG: API returned null data for filter=$requestedFilter")
                 }
 
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Timber.e(e, "$TAG: Failed to load trips for filter=$filter")
+                if (_selectedFilter.value != requestedFilter) return@launch
+                Timber.e(e, "$TAG: Failed to load trips for filter=$requestedFilter")
                 _tripHistoryState.value = TripHistoryState.Error(e.message ?: "Network error")
             }
         }

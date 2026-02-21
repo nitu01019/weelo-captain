@@ -85,7 +85,8 @@ fun AvailabilityToggle(
             .clickable(enabled = !isToggling) {
                 scope.launch {
                     availabilityManager.toggleAvailability()
-                    onStatusChanged?.invoke(!isAvailable)
+                    // Use committed state AFTER toggle completes — not pre-toggle value
+                    onStatusChanged?.invoke(availabilityManager.isAvailable.value)
                 }
             },
         colors = CardDefaults.cardColors(containerColor = backgroundColor),
@@ -236,7 +237,8 @@ fun AvailabilityToggleCompact(
             .clickable(enabled = !isToggling) {
                 scope.launch {
                     availabilityManager.toggleAvailability()
-                    onStatusChanged?.invoke(!isAvailable)
+                    // Use committed state AFTER toggle completes — not pre-toggle value
+                    onStatusChanged?.invoke(availabilityManager.isAvailable.value)
                 }
             },
         contentAlignment = Alignment.CenterStart
@@ -247,16 +249,10 @@ fun AvailabilityToggleCompact(
                 .padding(3.dp)
                 .offset(x = (thumbOffset * 24).dp)
                 .size(26.dp)
-                .background(thumbColor, CircleShape)
-                .then(
-                    if (isAvailable) {
-                        Modifier.background(
-                            color = Color.White,
-                            shape = CircleShape
-                        )
-                    } else {
-                        Modifier
-                    }
+                // Show grey thumb during toggling even when online — preserves visual feedback
+                .background(
+                    color = if (isAvailable && !isToggling) Color.White else thumbColor,
+                    shape = CircleShape
                 ),
             contentAlignment = Alignment.Center
         ) {

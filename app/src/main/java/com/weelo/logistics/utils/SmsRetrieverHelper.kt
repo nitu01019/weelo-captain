@@ -182,7 +182,7 @@ class SmsRetrieverHelper(private val context: Context) {
 
         receiver = SmsBroadcastReceiver(
             onOtpReceived = { otp ->
-                Timber.i("📱 OTP auto-read: ${otp.take(2)}****")
+                Timber.i("📱 OTP auto-read received")
                 _otpCode.value = otp
                 _isListening.value = false
                 timeoutJob?.cancel()
@@ -249,14 +249,14 @@ private class SmsBroadcastReceiver(
         when (status.statusCode) {
             CommonStatusCodes.SUCCESS -> {
                 val message = extras.getString(SmsRetriever.EXTRA_SMS_MESSAGE) ?: return
-                Timber.d("📱 SMS received by Retriever: ${message.take(30)}...")
+                Timber.d("📱 SMS received by Retriever (length=${message.length})")
 
                 // Extract 6-digit OTP from SMS body
                 val otp = extractOtp(message)
                 if (otp != null) {
                     onOtpReceived(otp)
                 } else {
-                    Timber.w("📱 Could not extract OTP from SMS: ${message.take(50)}...")
+                    Timber.w("📱 Could not extract OTP from SMS")
                 }
             }
             CommonStatusCodes.TIMEOUT -> {

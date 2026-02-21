@@ -213,8 +213,10 @@
     <string name="add_vehicle">వాహనం జోడించు</string>
     <string name="add_driver">డ్రైవర్‌ను జోడించు</string>
     <string name="cannot_connect_backend">బ్యాకెండ్‌తో కనెక్ట్ చేయడం సాధ్యం కాలేదు</string>
-    <string name="order_cancelled">ఆర్డర్ రద్దు చేయబడింది</string>
-    <string name="trucks_released_format">%1$d ట్రక్కు(లు) విడుదల చేయబడింది</string>
+    <string name="order_cancelled">❌ ఆర్డర్ రద్దు</string>
+    <string name="trucks_released_format">• %1$d ట్రక్కు(లు) విడుదల చేయబడింది</string>
+    <string name="by_customer_format">by %1$s</string>
+    <string name="call_customer">📞 కాల్ చేయండి</string>
     <string name="call_action">కాల్ చేయండి</string>
     
     <!-- Content Descriptions -->
@@ -311,7 +313,7 @@
     <string name="distance_km_format">%.1f km</string>
     <string name="speed_kmh_format">%d km/h</string>
     <string name="fare_amount_format">₹%.0f</string>
-    <string name="lat_lng_format">Lat: %.4f, Lng: %.4f</string>
+    <string name="lat_lng_format">Lat: %1$.4f, Lng: %2$.4f</string>
     <string name="error_invalid_customer_name">చెల్లని కస్టమర్ పేరు</string>
     <string name="error_invalid_phone">చెల్లని ఫోన్ నంబర్</string>
 </resources>

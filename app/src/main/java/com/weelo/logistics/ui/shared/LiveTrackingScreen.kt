@@ -32,7 +32,7 @@ import timber.log.Timber
  *
  * DATA SOURCES:
  *   - GET /api/v1/tracking/{tripId}  → Driver's live location (polled every 5s)
- *   - GET /api/v1/driver/trips/active → Trip details (pickup, drop, fare)
+ *   - GET /api/v1/trips/{tripId}      → Trip details (pickup, drop, fare)
  *
  * SCALABILITY: Polling every 5s is lightweight. Backend can upgrade to WebSocket.
  * MODULARITY: Screen fetches directly — no ViewModel needed for simple polling.
@@ -63,15 +63,18 @@ fun LiveTrackingScreen(
     // Fetch trip details on first load
     LaunchedEffect(tripId) {
         try {
-            val activeResponse = RetrofitClient.driverApi.getActiveTrip()
+            val activeResponse = RetrofitClient.tripApi.getTripDetails(
+                token = RetrofitClient.getAuthHeader(),
+                tripId = tripId
+            )
             if (activeResponse.isSuccessful && activeResponse.body()?.success == true) {
-                val tripData = activeResponse.body()?.data?.trip
+                val tripData = activeResponse.body()?.trip
                 if (tripData != null) {
-                    tripPickup = tripData.pickup.address
-                    tripDrop = tripData.drop.address
+                    tripPickup = tripData.pickupLocation.address
+                    tripDrop = tripData.dropLocation.address
                     tripFare = tripData.fare
-                    tripDistance = tripData.distanceKm
-                    tripStatus = tripData.status
+                    tripDistance = tripData.distance
+                    tripStatus = tripData.status.name.lowercase()
                 } else {
                     errorMessage = "Trip data not found"
                 }

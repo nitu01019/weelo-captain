@@ -13,7 +13,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 /**
  * =============================================================================
@@ -318,18 +317,17 @@ class AvailabilityManager private constructor(
             return false
         }
 
-        if (!networkMonitor.isCurrentlyOnline()) {
-            syncMutex.unlock()
-            timber.log.Timber.w("📵 Offline — availability will sync when online")
-            return false
-        }
-
-        // Snapshot counter BEFORE the API call. If the user toggles during the in-flight
-        // request, the counter increments. We only clear KEY_PENDING_SYNC when the counter
-        // still matches — preventing a mid-flight toggle from being silently lost.
-        val counterSnapshot = _toggleCounter.get()
-
         try {
+            if (!networkMonitor.isCurrentlyOnline()) {
+                timber.log.Timber.w("📵 Offline — availability will sync when online")
+                return false
+            }
+
+            // Snapshot counter BEFORE the API call. If the user toggles during the in-flight
+            // request, the counter increments. We only clear KEY_PENDING_SYNC when the counter
+            // still matches — preventing a mid-flight toggle from being silently lost.
+            val counterSnapshot = _toggleCounter.get()
+
             val response = RetrofitClient.transporterApi.updateAvailability(
                 RetrofitClient.getAuthHeader(),
                 mapOf("isAvailable" to available)
@@ -396,17 +394,14 @@ class AvailabilityManager private constructor(
                 }
             }
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) {
-                syncMutex.unlock()
-                throw e
-            }
+            if (e is kotlinx.coroutines.CancellationException) throw e
             timber.log.Timber.e("❌ Network error during sync: ${e.message}")
             // Network error — keep pending sync, will retry when online
             // Don't set _toggleError for network errors (keep optimistic state)
             return false
         } finally {
-            // Always release mutex — even on exception or cancellation (above re-throws after unlock)
-            if (syncMutex.isLocked) syncMutex.unlock()
+            // Lock owner releases exactly once from this scope.
+            syncMutex.unlock()
         }
     }
 

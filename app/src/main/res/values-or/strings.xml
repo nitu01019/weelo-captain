@@ -217,8 +217,10 @@
     <string name="add_vehicle">ଯାନ ଯୋଗ କରନ୍ତୁ</string>
     <string name="add_driver">ଡ୍ରାଇଭର ଯୋଗ କରନ୍ତୁ</string>
     <string name="cannot_connect_backend">ବ୍ୟାକଏଣ୍ଡ ସହିତ ସଂଯୋଗ କରିପାରିବ ନାହିଁ</string>
-    <string name="order_cancelled">ଅର୍ଡର ବାତିଲ୍ ହୋଇଛି</string>
-    <string name="trucks_released_format">%1$d ଟ୍ରକ୍ ମୁକ୍ତ କରାଯାଇଛି</string>
+    <string name="order_cancelled">❌ Order cancelled</string>
+    <string name="trucks_released_format">• %1$d truck(s) released</string>
+    <string name="by_customer_format">by %1$s</string>
+    <string name="call_customer">📞 Call</string>
     <string name="call_action">କଲ୍ କରନ୍ତୁ</string>
     
     <!-- Content Descriptions -->
@@ -315,7 +317,7 @@
     <string name="distance_km_format">%.1f km</string>
     <string name="speed_kmh_format">%d km/h</string>
     <string name="fare_amount_format">₹%.0f</string>
-    <string name="lat_lng_format">Lat: %.4f, Lng: %.4f</string>
+    <string name="lat_lng_format">Lat: %1$.4f, Lng: %2$.4f</string>
     <string name="error_invalid_customer_name">ଅବୈଧ ଗ୍ରାହକ ନାମ</string>
     <string name="error_invalid_phone">ଅବୈଧ ଫୋନ ନମ୍ବର</string>
 </resources>

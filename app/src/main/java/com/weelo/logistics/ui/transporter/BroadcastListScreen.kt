@@ -193,31 +193,76 @@ fun BroadcastListScreen(
         }
     }
     
+    // ========== ORDER CANCELLED: Wire orderCancelled → broadcastDismissed infrastructure ==========
+    // PRD 4.3: When customer cancels, BroadcastListScreen must show dismiss overlay on that card
+    LaunchedEffect(Unit) {
+        SocketIOService.orderCancelled.collect { notification ->
+            val broadcastId = notification.orderId
+            if (broadcastId.isNotEmpty()) {
+                // Reuse existing broadcastDismissed infrastructure — convert to BroadcastDismissedNotification
+                val dismissNotification = BroadcastDismissedNotification(
+                    broadcastId = broadcastId,
+                    reason = "customer_cancelled",
+                    message = "Sorry, the customer cancelled this order",
+                    customerName = notification.customerName
+                )
+                val currentIndex = broadcasts.indexOfFirst { it.broadcastId == broadcastId }
+                val wasLastCard = broadcasts.size == 1 && broadcasts.any { it.broadcastId == broadcastId }
+                dismissedCards = dismissedCards + (broadcastId to dismissNotification)
+
+                scope.launch {
+                    delay(1_000L)
+                    if (currentIndex >= 0 && broadcasts.size > 1) {
+                        val nextIndex = if (currentIndex < broadcasts.size - 1) currentIndex + 1 else currentIndex - 1
+                        listState.animateScrollToItem(nextIndex.coerceAtLeast(0))
+                        delay(300L)
+                    }
+                    dismissedCards = dismissedCards - broadcastId
+                    fetchBroadcasts(forceRefresh = true)
+
+                    // Avoid relying on broadcasts state update timing right after async refresh.
+                    if (wasLastCard) {
+                        timber.log.Timber.i("🏠 No broadcasts left after customer cancel — navigating back to dashboard")
+                        onNavigateBack()
+                    }
+                }
+            }
+        }
+    }
+
     // ========== GRACEFUL DISMISS: Listen for broadcast dismissals ==========
+    // Animated fade-in overlay → 1s read time → scroll to next → remove card → auto-nav if empty
     LaunchedEffect(Unit) {
         SocketIOService.broadcastDismissed.collect { dismissNotification ->
             val broadcastId = dismissNotification.broadcastId
             if (broadcastId.isNotEmpty()) {
-                // 1. Add to dismissed map (triggers blur overlay on the card)
+                // 1. Add to dismissed map — triggers AnimatedVisibility(fadeIn) overlay on the card
                 dismissedCards = dismissedCards + (broadcastId to dismissNotification)
-                
-                // 2. Find the index of the dismissed card in the raw broadcasts list
+
+                // 2. Find current card index for scroll-to-next logic
                 val currentIndex = broadcasts.indexOfFirst { it.broadcastId == broadcastId }
-                
-                // 3. After 2s delay, auto-scroll to next card and remove deceased card
+                val wasLastCard = broadcasts.size == 1 && broadcasts.any { it.broadcastId == broadcastId }
+
+                // 3. After 1s (user reads "Sorry" message), scroll to next card then remove
                 scope.launch {
-                    delay(2000L) // Let user read the message
-                    
-                    // Scroll to next available card (if exists)
+                    delay(1_000L) // 1s — user reads animated cancel message
+
+                    // Scroll to next available card (if more exist)
                     if (currentIndex >= 0 && broadcasts.size > 1) {
                         val nextIndex = if (currentIndex < broadcasts.size - 1) currentIndex + 1 else currentIndex - 1
                         listState.animateScrollToItem(nextIndex.coerceAtLeast(0))
+                        delay(300L) // Brief pause after scroll animation
                     }
-                    
-                    // Remove from dismissed map + refresh list to remove the card
-                    delay(500L) // Brief pause after scroll
+
+                    // Remove dismissed card from map + refresh list
                     dismissedCards = dismissedCards - broadcastId
                     fetchBroadcasts(forceRefresh = true)
+
+                    // 4. Auto-navigate using pre-dismiss snapshot to avoid async state races.
+                    if (wasLastCard) {
+                        timber.log.Timber.i("🏠 No broadcasts left after cancel — navigating back to dashboard")
+                        onNavigateBack()
+                    }
                 }
             }
         }
@@ -394,10 +439,10 @@ fun BroadcastListScreen(
                         val isDismissed = dismissInfo != null
                         
                         Box(modifier = Modifier.fillMaxWidth()) {
-                            // The actual card (blurred when dismissed)
+                            // The actual card (fades to 20% when dismissed — still visible under overlay)
                             BroadcastOrderCard(
                                 broadcast = broadcast,
-                                modifier = Modifier.alpha(if (isDismissed) 0.25f else 1f),
+                                modifier = Modifier.alpha(if (isDismissed) 0.20f else 1f),
                                 onAcceptTruck = { vehicleType, vehicleSubtype, quantity ->
                                     if (!isDismissed) {
                                         onNavigateToBroadcastDetails(
@@ -411,14 +456,21 @@ fun BroadcastListScreen(
                                     }
                                 }
                             )
-                            
-                            // Dismiss overlay (shown on top of blurred card)
-                            if (isDismissed) {
+
+                            // Animated dismiss overlay — fades in smoothly over the card
+                            // Use explicit androidx.compose.animation.AnimatedVisibility (not ColumnScope version)
+                            // GPU-accelerated alpha animation — zero layout change, O(1) cost
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = isDismissed,
+                                enter = fadeIn(animationSpec = androidx.compose.animation.core.tween(durationMillis = 250)),
+                                exit = fadeOut(animationSpec = androidx.compose.animation.core.tween(durationMillis = 150))
+                            ) {
+                                val info = dismissInfo ?: return@AnimatedVisibility
                                 Box(
                                     modifier = Modifier
                                         .matchParentSize()
                                         .background(
-                                            Color.Black.copy(alpha = 0.55f),
+                                            Color.Black.copy(alpha = 0.72f),
                                             RoundedCornerShape(16.dp)
                                         ),
                                     contentAlignment = Alignment.Center
@@ -427,10 +479,10 @@ fun BroadcastListScreen(
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         modifier = Modifier.padding(24.dp)
                                     ) {
-                                        // Icon based on reason
+                                        // Emoji icon based on reason
                                         Text(
-                                            text = when (dismissInfo!!.reason) {
-                                                "customer_cancelled" -> "🚫"
+                                            text = when (info.reason) {
+                                                "customer_cancelled" -> "😔"
                                                 "fully_filled" -> "✅"
                                                 else -> "⏰"
                                             },
@@ -439,26 +491,29 @@ fun BroadcastListScreen(
                                         Spacer(Modifier.height(12.dp))
                                         // Reason title
                                         Text(
-                                            text = when (dismissInfo.reason) {
+                                            text = when (info.reason) {
                                                 "customer_cancelled" -> "ORDER CANCELLED"
                                                 "fully_filled" -> "FULLY ASSIGNED"
                                                 else -> "ORDER EXPIRED"
                                             },
                                             fontSize = 18.sp,
                                             fontWeight = FontWeight.Black,
-                                            color = when (dismissInfo.reason) {
-                                                "customer_cancelled" -> Color(0xFFFF5252)
+                                            color = when (info.reason) {
+                                                "customer_cancelled" -> Color(0xFFFF6B6B)
                                                 "fully_filled" -> Color(0xFF4CAF50)
                                                 else -> RapidoYellow
                                             },
                                             letterSpacing = 2.sp
                                         )
                                         Spacer(Modifier.height(8.dp))
-                                        // Message
+                                        // Empathetic message for cancel, original message for others
                                         Text(
-                                            text = dismissInfo.message,
+                                            text = if (info.reason == "customer_cancelled")
+                                                "Sorry, the customer cancelled this order"
+                                            else
+                                                info.message,
                                             fontSize = 14.sp,
-                                            color = Color.White.copy(alpha = 0.9f),
+                                            color = Color.White.copy(alpha = 0.92f),
                                             textAlign = TextAlign.Center,
                                             fontWeight = FontWeight.Medium
                                         )

@@ -213,8 +213,10 @@
     <string name="add_vehicle">ਵਾਹਨ ਸ਼ਾਮਲ ਕਰੋ</string>
     <string name="add_driver">ਡਰਾਈਵਰ ਸ਼ਾਮਲ ਕਰੋ</string>
     <string name="cannot_connect_backend">ਬੈਕਐਂਡ ਨਾਲ ਕਨੈਕਟ ਨਹੀਂ ਹੋ ਸਕਿਆ</string>
-    <string name="order_cancelled">ਆਰਡਰ ਰੱਦ ਕੀਤਾ ਗਿਆ</string>
-    <string name="trucks_released_format">%1$d ਟਰੱਕ ਜਾਰੀ ਕੀਤੇ ਗਏ</string>
+    <string name="order_cancelled">❌ Order cancelled</string>
+    <string name="trucks_released_format">• %1$d truck(s) released</string>
+    <string name="by_customer_format">by %1$s</string>
+    <string name="call_customer">📞 Call</string>
     <string name="call_action">ਕਾਲ ਕਰੋ</string>
     
     <!-- Content Descriptions -->
@@ -311,7 +313,7 @@
     <string name="distance_km_format">%.1f km</string>
     <string name="speed_kmh_format">%d km/h</string>
     <string name="fare_amount_format">₹%.0f</string>
-    <string name="lat_lng_format">Lat: %.4f, Lng: %.4f</string>
+    <string name="lat_lng_format">Lat: %1$.4f, Lng: %2$.4f</string>
     <string name="error_invalid_customer_name">ਅਵੈਧ ਗਾਹਕ ਨਾਮ</string>
     <string name="error_invalid_phone">ਅਵੈਧ ਫ਼ੋਨ ਨੰਬਰ</string>
 </resources>

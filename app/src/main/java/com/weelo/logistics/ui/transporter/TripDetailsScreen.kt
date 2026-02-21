@@ -35,14 +35,25 @@ fun TripDetailsScreen(
 ) {
     var trip by remember { mutableStateOf<TripData?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(tripId) {
         try {
             val response = RetrofitClient.driverApi.getDriverTrips(limit = 50)
+            if (!response.isSuccessful) {
+                errorMessage = "Failed to load trip (${response.code()})"
+                Timber.e("TripDetails: API error ${response.code()} ${response.message()}")
+                return@LaunchedEffect
+            }
             val trips = response.body()?.data?.trips ?: emptyList()
             trip = trips.find { it.id == tripId }
+            if (trip == null) {
+                errorMessage = "Trip not found"
+                Timber.w("TripDetails: Trip not found for id=$tripId")
+            }
         } catch (e: Exception) {
             Timber.e("TripDetails: Failed to load: ${e.message}")
+            errorMessage = e.message ?: "Failed to load trip"
         } finally {
             isLoading = false
         }
@@ -58,7 +69,12 @@ fun TripDetailsScreen(
             Box(Modifier.fillMaxSize(), Alignment.Center) {
                 CircularProgressIndicator(color = Primary)
             }
-        } else trip?.let { t ->
+        } else if (errorMessage != null) {
+            Box(Modifier.fillMaxSize(), Alignment.Center) {
+                Text(errorMessage ?: "Failed to load trip", color = Error)
+            }
+        } else if (trip != null) {
+            val t = trip!!
             Column(
                 Modifier
                     .fillMaxSize()
@@ -81,7 +97,7 @@ fun TripDetailsScreen(
                                     else -> "Cancelled"
                                 },
                                 status = when (t.status) {
-                                    "pending", "partially_filled" -> ChipStatus.PENDING
+                                    "pending", "partially_filled", "assigned", "driver_accepted" -> ChipStatus.PENDING
                                     "in_progress", "in_transit" -> ChipStatus.IN_PROGRESS
                                     "completed" -> ChipStatus.COMPLETED
                                     else -> ChipStatus.CANCELLED
@@ -126,6 +142,10 @@ fun TripDetailsScreen(
                 if (t.status in listOf("in_progress", "in_transit")) {
                     PrimaryButton("Track Live Location", onClick = { /* Navigate to tracking */ })
                 }
+            }
+        } else {
+            Box(Modifier.fillMaxSize(), Alignment.Center) {
+                Text("Trip not found", color = TextSecondary)
             }
         }
     }

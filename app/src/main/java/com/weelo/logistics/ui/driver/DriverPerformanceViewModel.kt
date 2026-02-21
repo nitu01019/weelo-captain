@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.weelo.logistics.data.api.EarningsBreakdown
 import com.weelo.logistics.data.api.PerformanceResponseData
 import com.weelo.logistics.data.remote.RetrofitClient
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,8 +59,10 @@ class DriverPerformanceViewModel : ViewModel() {
     private val _performanceState = MutableStateFlow<PerformanceState>(PerformanceState.Loading)
     val performanceState: StateFlow<PerformanceState> = _performanceState.asStateFlow()
 
-    /** Cache — back navigation shows data instantly without re-fetch */
-    private var cachedData: PerformanceData? = null
+    /** Cache is driver-aware so transporter can switch drivers without stale cross-data. */
+    private val performanceCache = mutableMapOf<String, PerformanceData>()
+    private var loadJob: Job? = null
+    private var activeDriverId: String? = null
 
     // =========================================================================
     // PUBLIC API
@@ -68,37 +71,49 @@ class DriverPerformanceViewModel : ViewModel() {
     /**
      * Load all performance data. Checks cache first.
      */
-    fun loadPerformance() {
+    fun loadPerformance(driverId: String? = null) {
+        val requestedDriverId = driverId?.takeIf { it.isNotBlank() }
+        activeDriverId = requestedDriverId
+        val cacheKey = requestedDriverId ?: "__self__"
+
         // Cache hit — instant display
-        cachedData?.let { cached ->
+        performanceCache[cacheKey]?.let { cached ->
             _performanceState.value = PerformanceState.Success(cached)
-            Timber.d("$TAG: Cache HIT — showing instantly")
+            Timber.d("$TAG: Cache HIT for driver=${requestedDriverId ?: "self"}")
             return
         }
 
-        viewModelScope.launch {
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
             _performanceState.value = PerformanceState.Loading
 
             try {
                 val driverApi = RetrofitClient.driverApi
 
                 // Fetch performance metrics + monthly earnings breakdown in parallel
-                val perfResponse = driverApi.getDriverPerformance()
-                val earningsResponse = driverApi.getDriverEarnings("month")
+                val perfResponse = driverApi.getDriverPerformance(requestedDriverId)
+                val earningsResponse = driverApi.getDriverEarnings("month", requestedDriverId)
                 val tripsResponse = driverApi.getDriverTrips(status = "completed", limit = 10)
 
+                if (activeDriverId != requestedDriverId) return@launch
+
+                if (!perfResponse.isSuccessful || perfResponse.body()?.success != true) {
+                    _performanceState.value = PerformanceState.Error("Failed to load performance data")
+                    Timber.w(
+                        "$TAG: Performance API failed code=${perfResponse.code()} driver=${requestedDriverId ?: "self"}"
+                    )
+                    return@launch
+                }
+
                 val perfData = perfResponse.body()?.data
-                val earningsData = earningsResponse.body()?.data
-                val tripsData = tripsResponse.body()?.data
+                val earningsData = earningsResponse.body()?.takeIf { earningsResponse.isSuccessful && it.success }?.data
+                val tripsData = tripsResponse.body()?.takeIf { tripsResponse.isSuccessful && it.success }?.data
 
                 if (perfData != null) {
                     val totalTrips = perfData.totalTrips
-                    val completedTrips = totalTrips // All trips in performance are completed
-                    val cancelledTrips = if (perfData.completionRate > 0 && perfData.completionRate < 100) {
-                        ((totalTrips / (perfData.completionRate / 100.0)) - totalTrips).toInt()
-                    } else {
-                        0
-                    }
+                    val completionFraction = (perfData.completionRate / 100.0).coerceIn(0.0, 1.0)
+                    val completedTrips = (totalTrips * completionFraction).toInt()
+                    val cancelledTrips = (totalTrips - completedTrips).coerceAtLeast(0)
 
                     // Build monthly trend from earnings breakdown
                     val monthlyTrend = earningsData?.breakdown?.takeLast(6)?.map { breakdown: EarningsBreakdown ->
@@ -133,15 +148,19 @@ class DriverPerformanceViewModel : ViewModel() {
                         recentFeedback = recentFeedback
                     )
 
-                    cachedData = result
+                    if (activeDriverId != requestedDriverId) return@launch
+                    performanceCache[cacheKey] = result
                     _performanceState.value = PerformanceState.Success(result)
-                    Timber.d("$TAG: Loaded — rating=${result.rating}, trips=${result.totalTrips}, distance=${result.totalDistanceKm}km")
+                    Timber.d(
+                        "$TAG: Loaded driver=${requestedDriverId ?: "self"} — rating=${result.rating}, trips=${result.totalTrips}, distance=${result.totalDistanceKm}km"
+                    )
                 } else {
                     _performanceState.value = PerformanceState.Error("Failed to load performance data")
                     Timber.w("$TAG: API returned null data")
                 }
 
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Timber.e(e, "$TAG: Failed to load performance")
                 _performanceState.value = PerformanceState.Error(e.message ?: "Network error")
             }
@@ -152,8 +171,9 @@ class DriverPerformanceViewModel : ViewModel() {
      * Force refresh — clears cache and reloads.
      */
     fun refresh() {
-        cachedData = null
-        loadPerformance()
+        val cacheKey = activeDriverId ?: "__self__"
+        performanceCache.remove(cacheKey)
+        loadPerformance(activeDriverId)
     }
 
     // =========================================================================

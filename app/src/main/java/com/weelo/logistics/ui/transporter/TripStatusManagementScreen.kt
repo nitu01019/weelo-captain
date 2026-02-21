@@ -70,8 +70,90 @@ fun TripStatusManagementScreen(
                         "Bearer $token", assignmentId
                     )
                     if (response.isSuccessful && response.body()?.success == true) {
-                        Timber.d("TripStatus: Assignment loaded/refreshed for $assignmentId")
-                        // TODO: map response.body()?.data → TripAssignment and set assignment = mapped
+                        val data = response.body()?.data
+                        if (data != null) {
+                            // Map AssignmentData → TripAssignment for UI
+                            val pickup = com.weelo.logistics.data.model.Location(
+                                address = data.pickupAddress ?: "",
+                                latitude = data.pickupLat ?: 0.0,
+                                longitude = data.pickupLng ?: 0.0,
+                                city = data.pickupAddress?.substringBefore(",")?.trim()?.ifBlank { null }
+                            )
+                            val drop = com.weelo.logistics.data.model.Location(
+                                address = data.dropAddress ?: "",
+                                latitude = data.dropLat ?: 0.0,
+                                longitude = data.dropLng ?: 0.0,
+                                city = data.dropAddress?.substringBefore(",")?.trim()?.ifBlank { null }
+                            )
+                            val statusEnum = when (data.status.lowercase()) {
+                                "driver_accepted", "accepted" -> com.weelo.logistics.data.model.AssignmentStatus.DRIVER_ACCEPTED
+                                "driver_declined", "declined" -> com.weelo.logistics.data.model.AssignmentStatus.DRIVER_DECLINED
+                                "in_transit", "in_progress", "trip_started" -> com.weelo.logistics.data.model.AssignmentStatus.TRIP_STARTED
+                                "completed", "trip_completed" -> com.weelo.logistics.data.model.AssignmentStatus.TRIP_COMPLETED
+                                "cancelled" -> com.weelo.logistics.data.model.AssignmentStatus.CANCELLED
+                                else -> com.weelo.logistics.data.model.AssignmentStatus.PENDING_DRIVER_RESPONSE
+                            }
+                            val driverStatus = when (statusEnum) {
+                                com.weelo.logistics.data.model.AssignmentStatus.DRIVER_ACCEPTED,
+                                com.weelo.logistics.data.model.AssignmentStatus.TRIP_STARTED,
+                                com.weelo.logistics.data.model.AssignmentStatus.TRIP_COMPLETED ->
+                                    com.weelo.logistics.data.model.DriverResponseStatus.ACCEPTED
+                                com.weelo.logistics.data.model.AssignmentStatus.DRIVER_DECLINED,
+                                com.weelo.logistics.data.model.AssignmentStatus.CANCELLED ->
+                                    com.weelo.logistics.data.model.DriverResponseStatus.DECLINED
+                                else -> com.weelo.logistics.data.model.DriverResponseStatus.PENDING
+                            }
+                            val driverAssignment = com.weelo.logistics.data.model.DriverTruckAssignment(
+                                driverId = data.driverId,
+                                driverName = data.driverName,
+                                vehicleId = data.vehicleId ?: "",
+                                vehicleNumber = data.vehicleNumber,
+                                status = driverStatus
+                            )
+                            assignment = com.weelo.logistics.data.model.TripAssignment(
+                                assignmentId = data.id,
+                                broadcastId = data.bookingId,
+                                transporterId = data.transporterId,
+                                trucksTaken = 1,
+                                assignments = listOf(driverAssignment),
+                                pickupLocation = pickup,
+                                dropLocation = drop,
+                                distance = data.distanceKm ?: 0.0,
+                                farePerTruck = data.pricePerTruck ?: 0.0,
+                                goodsType = data.goodsType ?: "General",
+                                currentRouteIndex = data.currentRouteIndex ?: 0,
+                                status = statusEnum
+                            )
+                            broadcast = com.weelo.logistics.data.model.BroadcastTrip(
+                                broadcastId = data.bookingId,
+                                customerId = "",
+                                customerName = data.customerName ?: "Customer",
+                                customerMobile = data.customerPhone ?: "",
+                                pickupLocation = pickup,
+                                dropLocation = drop,
+                                distance = data.distanceKm ?: 0.0,
+                                estimatedDuration = 0L,
+                                totalTrucksNeeded = 1,
+                                trucksFilledSoFar = if (statusEnum in listOf(
+                                        com.weelo.logistics.data.model.AssignmentStatus.DRIVER_ACCEPTED,
+                                        com.weelo.logistics.data.model.AssignmentStatus.TRIP_STARTED,
+                                        com.weelo.logistics.data.model.AssignmentStatus.TRIP_COMPLETED
+                                    )) 1 else 0,
+                                goodsType = data.goodsType ?: "General",
+                                farePerTruck = data.pricePerTruck ?: 0.0,
+                                totalFare = data.pricePerTruck ?: 0.0,
+                                status = when (statusEnum) {
+                                    com.weelo.logistics.data.model.AssignmentStatus.CANCELLED -> com.weelo.logistics.data.model.BroadcastStatus.CANCELLED
+                                    com.weelo.logistics.data.model.AssignmentStatus.TRIP_COMPLETED -> com.weelo.logistics.data.model.BroadcastStatus.FULLY_FILLED
+                                    com.weelo.logistics.data.model.AssignmentStatus.DRIVER_ACCEPTED,
+                                    com.weelo.logistics.data.model.AssignmentStatus.TRIP_STARTED -> com.weelo.logistics.data.model.BroadcastStatus.FULLY_FILLED
+                                    else -> com.weelo.logistics.data.model.BroadcastStatus.ACTIVE
+                                }
+                            )
+                            Timber.d("TripStatus: Assignment mapped for $assignmentId — status=${data.status}")
+                        } else {
+                            Timber.w("TripStatus: Response success but data is null for $assignmentId")
+                        }
                     } else {
                         Timber.w("TripStatus: Fetch failed ${response.code()}")
                     }

@@ -119,13 +119,31 @@ fun TransporterDashboardScreen(
             withContext(Dispatchers.IO) {
                 coroutineScope {
                     val profileDeferred = async {
-                        try { RetrofitClient.profileApi.getProfile() } catch (e: Exception) { null }
+                        try {
+                            RetrofitClient.profileApi.getProfile()
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            timber.log.Timber.w(e, "Profile refresh failed")
+                            null
+                        }
                     }
                     val vehicleDeferred = async {
-                        try { RetrofitClient.vehicleApi.getVehicles() } catch (e: Exception) { null }
+                        try {
+                            RetrofitClient.vehicleApi.getVehicles()
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            timber.log.Timber.w(e, "Vehicle refresh failed")
+                            null
+                        }
                     }
                     val driverDeferred = async {
-                        try { RetrofitClient.driverApi.getDriverList() } catch (e: Exception) { null }
+                        try {
+                            RetrofitClient.driverApi.getDriverList()
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            timber.log.Timber.w(e, "Driver refresh failed")
+                            null
+                        }
                     }
                     
                     // Process responses
@@ -143,6 +161,10 @@ fun TransporterDashboardScreen(
                     val newDriverStats = if (driverResponse?.isSuccessful == true && driverResponse.body()?.success == true) {
                         driverResponse.body()?.data
                     } else null
+
+                    var cacheProfile = cachedData.profile
+                    var cacheVehicles = cachedData.vehicleStats
+                    var cacheDrivers = cachedData.driverStats
                     
                     // Update UI state on Main thread
                     withContext(Dispatchers.Main) {
@@ -156,13 +178,18 @@ fun TransporterDashboardScreen(
                         if (!isBackendConnected && cachedData.profile == null) {
                             errorMessage = context.getString(R.string.cannot_connect_backend)
                         }
+
+                        // Capture Compose state on main thread for cache persistence.
+                        cacheProfile = newProfile ?: userProfile
+                        cacheVehicles = newVehicleStats ?: vehicleStats
+                        cacheDrivers = newDriverStats ?: driverStats
                     }
                     
                     // Save to cache for next time
                     offlineCache.saveDashboardData(
-                        profile = newProfile ?: userProfile,
-                        vehicleStats = newVehicleStats ?: vehicleStats,
-                        driverStats = newDriverStats ?: driverStats
+                        profile = cacheProfile,
+                        vehicleStats = cacheVehicles,
+                        driverStats = cacheDrivers
                     )
                     
                     timber.log.Timber.i("🔄 Refreshed data from API")
@@ -263,24 +290,31 @@ fun TransporterDashboardScreen(
     // =========================================================================
     val cancelSnackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
     var lastCancelCustomerPhone by remember { mutableStateOf("") }
-    
+    // Extract snackbar strings outside LaunchedEffect (must be in @Composable scope)
+    val strOrderCancelled = stringResource(R.string.order_cancelled)
+    val strCallCustomer = stringResource(R.string.call_customer)
+
     LaunchedEffect(Unit) {
         SocketIOService.orderCancelled.collect { notification ->
             timber.log.Timber.w("🚫 Order cancelled on transporter dashboard: ${notification.orderId}")
             lastCancelCustomerPhone = notification.customerPhone
             
-            // Build informative message with customer + route info
+            // Build informative message with customer + route info using string resources
             val parts = mutableListOf<String>()
-            parts.add("❌ Order cancelled")
-            if (notification.customerName.isNotBlank()) parts.add("by ${notification.customerName}")
-            parts.add("• ${notification.reason}")
+            parts.add(strOrderCancelled)
+            if (notification.customerName.isNotBlank()) {
+                parts.add(context.getString(R.string.by_customer_format, notification.customerName))
+            }
+            if (notification.reason.isNotBlank()) {
+                parts.add(context.getString(R.string.cancel_reason_bullet_format, notification.reason))
+            }
             if (notification.assignmentsCancelled > 0) {
-                parts.add("• ${notification.assignmentsCancelled} truck(s) released")
+                parts.add(context.getString(R.string.trucks_released_format, notification.assignmentsCancelled))
             }
             
             val result = cancelSnackbarHostState.showSnackbar(
                 message = parts.joinToString(" "),
-                actionLabel = if (notification.customerPhone.isNotBlank()) "📞 Call" else null,
+                actionLabel = if (notification.customerPhone.isNotBlank()) strCallCustomer else null,
                 duration = androidx.compose.material3.SnackbarDuration.Long
             )
             
@@ -289,6 +323,7 @@ fun TransporterDashboardScreen(
                 lastCancelCustomerPhone.isNotBlank()) {
                 val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
                     data = android.net.Uri.parse("tel:$lastCancelCustomerPhone")
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(intent)
             }
@@ -300,16 +335,27 @@ fun TransporterDashboardScreen(
                     val api = RetrofitClient.vehicleApi
                     val driverApi = RetrofitClient.driverApi
                     
-                    val vehicleResponse = api.getVehicles()
-                    if (vehicleResponse.isSuccessful) {
-                        vehicleStats = vehicleResponse.body()?.data
+                    // MAJOR FIX: Wrap network calls in withContext(Dispatchers.IO).
+                    // scope.launch{} uses the main dispatcher by default — running Retrofit
+                    // calls on main thread risks ANR and UI jank.
+                    // State mutations (vehicleStats, driverStats) must happen on Main thread —
+                    // so fetch on IO, then assign back on Main (withContext returns to caller's dispatcher).
+                    val (vehicleResponse, driverResponse) = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val v = try { api.getVehicles() } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            null
+                        }
+                        val d = try { driverApi.getDriverList() } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            null
+                        }
+                        v to d
                     }
-                    
-                    val driverResponse = driverApi.getDriverList()
-                    if (driverResponse.isSuccessful) {
-                        driverStats = driverResponse.body()?.data
-                    }
+                    // Back on Main thread — safe to mutate Compose state
+                    if (vehicleResponse?.isSuccessful == true) vehicleStats = vehicleResponse.body()?.data
+                    if (driverResponse?.isSuccessful == true) driverStats = driverResponse.body()?.data
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     timber.log.Timber.w("Failed to refresh after cancel: ${e.message}")
                 } finally {
                     isRefreshing = false

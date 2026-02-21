@@ -66,6 +66,7 @@ import kotlinx.coroutines.launch
 fun DriverTripNavigationScreen(
     tripId: String,
     @Suppress("UNUSED_PARAMETER") assignmentId: String = "",
+    orderId: String = "",
     pickupAddr: String = "",
     dropAddr: String = "",
     pickupLat: Double = 0.0,
@@ -84,6 +85,76 @@ fun DriverTripNavigationScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val trackingApi = remember { RetrofitClient.trackingApi }
+    
+    // Trip tracking data from backend (GET /tracking/:tripId) — driver's live location
+    var trackingData by remember { mutableStateOf<TripTrackingData?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var showCompleteDialog by remember { mutableStateOf(false) }
+    var tripStatus by remember { mutableStateOf(TripStatus.ACCEPTED) }
+    
+    // Assignment data — passed from TripAcceptDeclineScreen via navigation args
+    // These are displayed in the trip info card (addresses, fare, customer info)
+    val pickupAddress = pickupAddr.ifBlank { "Pickup location" }
+    val dropAddress = dropAddr.ifBlank { "Drop location" }
+    val pickupLatLng = remember { LatLng(pickupLat, pickupLng) }
+    val dropLatLng = remember { LatLng(dropLat, dropLng) }
+    val customerName = custName.ifBlank { "Customer" }
+    val customerPhone = custPhone
+    val distance = tripDistance
+    val fare = tripFare
+    val goodsType = tripGoodsType
+    val currentOrderId = orderId.trim()
+    
+    // =========================================================================
+    // ORDER CANCELLATION — If active trip is cancelled, show dialog → navigate back
+    // =========================================================================
+    var showTripCancelledDialog by remember { mutableStateOf(false) }
+    var tripCancelReason by remember { mutableStateOf("") }
+    var tripCancelCustomerName by remember { mutableStateOf("") }
+    var tripCancelCustomerPhone by remember { mutableStateOf("") }
+    var tripCancelPickupAddress by remember { mutableStateOf("") }
+    var tripCancelDropAddress by remember { mutableStateOf("") }
+    var lastHandledCancelKey by remember { mutableStateOf("") }
+    
+    fun applyTripCancellation(
+        eventOrderId: String,
+        eventTripId: String,
+        reason: String,
+        message: String,
+        cancelledAt: String,
+        customerName: String,
+        customerPhone: String,
+        pickupAddress: String,
+        dropAddress: String
+    ) {
+        if ((eventTripId.isBlank() && currentOrderId.isBlank()) ||
+            (eventTripId.isNotBlank() && eventTripId != tripId) ||
+            (currentOrderId.isNotBlank() && eventOrderId.isNotBlank() && eventOrderId != currentOrderId)
+        ) {
+            timber.log.Timber.d(
+                "Ignoring cancel event for other trip/order: eventTripId=$eventTripId currentTripId=$tripId eventOrderId=$eventOrderId currentOrderId=$currentOrderId"
+            )
+            return
+        }
+        
+        val eventKey = "${eventOrderId.ifBlank { currentOrderId }}:$eventTripId:$cancelledAt:$reason"
+        if (eventKey == lastHandledCancelKey || showTripCancelledDialog) return
+        lastHandledCancelKey = eventKey
+        
+        tripCancelReason = reason.ifBlank { message.ifBlank { "Trip cancelled" } }
+        tripCancelCustomerName = customerName
+        tripCancelCustomerPhone = customerPhone
+        tripCancelPickupAddress = pickupAddress
+        tripCancelDropAddress = dropAddress
+        showTripCancelledDialog = true
+        timber.log.Timber.w("🚫 Active trip cancelled by customer: order=$eventOrderId trip=$eventTripId reason=$tripCancelReason")
+        
+        // Stop GPS tracking immediately
+        try {
+            GPSTrackingService.stopTracking(context)
+        } catch (_: Exception) {}
+    }
     
     // Trip tracking data from backend (GET /tracking/:tripId) — driver's live location
     var trackingData by remember { mutableStateOf<TripTrackingData?>(null) }
@@ -171,6 +242,90 @@ fun DriverTripNavigationScreen(
                     androidx.compose.material3.TextButton(onClick = {
                         val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
                             data = android.net.Uri.parse("tel:$tripCancelCustomerPhone")
+                        }
+                        context.startActivity(intent)
+                    }) {
+                        androidx.compose.material3.Text("📞 Call Customer", color = androidx.compose.ui.graphics.Color(0xFF1976D2))
+                    }
+                }
+            }
+        )
+    }
+    
+    // Fetch trip tracking data (driver's current location) from backend
+    LaunchedEffect(tripId) {
+        SocketIOService.tripCancelled.collect { notification ->
+            applyTripCancellation(
+                eventOrderId = notification.orderId,
+                eventTripId = notification.tripId,
+                reason = notification.reason,
+                message = notification.message,
+                cancelledAt = notification.cancelledAt,
+                customerName = notification.customerName,
+                customerPhone = notification.customerPhone,
+                pickupAddress = notification.pickupAddress,
+                dropAddress = notification.dropAddress
+            )
+        }
+    }
+    
+    LaunchedEffect(tripId) {
+        SocketIOService.orderCancelled.collect { notification ->
+            applyTripCancellation(
+                eventOrderId = notification.orderId,
+                eventTripId = notification.tripId,
+                reason = notification.reason,
+                message = notification.message,
+                cancelledAt = notification.cancelledAt,
+                customerName = notification.customerName,
+                customerPhone = notification.customerPhone,
+                pickupAddress = notification.pickupAddress,
+                dropAddress = notification.dropAddress
+            )
+        }
+    }
+    
+    if (showTripCancelledDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { },
+            title = { androidx.compose.material3.Text("🚫 Trip Cancelled", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, color = androidx.compose.ui.graphics.Color(0xFFD32F2F)) },
+            text = { 
+                androidx.compose.foundation.layout.Column {
+                    androidx.compose.material3.Text("Customer has cancelled this trip.", fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.ui.Modifier.height(8.dp))
+                    androidx.compose.material3.Text("Reason: $tripCancelReason")
+                    androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.ui.Modifier.height(4.dp))
+                    androidx.compose.material3.Text("Your vehicle has been released.", color = androidx.compose.ui.graphics.Color.Gray)
+                    if (tripCancelCustomerName.isNotBlank()) {
+                        androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.ui.Modifier.height(12.dp))
+                        androidx.compose.material3.Text("Customer: $tripCancelCustomerName", fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+                    }
+                    if (tripCancelCustomerPhone.isNotBlank()) {
+                        androidx.compose.material3.Text("📞 $tripCancelCustomerPhone", color = androidx.compose.ui.graphics.Color(0xFF1976D2))
+                    }
+                    if (tripCancelPickupAddress.isNotBlank()) {
+                        androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.ui.Modifier.height(8.dp))
+                        androidx.compose.material3.Text("📍 $tripCancelPickupAddress", fontSize = 13.sp, color = androidx.compose.ui.graphics.Color.Gray)
+                    }
+                    if (tripCancelDropAddress.isNotBlank()) {
+                        androidx.compose.material3.Text("📌 $tripCancelDropAddress", fontSize = 13.sp, color = androidx.compose.ui.graphics.Color.Gray)
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { 
+                    showTripCancelledDialog = false
+                    onNavigateBack()
+                }) {
+                    androidx.compose.material3.Text("Go to Dashboard")
+                }
+            },
+            dismissButton = {
+                if (tripCancelCustomerPhone.isNotBlank()) {
+                    androidx.compose.material3.TextButton(onClick = {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
+                            data = android.net.Uri.parse("tel:$tripCancelCustomerPhone")
+                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         context.startActivity(intent)
                     }) {
@@ -337,7 +492,9 @@ fun DriverTripNavigationScreen(
                             if (customerPhone.isNotBlank()) {
                                 IconButton(
                                     onClick = {
-                                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$customerPhone"))
+                                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$customerPhone")).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
                                         context.startActivity(intent)
                                     },
                                     modifier = Modifier
@@ -430,13 +587,17 @@ fun DriverTripNavigationScreen(
                                     val targetLng = if (tripStatus == TripStatus.ACCEPTED) pickupLatLng.longitude else dropLatLng.longitude
                                     if (targetLat != 0.0 && targetLng != 0.0) {
                                         val uri = Uri.parse("google.navigation:q=$targetLat,$targetLng&mode=d")
-                                        val mapIntent = Intent(Intent.ACTION_VIEW, uri)
-                                        mapIntent.setPackage("com.google.android.apps.maps")
+                                        val mapIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+                                            setPackage("com.google.android.apps.maps")
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
                                         try {
                                             context.startActivity(mapIntent)
                                         } catch (e: Exception) {
                                             val webUri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$targetLat,$targetLng&travelmode=driving")
-                                            context.startActivity(Intent(Intent.ACTION_VIEW, webUri))
+                                            context.startActivity(Intent(Intent.ACTION_VIEW, webUri).apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            })
                                         }
                                     } else {
                                         Toast.makeText(context, "Location not available yet", Toast.LENGTH_SHORT).show()

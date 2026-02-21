@@ -65,6 +65,7 @@ fun TripAcceptDeclineScreen(
     
     var notification by remember { mutableStateOf<DriverTripNotification?>(null) }
     var assignmentDetails by remember { mutableStateOf<TripAssignment?>(null) }
+    var currentTripId by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
     var isProcessing by remember { mutableStateOf(false) }
     var showDeclineDialog by remember { mutableStateOf(false) }
@@ -73,80 +74,115 @@ fun TripAcceptDeclineScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     
     // =========================================================================
-    // ORDER CANCELLATION — Auto-dismiss if customer cancels while deciding
+    // ORDER CANCELLATION — Hybrid banner + action + auto-dismiss (2s)
     // =========================================================================
-    // If driver is on this screen and customer cancels, we auto-dismiss
-    // with a dialog explaining "Customer cancelled this order"
-    // =========================================================================
-    var showCancelledDialog by remember { mutableStateOf(false) }
+    var showCancelledBanner by remember { mutableStateOf(false) }
+    var cancellationActionTaken by remember { mutableStateOf(false) }
+    var cancellationAutoDismissToken by remember { mutableStateOf(0) }
     var cancelReason by remember { mutableStateOf("") }
     var cancelCustomerName by remember { mutableStateOf("") }
     var cancelCustomerPhone by remember { mutableStateOf("") }
     var cancelPickupAddress by remember { mutableStateOf("") }
     var cancelDropAddress by remember { mutableStateOf("") }
-    
+    var pendingCancellation by remember {
+        mutableStateOf<com.weelo.logistics.data.remote.OrderCancelledNotification?>(null)
+    }
+    var lastCancellationKey by remember { mutableStateOf("") }
+
+    fun cancellationKey(notification: com.weelo.logistics.data.remote.OrderCancelledNotification): String {
+        return "${notification.orderId}:${notification.tripId}:${notification.cancelledAt}:${notification.reason}"
+    }
+
+    fun matchesCurrentTrip(notification: com.weelo.logistics.data.remote.OrderCancelledNotification): Boolean {
+        val currentOrderId = assignmentDetails?.broadcastId.orEmpty()
+        val orderMatches = currentOrderId.isNotBlank() && notification.orderId == currentOrderId
+        val tripMatches = currentTripId.isNotBlank() &&
+            notification.tripId.isNotBlank() &&
+            notification.tripId == currentTripId
+        return orderMatches || tripMatches
+    }
+
+    fun applyCancellation(notification: com.weelo.logistics.data.remote.OrderCancelledNotification) {
+        val eventKey = cancellationKey(notification)
+        if (eventKey == lastCancellationKey || showCancelledBanner) return
+        lastCancellationKey = eventKey
+
+        cancelReason = notification.reason
+        cancelCustomerName = notification.customerName
+        cancelCustomerPhone = notification.customerPhone
+        cancelPickupAddress = notification.pickupAddress
+        cancelDropAddress = notification.dropAddress
+        isProcessing = false
+        showDeclineDialog = false
+        showAcceptDialog = false
+        showSuccessDialog = false
+        showCancelledBanner = true
+        cancellationActionTaken = false
+        cancellationAutoDismissToken += 1
+        pendingCancellation = null
+        timber.log.Timber.w("🚫 Order cancelled while on accept/decline screen: ${notification.reason}")
+    }
+
     LaunchedEffect(Unit) {
         SocketIOService.orderCancelled.collect { notification ->
-            val currentOrderId = assignmentDetails?.broadcastId ?: notificationId
-            if (notification.orderId == currentOrderId) {
-                cancelReason = notification.reason
-                cancelCustomerName = notification.customerName
-                cancelCustomerPhone = notification.customerPhone
-                cancelPickupAddress = notification.pickupAddress
-                cancelDropAddress = notification.dropAddress
-                showCancelledDialog = true
-                timber.log.Timber.w("🚫 Order cancelled while on accept/decline screen: ${notification.reason}")
+            if (matchesCurrentTrip(notification)) {
+                applyCancellation(notification)
+            } else {
+                val hasResolvedContext = assignmentDetails != null
+                if (!hasResolvedContext) {
+                    // Details not loaded yet; hold event and resolve once assignment details arrive.
+                    pendingCancellation = notification
+                }
             }
         }
     }
-    
-    // Cancelled dialog with customer contact info + Call button
-    if (showCancelledDialog) {
-        AlertDialog(
-            onDismissRequest = { },  // Non-dismissable
-            title = { Text("🚫 Order Cancelled", fontWeight = FontWeight.Bold, color = androidx.compose.ui.graphics.Color(0xFFD32F2F)) },
-            text = { 
-                Column {
-                    Text("Customer has cancelled this order.", fontWeight = FontWeight.SemiBold)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Reason: $cancelReason")
-                    if (cancelCustomerName.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text("Customer: $cancelCustomerName", fontWeight = FontWeight.Medium)
-                    }
-                    if (cancelCustomerPhone.isNotBlank()) {
-                        Text("📞 $cancelCustomerPhone", color = androidx.compose.ui.graphics.Color(0xFF1976D2))
-                    }
-                    if (cancelPickupAddress.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("📍 $cancelPickupAddress", fontSize = 13.sp, color = androidx.compose.ui.graphics.Color.Gray)
-                    }
-                    if (cancelDropAddress.isNotBlank()) {
-                        Text("📌 $cancelDropAddress", fontSize = 13.sp, color = androidx.compose.ui.graphics.Color.Gray)
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { 
-                    showCancelledDialog = false
-                    onNavigateBack()
-                }) {
-                    Text("Go to Dashboard")
-                }
-            },
-            dismissButton = {
-                if (cancelCustomerPhone.isNotBlank()) {
-                    TextButton(onClick = {
-                        val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
-                            data = android.net.Uri.parse("tel:$cancelCustomerPhone")
-                        }
-                        context.startActivity(intent)
-                    }) {
-                        Text("📞 Call Customer", color = androidx.compose.ui.graphics.Color(0xFF1976D2))
-                    }
+
+    LaunchedEffect(Unit) {
+        SocketIOService.tripCancelled.collect { notification ->
+            val compatibilityNotification = com.weelo.logistics.data.remote.OrderCancelledNotification(
+                orderId = notification.orderId,
+                tripId = notification.tripId,
+                reason = notification.reason,
+                message = notification.message,
+                cancelledAt = notification.cancelledAt,
+                customerName = notification.customerName,
+                customerPhone = notification.customerPhone,
+                pickupAddress = notification.pickupAddress,
+                dropAddress = notification.dropAddress
+            )
+
+            if (matchesCurrentTrip(compatibilityNotification)) {
+                applyCancellation(compatibilityNotification)
+            } else {
+                val hasResolvedContext = assignmentDetails != null
+                if (!hasResolvedContext) {
+                    pendingCancellation = compatibilityNotification
                 }
             }
-        )
+        }
+    }
+
+    LaunchedEffect(assignmentDetails?.broadcastId, currentTripId, pendingCancellation, isLoading) {
+        val pending = pendingCancellation ?: return@LaunchedEffect
+        val hasResolvedContext = assignmentDetails != null
+        if (!hasResolvedContext) return@LaunchedEffect
+
+        if (matchesCurrentTrip(pending)) {
+            applyCancellation(pending)
+        } else if (!isLoading) {
+            // Drop stale replay event once details are known and do not match.
+            pendingCancellation = null
+        }
+    }
+
+    LaunchedEffect(cancellationAutoDismissToken, showCancelledBanner) {
+        if (!showCancelledBanner) return@LaunchedEffect
+        delay(2_000L)
+        if (showCancelledBanner && !cancellationActionTaken) {
+            cancellationActionTaken = true
+            showCancelledBanner = false
+            onNavigateBack()
+        }
     }
     
     // Fetch assignment details from backend
@@ -156,6 +192,7 @@ fun TripAcceptDeclineScreen(
                 is BroadcastResult.Success -> {
                     notification = result.data.notification
                     assignmentDetails = result.data.assignment
+                    currentTripId = result.data.tripId
                     isLoading = false
                 }
                 is BroadcastResult.Error -> {
@@ -178,6 +215,80 @@ fun TripAcceptDeclineScreen(
             title = "Trip Details",
             onBackClick = onNavigateBack
         )
+
+        androidx.compose.animation.AnimatedVisibility(visible = showCancelledBanner) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = androidx.compose.ui.graphics.Color(0xFFFFEBEE)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        "Order cancelled by customer",
+                        color = androidx.compose.ui.graphics.Color(0xFFD32F2F),
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (cancelReason.isNotBlank()) {
+                        Text(
+                            "Reason: $cancelReason",
+                            color = androidx.compose.ui.graphics.Color(0xFF424242),
+                            fontSize = 13.sp
+                        )
+                    }
+                    if (cancelCustomerName.isNotBlank()) {
+                        Text(
+                            "Customer: $cancelCustomerName",
+                            color = androidx.compose.ui.graphics.Color(0xFF424242),
+                            fontSize = 13.sp
+                        )
+                    }
+                    if (cancelPickupAddress.isNotBlank()) {
+                        Text(
+                            "Pickup: $cancelPickupAddress",
+                            color = androidx.compose.ui.graphics.Color(0xFF616161),
+                            fontSize = 12.sp
+                        )
+                    }
+                    if (cancelDropAddress.isNotBlank()) {
+                        Text(
+                            "Drop: $cancelDropAddress",
+                            color = androidx.compose.ui.graphics.Color(0xFF616161),
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            onClick = {
+                                cancellationActionTaken = true
+                                showCancelledBanner = false
+                                onNavigateBack()
+                            }
+                        ) {
+                            Text("Go to Dashboard")
+                        }
+
+                        if (cancelCustomerPhone.isNotBlank()) {
+                            TextButton(
+                                onClick = {
+                                    cancellationActionTaken = true
+                                    val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
+                                        data = android.net.Uri.parse("tel:$cancelCustomerPhone")
+                                    }
+                                    context.startActivity(intent)
+                                }
+                            ) {
+                                Text("Call Customer", color = androidx.compose.ui.graphics.Color(0xFF1976D2))
+                            }
+                        }
+                    }
+                }
+            }
+        }
         
         if (isLoading) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -448,7 +559,7 @@ fun TripAcceptDeclineScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(56.dp),
-                            enabled = !isProcessing,
+                            enabled = !isProcessing && !showCancelledBanner,
                             colors = ButtonDefaults.outlinedButtonColors(
                                 contentColor = Error
                             ),
@@ -474,7 +585,7 @@ fun TripAcceptDeclineScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(56.dp),
-                            enabled = !isProcessing,
+                            enabled = !isProcessing && !showCancelledBanner,
                             colors = ButtonDefaults.buttonColors(containerColor = Success)
                         ) {
                             if (isProcessing) {

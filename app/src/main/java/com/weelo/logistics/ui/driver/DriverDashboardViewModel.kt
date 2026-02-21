@@ -11,6 +11,7 @@ import com.weelo.logistics.data.model.DashNotificationType
 import com.weelo.logistics.data.model.PerformanceMetrics
 import com.weelo.logistics.data.model.TripProgressStatus
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -113,10 +114,7 @@ class DriverDashboardViewModel : ViewModel() {
     // =========================================================================
     private var loadingGraceJob: Job? = null
     
-    companion object {
-        private const val TAG = "DriverDashboardVM"
-        private const val LOADING_GRACE_MS = 150L // Show skeleton only after this
-    }
+    // companion object is defined at bottom of class
     
     /**
      * Load dashboard data - SMART LOADING + CACHE-FIRST
@@ -125,11 +123,11 @@ class DriverDashboardViewModel : ViewModel() {
      * - Cache exists + stale → show cache, refresh in background
      * - No cache → 150ms grace → skeleton if still loading
      */
-    fun loadDashboardData(driverId: String = "") {
+    fun loadDashboardData(driverId: String = ""): Job {
         // Cancel any pending grace timer
         loadingGraceJob?.cancel()
         
-        viewModelScope.launch {
+        return viewModelScope.launch {
             // =========================================================================
             // STEP 1: Check cache first (INSTANT - 0ms)
             // =========================================================================
@@ -174,14 +172,47 @@ class DriverDashboardViewModel : ViewModel() {
                 // EASY UNDERSTANDING: API response → DashboardData mapping is clear.
                 // =============================================================
                 val driverApi = com.weelo.logistics.data.remote.RetrofitClient.driverApi
-                val dashboardResponse = driverApi.getDriverDashboard()
-                val activeResponse = driverApi.getActiveTrip()
-                val earningsResponse = driverApi.getDriverEarnings("month")
-                
-                // Map API responses to DashboardData model
-                val apiDashboard = dashboardResponse.body()?.data
-                val apiActiveTrip = activeResponse.body()?.data?.trip
-                val apiEarnings = earningsResponse.body()?.data
+
+                // SCALABILITY: All 4 API calls in parallel — ~200ms instead of ~800ms sequential
+                // Uses Deferred + awaitAll for structured concurrency (Kotlin coroutines best practice)
+                // MAJOR FIX: runCatching captures ALL exceptions including CancellationException.
+                // Must rethrow CancellationException so structured concurrency works correctly —
+                // if viewModelScope is cancelled (Activity destroyed), these async tasks stop immediately.
+                val dashboardDeferred = viewModelScope.async {
+                    runCatching { driverApi.getDriverDashboard() }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                }
+                val activeDeferred = viewModelScope.async {
+                    runCatching { driverApi.getActiveTrip() }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                }
+                val earningsMonthDeferred = viewModelScope.async {
+                    runCatching { driverApi.getDriverEarnings("month") }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                }
+                val earningsWeekDeferred = viewModelScope.async {
+                    runCatching { driverApi.getDriverEarnings("week") }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                }
+
+                val dashboardResult = dashboardDeferred.await()
+                val activeResult = activeDeferred.await()
+                val earningsMonthResult = earningsMonthDeferred.await()
+                val earningsWeekResult = earningsWeekDeferred.await()
+
+                // Only use body if response succeeded — null on any failure (network/non-2xx)
+                val apiDashboard = if (dashboardResult.getOrNull()?.isSuccessful == true)
+                    dashboardResult.getOrNull()?.body()?.data
+                    else { timber.log.Timber.w("⚠️ Dashboard API failed: ${dashboardResult.exceptionOrNull()?.message ?: dashboardResult.getOrNull()?.code()}"); null }
+                val apiActiveTrip = if (activeResult.getOrNull()?.isSuccessful == true)
+                    activeResult.getOrNull()?.body()?.data?.trip
+                    else { timber.log.Timber.w("⚠️ Active trip API failed: ${activeResult.exceptionOrNull()?.message ?: activeResult.getOrNull()?.code()}"); null }
+                val apiEarnings = if (earningsMonthResult.getOrNull()?.isSuccessful == true)
+                    earningsMonthResult.getOrNull()?.body()?.data
+                    else { timber.log.Timber.w("⚠️ Monthly earnings API failed: ${earningsMonthResult.exceptionOrNull()?.message ?: earningsMonthResult.getOrNull()?.code()}"); null }
+                val apiWeeklyEarnings = if (earningsWeekResult.getOrNull()?.isSuccessful == true)
+                    earningsWeekResult.getOrNull()?.body()?.data
+                    else { timber.log.Timber.w("⚠️ Weekly earnings API failed: ${earningsWeekResult.exceptionOrNull()?.message ?: earningsWeekResult.getOrNull()?.code()}"); null }
                 
                 // =============================================================
                 // REAL PERFORMANCE DATA — GET /api/v1/driver/performance
@@ -190,6 +221,7 @@ class DriverDashboardViewModel : ViewModel() {
                 val performanceResponse = try {
                     driverApi.getDriverPerformance()
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     timber.log.Timber.w("⚠️ Performance API failed, using defaults: ${e.message}")
                     null
                 }
@@ -211,6 +243,7 @@ class DriverDashboardViewModel : ViewModel() {
                 val availabilityResponse = try {
                     driverApi.getAvailability()
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     timber.log.Timber.w("⚠️ Availability API failed: ${e.message}")
                     null
                 }
@@ -276,7 +309,7 @@ class DriverDashboardViewModel : ViewModel() {
                         today = apiDashboard?.stats?.todayEarnings ?: 0.0,
                         todayTrips = apiDashboard?.stats?.todayTrips ?: 0,
                         weekly = apiDashboard?.stats?.weekEarnings ?: 0.0,
-                        weeklyTrips = apiEarnings?.totalTrips ?: 0,
+                        weeklyTrips = apiWeeklyEarnings?.totalTrips ?: 0,
                         monthly = apiDashboard?.stats?.monthEarnings ?: 0.0,
                         monthlyTrips = apiEarnings?.totalTrips ?: 0,
                         pendingPayment = 0.0 // Backend will add this field
@@ -293,6 +326,13 @@ class DriverDashboardViewModel : ViewModel() {
                         totalDistance = apiPerformance?.totalDistance ?: apiDashboard?.stats?.totalDistance?.toDouble() ?: 0.0
                     ),
                     activeTrip = apiActiveTrip?.let { trip: com.weelo.logistics.data.api.TripData ->
+                        // MINOR FIX: Use 0L as fallback for active trip startTime — avoids
+                        // making it look "just started" when timestamp is missing/malformed.
+                        val startTime = parseIsoTimestamp(trip.startedAt) ?: 0L
+                        val estimatedDuration = if (trip.distanceKm > 0) {
+                            // Estimate: distance / 30 km/h average speed, in minutes
+                            ((trip.distanceKm / 30.0) * 60).toInt()
+                        } else 0
                         ActiveTrip(
                             tripId = trip.id,
                             customerName = trip.customerName ?: "Customer",
@@ -300,10 +340,10 @@ class DriverDashboardViewModel : ViewModel() {
                             dropAddress = trip.drop.address,
                             vehicleType = trip.vehicleType ?: "",
                             estimatedEarning = trip.fare,
-                            startTime = System.currentTimeMillis(),
+                            startTime = startTime,
                             estimatedDistance = trip.distanceKm,
-                            estimatedDuration = 0,
-                            currentStatus = when (trip.status.lowercase()) {
+                            estimatedDuration = estimatedDuration,
+                            currentStatus = when (trip.status.lowercase(java.util.Locale.US)) {
                                 "heading_to_pickup", "driver_accepted" -> TripProgressStatus.EN_ROUTE_TO_PICKUP
                                 "at_pickup", "loading_complete" -> TripProgressStatus.AT_PICKUP
                                 "in_transit" -> TripProgressStatus.IN_TRANSIT
@@ -314,6 +354,14 @@ class DriverDashboardViewModel : ViewModel() {
                         )
                     },
                     recentTrips = apiDashboard?.recentTrips?.map { trip: com.weelo.logistics.data.api.TripData ->
+                        // MINOR FIX: Stable fallback — use startAt, then 0L.
+                        // System.currentTimeMillis() would make every old trip appear
+                        // "just completed" and re-inflate duration on every refresh.
+                        val startAt = parseIsoTimestamp(trip.startedAt)
+                        val completedAt = parseIsoTimestamp(trip.completedAt) ?: startAt ?: 0L
+                        val duration = if (startAt != null) {
+                            ((completedAt - startAt) / 60_000).toInt().coerceAtLeast(0)
+                        } else 0
                         CompletedTrip(
                             tripId = trip.id,
                             customerName = trip.customerName ?: "Customer",
@@ -322,8 +370,8 @@ class DriverDashboardViewModel : ViewModel() {
                             vehicleType = trip.vehicleType ?: "",
                             earnings = trip.fare,
                             distance = trip.distanceKm,
-                            duration = 0,
-                            completedAt = System.currentTimeMillis(),
+                            duration = duration,
+                            completedAt = completedAt,
                             rating = null
                         )
                     } ?: emptyList(),
@@ -345,6 +393,7 @@ class DriverDashboardViewModel : ViewModel() {
                 
                 timber.log.Timber.d("✅ Dashboard data loaded (skeleton skipped: ${loadingGraceJob?.isCancelled})")
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 // Cancel grace timer on error too
                 loadingGraceJob?.cancel()
                 
@@ -369,7 +418,8 @@ class DriverDashboardViewModel : ViewModel() {
         viewModelScope.launch {
             _isRefreshing.value = true
             // PERFORMANCE: Removed delay(1000) - was causing 1s perceived lag
-            loadDashboardData(driverId)
+            // Await the load job so _isRefreshing stays true until data is actually loaded
+            loadDashboardData(driverId).join()
             _isRefreshing.value = false
         }
     }
@@ -416,7 +466,6 @@ class DriverDashboardViewModel : ViewModel() {
             val currentState = _dashboardState.value
             if (currentState is DriverDashboardState.Success) {
                 _isToggling.value = true
-                hasUserToggledThisSession = true  // Mark that user has interacted with toggle
                 val newIsOnline = !currentState.data.isOnline
 
                 try {
@@ -440,6 +489,9 @@ class DriverDashboardViewModel : ViewModel() {
                             com.weelo.logistics.data.api.UpdateAvailabilityRequest(isOnline = newIsOnline)
                         )
                         if (response.isSuccessful) {
+                            // Mark session toggled ONLY after backend confirms — prevents
+                            // cold-start safeguard from being disabled on failed toggles
+                            hasUserToggledThisSession = true
                             timber.log.Timber.i("✅ Driver is now ${if (newIsOnline) "ONLINE" else "OFFLINE"} (API confirmed)")
                         } else if (response.code() == 429) {
                             // Rate limited — goOnline/goOffline was NOT called on backend
@@ -466,6 +518,7 @@ class DriverDashboardViewModel : ViewModel() {
                             cachedDashboardData = revertedData
                         }
                     } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
                         timber.log.Timber.e(e, "❌ Availability API failed")
                         // Revert heartbeat + UI on error
                         com.weelo.logistics.data.remote.SocketIOService.setOnlineLocally(!newIsOnline)
@@ -666,6 +719,55 @@ class DriverDashboardViewModel : ViewModel() {
         calendar.set(java.util.Calendar.SECOND, 0)
         calendar.set(java.util.Calendar.MILLISECOND, 0)
         return calendar.timeInMillis
+    }
+
+    /**
+     * Parse ISO 8601 timestamp string → epoch millis.
+     * Returns null on parse failure so callers can use fallback values.
+     * Uses pre-cached ThreadLocal SimpleDateFormat for minSdk 24 compatibility.
+     * ThreadLocal ensures thread-safety without synchronization overhead.
+     */
+    private fun parseIsoTimestamp(timestamp: String?): Long? {
+        if (timestamp.isNullOrBlank()) return null
+        return try {
+            for (sdfLocal in ISO_PARSERS) {
+                try {
+                    return sdfLocal.get()?.parse(timestamp)?.time
+                } catch (_: Exception) {}
+            }
+            null
+        } catch (e: Exception) {
+            // MINOR FIX: Pass exception to Timber so stack trace is preserved.
+            // Helps diagnose timestamp format drift in production logs.
+            timber.log.Timber.w(e, "⚠️ Failed to parse timestamp: $timestamp")
+            null
+        }
+    }
+
+    companion object {
+        private const val TAG = "DriverDashboardVM"
+        private const val LOADING_GRACE_MS = 150L
+
+        // Pre-cached ThreadLocal SimpleDateFormat instances — thread-safe, zero allocation per call
+        // ThreadLocal gives each coroutine dispatcher thread its own instance (no lock contention)
+        private val ISO_PARSERS = listOf(
+            ThreadLocal.withInitial<java.text.SimpleDateFormat> {
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).also {
+                    it.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }
+            },
+            ThreadLocal.withInitial<java.text.SimpleDateFormat> {
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).also {
+                    it.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }
+            },
+            ThreadLocal.withInitial<java.text.SimpleDateFormat> {
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", java.util.Locale.US)
+            },
+            ThreadLocal.withInitial<java.text.SimpleDateFormat> {
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US)
+            }
+        )
     }
 }
 

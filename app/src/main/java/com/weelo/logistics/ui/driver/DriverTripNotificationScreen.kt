@@ -117,11 +117,12 @@ fun DriverTripNotificationScreen(
                         val newList = mapAssignmentsToNotifications(
                             response.body()?.data?.assignments.orEmpty()
                         )
-                        // Only update state + flash badge when IDs actually changed
                         val oldIds = notifications.map { it.notificationId }
                         val newIds = newList.map { it.notificationId }
-                        if (newIds != oldIds) {
+                        if (newList != notifications) {
                             notifications = newList
+                        }
+                        if (newIds != oldIds) {
                             hasNewNotification = true
                             delay(2000)
                             hasNewNotification = false

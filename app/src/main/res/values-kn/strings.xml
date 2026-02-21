@@ -188,8 +188,10 @@
     <string name="add_vehicle">ವಾಹನ ಸೇರಿಸಿ</string>
     <string name="add_driver">ಚಾಲಕ ಸೇರಿಸಿ</string>
     <string name="cannot_connect_backend">ಬ್ಯಾಕೆಂಡ್‌ಗೆ ಸಂಪರ್ಕಿಸಲಾಗುತ್ತಿಲ್ಲ</string>
-    <string name="order_cancelled">ಆರ್ಡರ್ ರದ್ದಾಗಿದೆ</string>
-    <string name="trucks_released_format">%1$d ಟ್ರಕ್ ಬಿಡುಗಡೆಯಾಗಿದೆ</string>
+    <string name="order_cancelled">❌ ಆರ್ಡರ್ ರದ್ದು</string>
+    <string name="trucks_released_format">• %1$d ಟ್ರಕ್(ಗಳು) ಬಿಡುಗಡೆಗೊಂಡಿವೆ</string>
+    <string name="by_customer_format">%1$s ಇವರಿಂದ</string>
+    <string name="call_customer">📞 ಕರೆ ಮಾಡಿ</string>
     <string name="call_action">ಕರೆ ಮಾಡಿ</string>
     <!-- Content Descriptions -->
     <string name="cd_notifications">ಅಧಿಸೂಚನೆಗಳು</string>
@@ -292,7 +294,7 @@
     <string name="distance_km_format">%.1f km</string>
     <string name="speed_kmh_format">%d km/h</string>
     <string name="fare_amount_format">₹%.0f</string>
-    <string name="lat_lng_format">Lat: %.4f, Lng: %.4f</string>
+    <string name="lat_lng_format">ಅಕ್ಷಾಂಶ: %1$.4f, ರೇಖಾಂಶ: %2$.4f</string>
     <string name="error_invalid_customer_name">ಅಮಾನ್ಯ ಗ್ರಾಹಕ ಹೆಸರು</string>
     <string name="error_invalid_phone">ಅಮಾನ್ಯ ಫೋನ್ ಸಂಖ್ಯೆ</string>
 </resources>
