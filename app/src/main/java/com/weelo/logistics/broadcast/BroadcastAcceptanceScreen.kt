@@ -155,18 +155,6 @@ private fun DriverAssignmentAvailability.upperLabel(): String {
     return displayName().uppercase()
 }
 
-private fun DriverAssignmentAvailability.color(): Color {
-    return when (this) {
-        DriverAssignmentAvailability.ACTIVE -> SuccessGreen
-        DriverAssignmentAvailability.OFFLINE -> LightGray
-        DriverAssignmentAvailability.ON_TRIP -> AccentYellow
-    }
-}
-
-private fun DriverAssignmentAvailability.upperLabel(): String {
-    return displayName().uppercase()
-}
-
 /**
  * =============================================================================
  * BROADCAST ACCEPTANCE SCREEN

@@ -127,39 +127,6 @@ private fun performLogout(navController: NavHostController, coroutineScope: Coro
 }
 
 /**
- * Perform full logout cleanup — clears tokens, preferences, locale, and navigates to role selection.
- *
- * EXTRACTED: Single source of truth for logout. Called from Dashboard logout AND Settings logout.
- * Prevents divergence where one path is updated and the other is not.
- *
- * @param navController Navigation controller for redirect
- * @param coroutineScope Scoped coroutine for async DataStore clear (prevents MainScope leak)
- */
-private fun performLogout(navController: NavHostController, coroutineScope: CoroutineScope) {
-    // 1. Clear secure tokens (synchronous)
-    com.weelo.logistics.data.remote.RetrofitClient.clearAllData()
-    
-    // 2. Clear driver preferences (async via scoped coroutine — no MainScope leak)
-    val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences
-        .getInstance(navController.context)
-    coroutineScope.launch {
-        driverPrefs.clearAll()
-    }
-    
-    // 3. Reset locale to English so auth screens show in default language.
-    //    After re-login, updateLocale() restores the user's saved language.
-    navController.context.findMainActivity()?.updateLocale("en")
-    
-    // 4. Navigate to role selection, clearing entire back stack
-    navController.navigateSmooth(
-        route = Screen.RoleSelection.route,
-        popUpToRoute = null,
-        inclusive = true,
-        restoreState = false
-    )
-}
-
-/**
  * Main Navigation component
  * Sets up the navigation graph for the entire app
  * 
