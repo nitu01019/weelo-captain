@@ -1165,6 +1165,17 @@ object SocketIOService {
      * 
      * Uses broadcastDismissed flow for UI blur + BroadcastOverlayManager scheduled removal
      */
+    /**
+     * Handle order_cancelled event from backend.
+     *
+     * THREE surfaces must be cleaned up simultaneously:
+     * 1. Full-screen overlay (BroadcastOverlayManager) — instant removal via removeBroadcast()
+     * 2. BroadcastListScreen card — animated blur overlay via _broadcastDismissed
+     * 3. Driver/Transporter dashboards — snackbar via _orderCancelled
+     *
+     * SCALABILITY: All operations are O(1). removeBroadcast() uses mutex-protected
+     * ConcurrentLinkedQueue. Flows use SharedFlow with extraBufferCapacity=20 — never blocks.
+     */
     private fun handleOrderCancelled(args: Array<Any>) {
         try {
             val data = args.firstOrNull() as? JSONObject ?: return
@@ -1182,7 +1193,16 @@ object SocketIOService {
             timber.log.Timber.w("║  Assignments Released: $assignmentsCancelled")
             timber.log.Timber.w("╚══════════════════════════════════════════════════════════════╝")
             
-            // 1. Emit dismiss notification for graceful fade (instead of instant remove)
+            // 1. INSTANT removal from full-screen overlay (BroadcastOverlayManager).
+            //    removeBroadcast() is thread-safe (mutex-protected) and O(1) for current + O(n) queue.
+            //    Must run on Main thread as BroadcastOverlayManager uses MainScope internally.
+            CoroutineScope(Dispatchers.Main).launch {
+                com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(orderId)
+                timber.log.Timber.i("   ✓ Instantly removed broadcast $orderId from full-screen overlay")
+            }
+
+            // 2. Emit dismiss notification for graceful fade on BroadcastListScreen card.
+            //    BroadcastListScreen observes this → shows animated "Sorry" overlay → auto-removes after 1s.
             CoroutineScope(Dispatchers.IO).launch {
                 _broadcastDismissed.emit(BroadcastDismissedNotification(
                     broadcastId = orderId,
@@ -1190,13 +1210,6 @@ object SocketIOService {
                     message = message,
                     customerName = data.optString("customerName", "")
                 ))
-            }
-            
-            // 2. Schedule delayed removal from overlay (2s for graceful fade)
-            CoroutineScope(Dispatchers.Main).launch {
-                kotlinx.coroutines.delay(2000)
-                com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(orderId)
-                timber.log.Timber.i("   ✓ Removed broadcast $orderId from overlay after graceful delay")
             }
             
             // 3. Emit to dedicated orderCancelled flow (for driver/transporter screens)
