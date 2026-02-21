@@ -103,7 +103,11 @@ class DriverEarningsViewModel : ViewModel() {
 
                 // Fetch earnings summary + completed trips in parallel
                 val earningsResponse = driverApi.getDriverEarnings(apiPeriod, requestedDriverId)
-                val tripsResponse = driverApi.getDriverTrips(status = "completed", limit = 20)
+                val tripsResponse = if (requestedDriverId == null) {
+                    driverApi.getDriverTrips(status = "completed", limit = 20)
+                } else {
+                    null
+                }
 
                 if (_selectedPeriod.value != requestedPeriod || activeDriverId != requestedDriverId) return@launch
 
@@ -119,8 +123,11 @@ class DriverEarningsViewModel : ViewModel() {
                 }
 
                 val earningsData = earningsResponse.body()?.data
-                val tripsData = if (tripsResponse.isSuccessful && tripsResponse.body()?.success == true)
-                    tripsResponse.body()?.data else null
+                val tripsData = if (tripsResponse?.isSuccessful == true && tripsResponse.body()?.success == true) {
+                    tripsResponse.body()?.data
+                } else {
+                    null
+                }
 
                 if (earningsData != null) {
                     val result = EarningsData(

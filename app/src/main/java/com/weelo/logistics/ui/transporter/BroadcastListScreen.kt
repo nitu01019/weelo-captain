@@ -465,6 +465,7 @@ fun BroadcastListScreen(
                                 enter = fadeIn(animationSpec = androidx.compose.animation.core.tween(durationMillis = 250)),
                                 exit = fadeOut(animationSpec = androidx.compose.animation.core.tween(durationMillis = 150))
                             ) {
+                                val info = dismissInfo ?: return@AnimatedVisibility
                                 Box(
                                     modifier = Modifier
                                         .matchParentSize()
@@ -480,7 +481,7 @@ fun BroadcastListScreen(
                                     ) {
                                         // Emoji icon based on reason
                                         Text(
-                                            text = when (dismissInfo!!.reason) {
+                                            text = when (info.reason) {
                                                 "customer_cancelled" -> "😔"
                                                 "fully_filled" -> "✅"
                                                 else -> "⏰"
@@ -490,14 +491,14 @@ fun BroadcastListScreen(
                                         Spacer(Modifier.height(12.dp))
                                         // Reason title
                                         Text(
-                                            text = when (dismissInfo.reason) {
+                                            text = when (info.reason) {
                                                 "customer_cancelled" -> "ORDER CANCELLED"
                                                 "fully_filled" -> "FULLY ASSIGNED"
                                                 else -> "ORDER EXPIRED"
                                             },
                                             fontSize = 18.sp,
                                             fontWeight = FontWeight.Black,
-                                            color = when (dismissInfo.reason) {
+                                            color = when (info.reason) {
                                                 "customer_cancelled" -> Color(0xFFFF6B6B)
                                                 "fully_filled" -> Color(0xFF4CAF50)
                                                 else -> RapidoYellow
@@ -507,10 +508,10 @@ fun BroadcastListScreen(
                                         Spacer(Modifier.height(8.dp))
                                         // Empathetic message for cancel, original message for others
                                         Text(
-                                            text = if (dismissInfo.reason == "customer_cancelled")
+                                            text = if (info.reason == "customer_cancelled")
                                                 "Sorry, the customer cancelled this order"
                                             else
-                                                dismissInfo.message,
+                                                info.message,
                                             fontSize = 14.sp,
                                             color = Color.White.copy(alpha = 0.92f),
                                             textAlign = TextAlign.Center,

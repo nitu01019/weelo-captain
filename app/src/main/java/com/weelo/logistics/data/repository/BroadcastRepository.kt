@@ -22,6 +22,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+import java.util.Locale
+import timber.log.Timber
 
 // =============================================================================
 // BROADCAST REPOSITORY - Real-time Booking Broadcast Management
@@ -108,6 +114,12 @@ class BroadcastRepository private constructor(
     @SuppressLint("StaticFieldLeak")
     companion object {
         private const val TAG = "BroadcastRepository"
+        private val ISO_UTC_WITH_MILLIS: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+                .withZone(ZoneOffset.UTC)
+        private val ISO_UTC_NO_MILLIS: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+                .withZone(ZoneOffset.UTC)
         
         @Volatile
         private var instance: BroadcastRepository? = null
@@ -620,17 +632,14 @@ class BroadcastRepository private constructor(
     }
     
     private fun parseTimestamp(timestamp: String?): Long {
-        if (timestamp == null) return System.currentTimeMillis()
+        if (timestamp.isNullOrBlank()) return System.currentTimeMillis()
         return try {
-            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
-                timeZone = java.util.TimeZone.getTimeZone("UTC")
-            }.parse(timestamp)?.time ?: System.currentTimeMillis()
-        } catch (e: Exception) {
+            Instant.from(ISO_UTC_WITH_MILLIS.parse(timestamp)).toEpochMilli()
+        } catch (_: DateTimeParseException) {
             try {
-                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply {
-                    timeZone = java.util.TimeZone.getTimeZone("UTC")
-                }.parse(timestamp)?.time ?: System.currentTimeMillis()
-            } catch (e2: Exception) {
+                Instant.from(ISO_UTC_NO_MILLIS.parse(timestamp)).toEpochMilli()
+            } catch (e2: DateTimeParseException) {
+                Timber.w(e2, "$TAG: Failed to parse timestamp: $timestamp")
                 System.currentTimeMillis()
             }
         }

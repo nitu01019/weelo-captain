@@ -46,6 +46,7 @@ import com.weelo.logistics.ui.components.TruckSelectionSkeleton
 import com.weelo.logistics.ui.components.DriverAssignmentSkeleton
 import com.weelo.logistics.ui.components.DarkSkeletonBox
 import com.weelo.logistics.ui.components.DarkSkeletonCircle
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -209,6 +210,7 @@ fun BroadcastAcceptanceScreen(
     var pendingSubmissionCount by remember { mutableStateOf(0) }
     var isSubmittingAssignments by remember { mutableStateOf(false) }
     var confirmedHoldIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var submissionJob by remember { mutableStateOf<Job?>(null) }
 
     val heldSelections = remember(broadcast.notes) { parseHeldTruckSelections(broadcast.notes) }
     val hasHeldSelections = heldSelections.isNotEmpty()
@@ -330,6 +332,8 @@ fun BroadcastAcceptanceScreen(
         // and we don't leak/race multiple dismiss jobs.
         SocketIOService.orderCancelled.collectLatest { notification: com.weelo.logistics.data.remote.OrderCancelledNotification ->
             if (notification.orderId == broadcast.broadcastId) {
+                submissionJob?.cancel()
+                submissionJob = null
                 isSubmittingAssignments = false  // Abort any in-flight submission
                 releaseUnconfirmedHolds()
                 currentStep = AcceptanceStep.CANCELLED
@@ -403,7 +407,8 @@ fun BroadcastAcceptanceScreen(
     fun submitAssignments() {
         if (isSubmittingAssignments) return
 
-        scope.launch {
+        submissionJob?.cancel()
+        submissionJob = scope.launch {
             if (driverAssignmentState !is DriverAssignmentUiState.Ready) {
                 errorMessage = "Driver list is not ready. Retry loading drivers."
                 currentStep = AcceptanceStep.ASSIGN_DRIVERS
@@ -586,6 +591,7 @@ fun BroadcastAcceptanceScreen(
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 timber.log.Timber.e("❌ Submission error: ${e.message}")
                 val pendingVehicleIds = selectedAssignments.keys
                 failedCount = pendingVehicleIds.count { updatedSubmissionResults[it] !is AssignmentSubmissionResult.Success }
@@ -600,6 +606,7 @@ fun BroadcastAcceptanceScreen(
             } finally {
                 submissionResults = updatedSubmissionResults
                 isSubmittingAssignments = false
+                submissionJob = null
             }
 
             if (failedCount == 0) {
