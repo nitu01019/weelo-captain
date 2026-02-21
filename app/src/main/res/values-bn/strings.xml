@@ -188,8 +188,10 @@
     <string name="add_vehicle">যানবাহন যোগ করুন</string>
     <string name="add_driver">ড্রাইভার যোগ করুন</string>
     <string name="cannot_connect_backend">ব্যাকএন্ডে সংযোগ করা যাচ্ছে না</string>
-    <string name="order_cancelled">অর্ডার বাতিল হয়েছে</string>
-    <string name="trucks_released_format">%1$d ট্রাক মুক্ত হয়েছে</string>
+    <string name="order_cancelled">❌ ఆర్డర్ రద్దు</string>
+    <string name="trucks_released_format">• %1$d ట్రక్కు(లు) విడుదల చేయబడింది</string>
+    <string name="by_customer_format">by %1$s</string>
+    <string name="call_customer">📞 కాల్ చేయండి</string>
     <string name="call_action">কল করুন</string>
     <!-- Content Descriptions -->
     <string name="cd_notifications">বিজ্ঞপ্তি</string>

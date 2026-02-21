@@ -217,8 +217,10 @@
     <string name="add_vehicle">वाहन जोड़ें</string>
     <string name="add_driver">ड्राइवर जोड़ें</string>
     <string name="cannot_connect_backend">बैकएंड से कनेक्ट नहीं हो सकता</string>
-    <string name="order_cancelled">ऑर्डर रद्द हो गया</string>
-    <string name="trucks_released_format">%1$d ट्रक रिलीज़ हुए</string>
+    <string name="order_cancelled">❌ ఆర్డర్ రద్దు</string>
+    <string name="trucks_released_format">• %1$d ట్రక్కు(లు) విడుదల చేయబడింది</string>
+    <string name="by_customer_format">by %1$s</string>
+    <string name="call_customer">📞 కాల్ చేయండి</string>
     <string name="call_action">कॉल करें</string>
     
     <!-- Content Descriptions -->

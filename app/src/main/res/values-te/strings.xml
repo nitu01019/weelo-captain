@@ -213,8 +213,10 @@
     <string name="add_vehicle">వాహనం జోడించు</string>
     <string name="add_driver">డ్రైవర్‌ను జోడించు</string>
     <string name="cannot_connect_backend">బ్యాకెండ్‌తో కనెక్ట్ చేయడం సాధ్యం కాలేదు</string>
-    <string name="order_cancelled">ఆర్డర్ రద్దు చేయబడింది</string>
-    <string name="trucks_released_format">%1$d ట్రక్కు(లు) విడుదల చేయబడింది</string>
+    <string name="order_cancelled">❌ ఆర్డర్ రద్దు</string>
+    <string name="trucks_released_format">• %1$d ట్రక్కు(లు) విడుదల చేయబడింది</string>
+    <string name="by_customer_format">by %1$s</string>
+    <string name="call_customer">📞 కాల్ చేయండి</string>
     <string name="call_action">కాల్ చేయండి</string>
     
     <!-- Content Descriptions -->

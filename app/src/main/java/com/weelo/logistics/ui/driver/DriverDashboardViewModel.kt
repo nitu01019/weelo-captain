@@ -175,10 +175,25 @@ class DriverDashboardViewModel : ViewModel() {
 
                 // SCALABILITY: All 4 API calls in parallel — ~200ms instead of ~800ms sequential
                 // Uses Deferred + awaitAll for structured concurrency (Kotlin coroutines best practice)
-                val dashboardDeferred = viewModelScope.async { runCatching { driverApi.getDriverDashboard() } }
-                val activeDeferred = viewModelScope.async { runCatching { driverApi.getActiveTrip() } }
-                val earningsMonthDeferred = viewModelScope.async { runCatching { driverApi.getDriverEarnings("month") } }
-                val earningsWeekDeferred = viewModelScope.async { runCatching { driverApi.getDriverEarnings("week") } }
+                // MAJOR FIX: runCatching captures ALL exceptions including CancellationException.
+                // Must rethrow CancellationException so structured concurrency works correctly —
+                // if viewModelScope is cancelled (Activity destroyed), these async tasks stop immediately.
+                val dashboardDeferred = viewModelScope.async {
+                    runCatching { driverApi.getDriverDashboard() }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                }
+                val activeDeferred = viewModelScope.async {
+                    runCatching { driverApi.getActiveTrip() }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                }
+                val earningsMonthDeferred = viewModelScope.async {
+                    runCatching { driverApi.getDriverEarnings("month") }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                }
+                val earningsWeekDeferred = viewModelScope.async {
+                    runCatching { driverApi.getDriverEarnings("week") }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                }
 
                 val dashboardResult = dashboardDeferred.await()
                 val activeResult = activeDeferred.await()

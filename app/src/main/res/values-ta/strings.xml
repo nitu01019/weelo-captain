@@ -213,8 +213,10 @@
     <string name="add_vehicle">வாகனம் சேர்</string>
     <string name="add_driver">ஓட்டுநர் சேர்</string>
     <string name="cannot_connect_backend">பின்தளத்துடன் இணைக்க முடியவில்லை</string>
-    <string name="order_cancelled">ஆர்டர் ரத்துசெய்யப்பட்டது</string>
-    <string name="trucks_released_format">%1$d லாரி(கள்) வெளியிடப்பட்டது</string>
+    <string name="order_cancelled">❌ ఆర్డర్ రద్దు</string>
+    <string name="trucks_released_format">• %1$d ట్రక్కు(లు) విడుదల చేయబడింది</string>
+    <string name="by_customer_format">by %1$s</string>
+    <string name="call_customer">📞 కాల్ చేయండి</string>
     <string name="call_action">அழைக்கவும்</string>
     
     <!-- Content Descriptions -->

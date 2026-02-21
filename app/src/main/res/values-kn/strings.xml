@@ -188,8 +188,10 @@
     <string name="add_vehicle">ವಾಹನ ಸೇರಿಸಿ</string>
     <string name="add_driver">ಚಾಲಕ ಸೇರಿಸಿ</string>
     <string name="cannot_connect_backend">ಬ್ಯಾಕೆಂಡ್‌ಗೆ ಸಂಪರ್ಕಿಸಲಾಗುತ್ತಿಲ್ಲ</string>
-    <string name="order_cancelled">ಆರ್ಡರ್ ರದ್ದಾಗಿದೆ</string>
-    <string name="trucks_released_format">%1$d ಟ್ರಕ್ ಬಿಡುಗಡೆಯಾಗಿದೆ</string>
+    <string name="order_cancelled">❌ ఆర్డర్ రద్దు</string>
+    <string name="trucks_released_format">• %1$d ట్రక్కు(లు) విడుదల చేయబడింది</string>
+    <string name="by_customer_format">by %1$s</string>
+    <string name="call_customer">📞 కాల్ చేయండి</string>
     <string name="call_action">ಕರೆ ಮಾಡಿ</string>
     <!-- Content Descriptions -->
     <string name="cd_notifications">ಅಧಿಸೂಚನೆಗಳು</string>

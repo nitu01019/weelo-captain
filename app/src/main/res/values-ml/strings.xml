@@ -161,8 +161,10 @@
     <string name="add_vehicle">വാഹനം ചേർക്കുക</string>
     <string name="add_driver">ഡ്രൈവറിനെ ചേർക്കുക</string>
     <string name="cannot_connect_backend">ബാക്കെൻഡിലേക്ക് ബന്ധിപ്പിക്കാൻ കഴിഞ്ഞില്ല</string>
-    <string name="order_cancelled">ഓർഡർ റദ്ദാക്കി</string>
-    <string name="trucks_released_format">%1$d ട്രക്ക്(കൾ) റിലീസ് ചെയ്തു</string>
+    <string name="order_cancelled">❌ ఆర్డర్ రద్దు</string>
+    <string name="trucks_released_format">• %1$d ట్రక్కు(లు) విడుదల చేయబడింది</string>
+    <string name="by_customer_format">by %1$s</string>
+    <string name="call_customer">📞 కాల్ చేయండి</string>
     <string name="call_action">കോൾ ചെയ്യുക</string>
     <string name="cd_notifications">അറിയിപ്പുകൾ</string>
     <string name="cd_profile">പ്രൊഫൈൽ</string>
