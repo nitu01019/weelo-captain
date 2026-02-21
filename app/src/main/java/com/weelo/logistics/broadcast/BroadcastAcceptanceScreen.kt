@@ -34,6 +34,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.weelo.logistics.broadcast.assignment.AssignmentSubmissionResult
+import com.weelo.logistics.broadcast.assignment.BroadcastDriverAssignmentContent
+import com.weelo.logistics.broadcast.assignment.DriverAssignmentUiState
+import com.weelo.logistics.broadcast.assignment.DriverSelectionPolicy
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.repository.BroadcastRepository
 import com.weelo.logistics.data.repository.DriverRepository
@@ -42,7 +46,11 @@ import com.weelo.logistics.ui.components.TruckSelectionSkeleton
 import com.weelo.logistics.ui.components.DriverAssignmentSkeleton
 import com.weelo.logistics.ui.components.DarkSkeletonBox
 import com.weelo.logistics.ui.components.DarkSkeletonCircle
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import com.weelo.logistics.data.remote.SocketIOService
 
 private const val TAG = "BroadcastAcceptance"
 
@@ -76,7 +84,75 @@ enum class AcceptanceStep {
     ASSIGN_DRIVERS,
     SUBMITTING,
     SUCCESS,
-    ERROR
+    ERROR,
+    CANCELLED  // Customer cancelled while transporter was mid-selection
+}
+
+private data class HeldTruckSelection(
+    val vehicleType: String,
+    val vehicleSubtype: String,
+    val quantity: Int,
+    val holdId: String
+) {
+    val normalizedType: String = normalizeTruckToken(vehicleType)
+    val normalizedSubtype: String = normalizeTruckToken(vehicleSubtype)
+}
+
+private fun normalizeTruckToken(value: String): String {
+    return value.trim().lowercase().replace(Regex("\\s+"), " ")
+}
+
+private fun parseHeldTruckSelections(notes: String?): List<HeldTruckSelection> {
+    if (notes.isNullOrBlank()) return emptyList()
+
+    return notes.split(";")
+        .mapNotNull { rawEntry ->
+            val parts = rawEntry.split("|")
+            if (parts.size < 4) return@mapNotNull null
+
+            val quantity = parts[2].trim().toIntOrNull() ?: return@mapNotNull null
+            val holdId = parts[3].trim()
+            if (quantity <= 0 || holdId.isBlank()) return@mapNotNull null
+
+            HeldTruckSelection(
+                vehicleType = parts[0].trim(),
+                vehicleSubtype = parts[1].trim(),
+                quantity = quantity,
+                holdId = holdId
+            )
+        }
+}
+
+private fun resolveHoldSelectionForVehicle(
+    vehicle: Vehicle,
+    holds: List<HeldTruckSelection>
+): HeldTruckSelection? {
+    if (holds.isEmpty()) return null
+
+    val subtype = normalizeTruckToken(vehicle.subtype.name)
+    val categoryAliases = listOf(
+        normalizeTruckToken(vehicle.category.id),
+        normalizeTruckToken(vehicle.category.name),
+        normalizeTruckToken(vehicle.category.name.removeSuffix(" Truck")),
+        normalizeTruckToken(vehicle.category.name.removeSuffix(" truck"))
+    ).filter { it.isNotBlank() }
+
+    return holds.firstOrNull { hold ->
+        val subtypeMatches = hold.normalizedSubtype.isBlank() || hold.normalizedSubtype == subtype
+        subtypeMatches && categoryAliases.contains(hold.normalizedType)
+    }
+}
+
+private fun DriverAssignmentAvailability.color(): Color {
+    return when (this) {
+        DriverAssignmentAvailability.ACTIVE -> SuccessGreen
+        DriverAssignmentAvailability.OFFLINE -> LightGray
+        DriverAssignmentAvailability.ON_TRIP -> AccentYellow
+    }
+}
+
+private fun DriverAssignmentAvailability.upperLabel(): String {
+    return displayName().uppercase()
 }
 
 /**
@@ -124,58 +200,201 @@ fun BroadcastAcceptanceScreen(
     // State
     var currentStep by remember { mutableStateOf(AcceptanceStep.LOADING) }
     var availableVehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
-    var availableDrivers by remember { mutableStateOf<List<Driver>>(emptyList()) }
+    var allDrivers by remember { mutableStateOf<List<Driver>>(emptyList()) }
+    var driverAssignmentState by remember { mutableStateOf<DriverAssignmentUiState>(DriverAssignmentUiState.Loading) }
     var selectedVehicles by remember { mutableStateOf<Set<String>>(emptySet()) }
     var assignments by remember { mutableStateOf<Map<String, String>>(emptyMap()) } // vehicleId -> driverId
+    var submissionResults by remember { mutableStateOf<Map<String, AssignmentSubmissionResult>>(emptyMap()) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var submissionProgress by remember { mutableStateOf(0f) }
-    
+    var pendingSubmissionCount by remember { mutableStateOf(0) }
+    var isSubmittingAssignments by remember { mutableStateOf(false) }
+    var confirmedHoldIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var submissionJob by remember { mutableStateOf<Job?>(null) }
+
+    val heldSelections = remember(broadcast.notes) { parseHeldTruckSelections(broadcast.notes) }
+    val hasHeldSelections = heldSelections.isNotEmpty()
+    val heldTruckTarget = heldSelections.sumOf { it.quantity }
+
+    val allDriversById = remember(allDrivers) { allDrivers.associateBy { it.id } }
+    val availableVehiclesById = remember(availableVehicles) { availableVehicles.associateBy { it.id } }
+    val selectedAssignments = remember(selectedVehicles, assignments) {
+        assignments.filterKeys { it in selectedVehicles }
+    }
+
     // Calculate trucks needed
-    val trucksNeeded = broadcast.totalTrucksNeeded - broadcast.trucksFilledSoFar
-    val canProceedToDrivers = selectedVehicles.isNotEmpty() && selectedVehicles.size <= trucksNeeded
-    val allDriversAssigned = selectedVehicles.all { vehicleId -> assignments.containsKey(vehicleId) }
-    
+    val broadcastTrucksNeeded = (broadcast.totalTrucksNeeded - broadcast.trucksFilledSoFar).coerceAtLeast(0)
+    val trucksNeeded = if (hasHeldSelections) heldTruckTarget else broadcastTrucksNeeded
+
+    val selectedCountByHoldId = remember(selectedVehicles, availableVehicles, heldSelections) {
+        val counts = mutableMapOf<String, Int>()
+        selectedVehicles.forEach { vehicleId ->
+            val vehicle = availableVehicles.find { it.id == vehicleId } ?: return@forEach
+            val hold = resolveHoldSelectionForVehicle(vehicle, heldSelections) ?: return@forEach
+            counts[hold.holdId] = (counts[hold.holdId] ?: 0) + 1
+        }
+        counts
+    }
+
+    val selectedVehiclesOutsideHeldTypes = remember(selectedVehicles, availableVehicles, heldSelections) {
+        if (!hasHeldSelections) {
+            emptyList()
+        } else {
+            selectedVehicles.filter { vehicleId ->
+                val vehicle = availableVehicles.find { it.id == vehicleId } ?: return@filter true
+                resolveHoldSelectionForVehicle(vehicle, heldSelections) == null
+            }
+        }
+    }
+
+    val holdSelectionCountsValid = !hasHeldSelections || heldSelections.all { hold ->
+        selectedCountByHoldId[hold.holdId] == hold.quantity
+    }
+
+    val canProceedToDrivers = if (hasHeldSelections) {
+        selectedVehicles.isNotEmpty() &&
+            selectedVehicles.size == trucksNeeded &&
+            selectedVehiclesOutsideHeldTypes.isEmpty() &&
+            holdSelectionCountsValid
+    } else {
+        selectedVehicles.isNotEmpty() && selectedVehicles.size <= trucksNeeded
+    }
+
+    val hasInvalidAssignments = selectedVehicles.any { vehicleId ->
+        val assignedDriverId = selectedAssignments[vehicleId] ?: return@any false
+        val assignedDriver = allDriversById[assignedDriverId] ?: return@any true
+        !DriverSelectionPolicy.isSelectable(assignedDriver)
+    }
+    val allDriversAssigned = driverAssignmentState is DriverAssignmentUiState.Ready &&
+        selectedVehicles.isNotEmpty() &&
+        (!hasHeldSelections || selectedVehicles.size == trucksNeeded) &&
+        selectedVehicles.all { vehicleId -> selectedAssignments.containsKey(vehicleId) } &&
+        !hasInvalidAssignments
+
+    fun releaseUnconfirmedHolds() {
+        if (!hasHeldSelections) return
+        val pendingHoldIds = heldSelections
+            .map { it.holdId }
+            .filter { it !in confirmedHoldIds }
+            .distinct()
+        if (pendingHoldIds.isEmpty()) return
+
+        scope.launch {
+            pendingHoldIds.forEach { holdId ->
+                when (val releaseResult = broadcastRepository.releaseHold(holdId)) {
+                    is com.weelo.logistics.data.repository.BroadcastResult.Success -> {
+                        timber.log.Timber.i("🔓 Released pending hold: $holdId")
+                    }
+                    is com.weelo.logistics.data.repository.BroadcastResult.Error -> {
+                        timber.log.Timber.w("⚠️ Failed to release hold $holdId: ${releaseResult.message}")
+                    }
+                    is com.weelo.logistics.data.repository.BroadcastResult.Loading -> Unit
+                }
+            }
+        }
+    }
+
+    fun mapSubmissionError(apiCode: String?, fallbackMessage: String): String {
+        return when (apiCode) {
+            "DRIVER_BUSY" -> "Driver is already on another trip."
+            "DRIVER_NOT_IN_FLEET" -> "This driver does not belong to your fleet."
+            "VEHICLE_NOT_IN_FLEET" -> "This vehicle does not belong to your fleet."
+            "BROADCAST_FILLED" -> "This booking has already been fully assigned."
+            "BROADCAST_EXPIRED" -> "This booking request has expired."
+            "INVALID_ASSIGNMENT_STATE" -> "Assignment state changed. Please retry."
+            else -> fallbackMessage
+        }
+    }
+
+    suspend fun refreshDriverState(forceRefresh: Boolean) {
+        driverAssignmentState = DriverAssignmentUiState.Loading
+        when (val driverResult = driverRepository.fetchDrivers(forceRefresh = forceRefresh)) {
+            is com.weelo.logistics.data.repository.DriverResult.Success -> {
+                allDrivers = driverResult.data.drivers
+                driverAssignmentState = DriverSelectionPolicy.buildUiState(driverResult.data.drivers)
+            }
+            is com.weelo.logistics.data.repository.DriverResult.Error -> {
+                driverAssignmentState = DriverAssignmentUiState.Error(
+                    message = driverResult.message,
+                    retryable = true
+                )
+            }
+            is com.weelo.logistics.data.repository.DriverResult.Loading -> {
+                driverAssignmentState = DriverAssignmentUiState.Loading
+            }
+        }
+    }
+
+    // ========== ORDER CANCELLED: Auto-dismiss with overlay (PRD 4.4) ==========
+    // If customer cancels while transporter is mid-selection, abort and show overlay
+    LaunchedEffect(Unit) {
+        // Use LaunchedEffect coroutine scope (NOT rememberCoroutineScope) so delay is cancelled safely
+        // and we don't leak/race multiple dismiss jobs.
+        SocketIOService.orderCancelled.collectLatest { notification: com.weelo.logistics.data.remote.OrderCancelledNotification ->
+            if (notification.orderId == broadcast.broadcastId) {
+                submissionJob?.cancel()
+                submissionJob = null
+                isSubmittingAssignments = false  // Abort any in-flight submission
+                releaseUnconfirmedHolds()
+                currentStep = AcceptanceStep.CANCELLED
+                delay(1_500L)
+                onDismiss()
+            }
+        }
+    }
+
     // Load vehicles and drivers when visible
     LaunchedEffect(isVisible) {
         if (isVisible) {
             currentStep = AcceptanceStep.LOADING
-            
+            selectedVehicles = emptySet()
+            assignments = emptyMap()
+            submissionResults = emptyMap()
+            errorMessage = null
+            submissionProgress = 0f
+            pendingSubmissionCount = 0
+            isSubmittingAssignments = false
+            confirmedHoldIds = emptySet()
+
             try {
                 // Fetch vehicles matching the broadcast's vehicle type
                 val vehicleResult = vehicleRepository.fetchVehicles(forceRefresh = true)
                 if (vehicleResult is com.weelo.logistics.data.repository.VehicleResult.Success) {
-                    // Get all requested vehicle types from the broadcast
                     val requestedTypes = broadcast.requestedVehicles.map { it.vehicleType.lowercase() }.toSet()
                     val requestedSubtypes = broadcast.requestedVehicles
                         .filter { it.vehicleSubtype.isNotEmpty() }
                         .map { "${it.vehicleType.lowercase()}_${it.vehicleSubtype.lowercase()}" }
                         .toSet()
-                    
-                    // Filter vehicles by type AND availability
+
                     val filtered = vehicleResult.data.vehicles.filter { vehicle ->
                         val isAvailable = vehicle.status.lowercase() == "available"
                         val typeMatch = requestedTypes.contains(vehicle.vehicleType.lowercase())
                         val subtypeKey = "${vehicle.vehicleType.lowercase()}_${vehicle.vehicleSubtype.lowercase()}"
                         val subtypeMatch = requestedSubtypes.isEmpty() || requestedSubtypes.contains(subtypeKey)
-                        
-                        isAvailable && typeMatch && (requestedSubtypes.isEmpty() || subtypeMatch)
+                        val holdTypeMatch = if (!hasHeldSelections) {
+                            true
+                        } else {
+                            val type = normalizeTruckToken(vehicle.vehicleType)
+                            val subtype = normalizeTruckToken(vehicle.vehicleSubtype)
+                            heldSelections.any { hold ->
+                                val subtypeMatches = hold.normalizedSubtype.isBlank() || hold.normalizedSubtype == subtype
+                                subtypeMatches && hold.normalizedType == type
+                            }
+                        }
+
+                        isAvailable && typeMatch && (requestedSubtypes.isEmpty() || subtypeMatch) && holdTypeMatch
                     }
-                    
+
                     availableVehicles = vehicleRepository.mapToUiModels(filtered)
                     timber.log.Timber.i("✅ Found ${availableVehicles.size} matching vehicles for types: $requestedTypes")
+                } else if (vehicleResult is com.weelo.logistics.data.repository.VehicleResult.Error) {
+                    errorMessage = vehicleResult.message
+                    currentStep = AcceptanceStep.ERROR
+                    return@LaunchedEffect
                 }
-                
-                // Fetch available drivers
-                val driverResult = driverRepository.fetchDrivers(forceRefresh = true)
-                if (driverResult is com.weelo.logistics.data.repository.DriverResult.Success) {
-                    availableDrivers = driverResult.data.drivers.filter { 
-                        it.status == DriverStatus.ACTIVE && it.isAvailable 
-                    }
-                    timber.log.Timber.i("✅ Found ${availableDrivers.size} available drivers")
-                }
-                
+
+                refreshDriverState(forceRefresh = true)
                 currentStep = AcceptanceStep.SELECT_TRUCKS
-                
             } catch (e: Exception) {
                 timber.log.Timber.e("❌ Error loading data: ${e.message}")
                 errorMessage = e.message ?: "Failed to load data"
@@ -183,53 +402,227 @@ fun BroadcastAcceptanceScreen(
             }
         }
     }
-    
+
     // Submit all assignments
     fun submitAssignments() {
-        scope.launch {
+        if (isSubmittingAssignments) return
+
+        submissionJob?.cancel()
+        submissionJob = scope.launch {
+            if (driverAssignmentState !is DriverAssignmentUiState.Ready) {
+                errorMessage = "Driver list is not ready. Retry loading drivers."
+                currentStep = AcceptanceStep.ASSIGN_DRIVERS
+                return@launch
+            }
+
+            val assignmentsToValidate = selectedAssignments.entries.toList()
+            if (assignmentsToValidate.isEmpty()) {
+                errorMessage = "Assign drivers to all selected trucks before submitting."
+                currentStep = AcceptanceStep.ASSIGN_DRIVERS
+                return@launch
+            }
+
+            if (hasHeldSelections && assignmentsToValidate.size != trucksNeeded) {
+                errorMessage = "Select and assign exactly $trucksNeeded held truck(s) before submitting."
+                currentStep = AcceptanceStep.ASSIGN_DRIVERS
+                return@launch
+            }
+
+            if (hasHeldSelections && selectedVehiclesOutsideHeldTypes.isNotEmpty()) {
+                errorMessage = "One selected vehicle does not match held truck types. Re-select and retry."
+                currentStep = AcceptanceStep.SELECT_TRUCKS
+                return@launch
+            }
+
+            if (hasHeldSelections && !holdSelectionCountsValid) {
+                errorMessage = "Selected trucks do not match held quantities. Fix selection and retry."
+                currentStep = AcceptanceStep.SELECT_TRUCKS
+                return@launch
+            }
+
+            val invalidEntry = assignmentsToValidate.firstOrNull { (_, driverId) ->
+                val driver = allDriversById[driverId] ?: return@firstOrNull true
+                !DriverSelectionPolicy.isSelectable(driver)
+            }
+            if (invalidEntry != null) {
+                errorMessage = "One selected driver is no longer assignable. Reassign and retry."
+                currentStep = AcceptanceStep.ASSIGN_DRIVERS
+                return@launch
+            }
+
             currentStep = AcceptanceStep.SUBMITTING
-            submissionProgress = 0f
-            
+            isSubmittingAssignments = true
+
+            val updatedSubmissionResults = submissionResults.toMutableMap()
+            var successCount = 0
+            var failedCount = 0
+
             try {
-                val totalAssignments = assignments.size
-                var successCount = 0
-                
-                for ((index, entry) in assignments.entries.withIndex()) {
-                    val (vehicleId, driverId) = entry
-                    
-                    timber.log.Timber.i("📤 Submitting assignment ${index + 1}/$totalAssignments: vehicle=$vehicleId, driver=$driverId")
-                    
-                    val result = broadcastRepository.acceptBroadcast(
-                        broadcastId = broadcast.broadcastId,
-                        vehicleId = vehicleId,
-                        driverId = driverId
-                    )
-                    
-                    if (result is com.weelo.logistics.data.repository.BroadcastResult.Success) {
-                        successCount++
-                    } else if (result is com.weelo.logistics.data.repository.BroadcastResult.Error) {
-                        timber.log.Timber.w("⚠️ Assignment failed: ${result.message}")
+                if (hasHeldSelections) {
+                    val assignmentsByHoldId = mutableMapOf<String, MutableList<Pair<String, String>>>()
+
+                    assignmentsToValidate.forEach { (vehicleId, driverId) ->
+                        val vehicle = availableVehiclesById[vehicleId]
+                        val hold = vehicle?.let { resolveHoldSelectionForVehicle(it, heldSelections) }
+                        if (vehicle == null || hold == null) {
+                            failedCount++
+                            updatedSubmissionResults[vehicleId] = AssignmentSubmissionResult.Failed(
+                                message = "Vehicle does not match held truck selection.",
+                                code = null
+                            )
+                        } else {
+                            assignmentsByHoldId.getOrPut(hold.holdId) { mutableListOf() }.add(vehicleId to driverId)
+                        }
                     }
-                    
-                    submissionProgress = (index + 1).toFloat() / totalAssignments
-                }
-                
-                if (successCount > 0) {
-                    timber.log.Timber.i("✅ Successfully submitted $successCount/$totalAssignments assignments")
-                    currentStep = AcceptanceStep.SUCCESS
-                    
-                    // Auto-dismiss after success
-                    kotlinx.coroutines.delay(1500)
-                    onSuccess()
+
+                    val pendingHolds = heldSelections.filter { it.holdId !in confirmedHoldIds }
+                    if (pendingHolds.isEmpty()) {
+                        currentStep = AcceptanceStep.SUCCESS
+                        kotlinx.coroutines.delay(1200)
+                        onSuccess()
+                        return@launch
+                    }
+
+                    pendingSubmissionCount = pendingHolds.sumOf { it.quantity }.coerceAtLeast(1)
+                    submissionProgress = 0f
+                    var processedCount = 0
+                    val newlyConfirmed = confirmedHoldIds.toMutableSet()
+
+                    pendingHolds.forEach { hold ->
+                        val holdAssignments = assignmentsByHoldId[hold.holdId].orEmpty()
+                        if (holdAssignments.size != hold.quantity) {
+                            failedCount += holdAssignments.size
+                            holdAssignments.forEach { (vehicleId, _) ->
+                                updatedSubmissionResults[vehicleId] = AssignmentSubmissionResult.Failed(
+                                    message = "Expected ${hold.quantity} assignments for held ${hold.vehicleType} ${hold.vehicleSubtype}.",
+                                    code = null
+                                )
+                            }
+                            processedCount += holdAssignments.size
+                            submissionProgress = processedCount.toFloat() / pendingSubmissionCount
+                            return@forEach
+                        }
+
+                        timber.log.Timber.i(
+                            "📤 Confirming hold ${hold.holdId} with ${holdAssignments.size} assignment(s)"
+                        )
+
+                        when (
+                            val result = broadcastRepository.confirmHoldWithAssignments(
+                                holdId = hold.holdId,
+                                assignments = holdAssignments
+                            )
+                        ) {
+                            is com.weelo.logistics.data.repository.BroadcastResult.Success -> {
+                                newlyConfirmed.add(hold.holdId)
+                                holdAssignments.forEach { (vehicleId, _) ->
+                                    successCount++
+                                    updatedSubmissionResults[vehicleId] = AssignmentSubmissionResult.Success
+                                }
+                            }
+                            is com.weelo.logistics.data.repository.BroadcastResult.Error -> {
+                                failedCount += holdAssignments.size
+                                holdAssignments.forEach { (vehicleId, _) ->
+                                    updatedSubmissionResults[vehicleId] = AssignmentSubmissionResult.Failed(
+                                        message = result.message,
+                                        code = null
+                                    )
+                                }
+                                timber.log.Timber.w(
+                                    "⚠️ Hold confirm failed: holdId=${hold.holdId} msg=${result.message}"
+                                )
+                            }
+                            is com.weelo.logistics.data.repository.BroadcastResult.Loading -> Unit
+                        }
+
+                        processedCount += holdAssignments.size
+                        submissionProgress = processedCount.toFloat() / pendingSubmissionCount
+                    }
+
+                    confirmedHoldIds = newlyConfirmed
                 } else {
-                    errorMessage = "Failed to submit any assignments"
-                    currentStep = AcceptanceStep.ERROR
+                    val assignmentsToSubmit = assignmentsToValidate.filter { (vehicleId, _) ->
+                        submissionResults[vehicleId] !is AssignmentSubmissionResult.Success
+                    }
+
+                    if (assignmentsToSubmit.isEmpty()) {
+                        currentStep = AcceptanceStep.SUCCESS
+                        kotlinx.coroutines.delay(1200)
+                        onSuccess()
+                        return@launch
+                    }
+
+                    pendingSubmissionCount = assignmentsToSubmit.size
+                    submissionProgress = 0f
+
+                    assignmentsToSubmit.forEachIndexed { index, (vehicleId, driverId) ->
+                        val idempotencyKey = "broadcast:${broadcast.broadcastId}:vehicle:$vehicleId:driver:$driverId"
+                        timber.log.Timber.i(
+                            "📤 Submitting assignment ${index + 1}/${assignmentsToSubmit.size}: vehicle=$vehicleId, driver=$driverId"
+                        )
+
+                        when (
+                            val result = broadcastRepository.acceptBroadcast(
+                                broadcastId = broadcast.broadcastId,
+                                vehicleId = vehicleId,
+                                driverId = driverId,
+                                idempotencyKey = idempotencyKey
+                            )
+                        ) {
+                            is com.weelo.logistics.data.repository.BroadcastResult.Success -> {
+                                successCount++
+                                updatedSubmissionResults[vehicleId] = AssignmentSubmissionResult.Success
+                            }
+                            is com.weelo.logistics.data.repository.BroadcastResult.Error -> {
+                                failedCount++
+                                val safeMessage = mapSubmissionError(result.apiCode, result.message)
+                                updatedSubmissionResults[vehicleId] = AssignmentSubmissionResult.Failed(
+                                    message = safeMessage,
+                                    code = result.apiCode
+                                )
+                                timber.log.Timber.w(
+                                    "⚠️ Assignment failed: vehicle=$vehicleId code=${result.apiCode ?: "unknown"} msg=$safeMessage"
+                                )
+                            }
+                            is com.weelo.logistics.data.repository.BroadcastResult.Loading -> Unit
+                        }
+
+                        submissionProgress = (index + 1).toFloat() / assignmentsToSubmit.size.coerceAtLeast(1)
+                    }
                 }
-                
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 timber.log.Timber.e("❌ Submission error: ${e.message}")
-                errorMessage = e.message ?: "Submission failed"
-                currentStep = AcceptanceStep.ERROR
+                val pendingVehicleIds = selectedAssignments.keys
+                failedCount = pendingVehicleIds.count { updatedSubmissionResults[it] !is AssignmentSubmissionResult.Success }
+                pendingVehicleIds.forEach { vehicleId ->
+                    if (updatedSubmissionResults[vehicleId] !is AssignmentSubmissionResult.Success) {
+                        updatedSubmissionResults[vehicleId] = AssignmentSubmissionResult.Failed(
+                            message = "Submission failed. Please retry.",
+                            code = null
+                        )
+                    }
+                }
+            } finally {
+                submissionResults = updatedSubmissionResults
+                isSubmittingAssignments = false
+                submissionJob = null
+            }
+
+            if (failedCount == 0) {
+                timber.log.Timber.i("✅ Successfully submitted $successCount assignment(s)")
+                currentStep = AcceptanceStep.SUCCESS
+                kotlinx.coroutines.delay(1500)
+                onSuccess()
+            } else {
+                currentStep = AcceptanceStep.ASSIGN_DRIVERS
+                val retryMessage = if (successCount > 0) {
+                    "$successCount assignment(s) sent, $failedCount failed. Retry failed trucks."
+                } else {
+                    "Failed to submit assignments. Fix errors and retry."
+                }
+                errorMessage = retryMessage
+                Toast.makeText(context, retryMessage, Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -248,12 +641,13 @@ fun BroadcastAcceptanceScreen(
     ) {
         Dialog(
             onDismissRequest = { 
-                if (currentStep != AcceptanceStep.SUBMITTING) {
+                if (!isSubmittingAssignments && currentStep != AcceptanceStep.SUBMITTING) {
+                    releaseUnconfirmedHolds()
                     onDismiss()
                 }
             },
             properties = DialogProperties(
-                dismissOnBackPress = currentStep != AcceptanceStep.SUBMITTING,
+                dismissOnBackPress = !isSubmittingAssignments && currentStep != AcceptanceStep.SUBMITTING,
                 dismissOnClickOutside = false,
                 usePlatformDefaultWidth = false
             )
@@ -271,47 +665,86 @@ fun BroadcastAcceptanceScreen(
                         vehicles = availableVehicles,
                         selectedVehicles = selectedVehicles,
                         trucksNeeded = trucksNeeded,
-                        onVehicleToggle = { vehicleId ->
-                            selectedVehicles = if (selectedVehicles.contains(vehicleId)) {
-                                selectedVehicles - vehicleId
+                        onVehicleToggle = onToggle@{ vehicleId ->
+                            if (selectedVehicles.contains(vehicleId)) {
+                                selectedVehicles = selectedVehicles - vehicleId
+                                assignments = assignments - vehicleId
+                                submissionResults = submissionResults - vehicleId
                             } else if (selectedVehicles.size < trucksNeeded) {
-                                selectedVehicles + vehicleId
-                            } else {
-                                selectedVehicles
+                                if (hasHeldSelections) {
+                                    val vehicle = availableVehiclesById[vehicleId]
+                                    val hold = vehicle?.let { resolveHoldSelectionForVehicle(it, heldSelections) }
+                                    if (vehicle == null || hold == null) {
+                                        errorMessage = "This vehicle is not part of held truck slots."
+                                        return@onToggle
+                                    }
+
+                                    val currentCountForHold = selectedVehicles.count { selectedVehicleId ->
+                                        val selectedVehicle = availableVehiclesById[selectedVehicleId] ?: return@count false
+                                        resolveHoldSelectionForVehicle(selectedVehicle, heldSelections)?.holdId == hold.holdId
+                                    }
+
+                                    if (currentCountForHold >= hold.quantity) {
+                                        errorMessage = "You can select only ${hold.quantity} ${hold.vehicleType} ${hold.vehicleSubtype} truck(s)."
+                                        return@onToggle
+                                    }
+                                }
+
+                                selectedVehicles = selectedVehicles + vehicleId
                             }
                         },
-                        onProceed = { currentStep = AcceptanceStep.ASSIGN_DRIVERS },
-                        onCancel = onDismiss,
+                        onProceed = {
+                            assignments = selectedAssignments
+                            submissionResults = submissionResults.filterKeys { it in selectedVehicles }
+                            errorMessage = null
+                            currentStep = AcceptanceStep.ASSIGN_DRIVERS
+                        },
+                        onCancel = {
+                            releaseUnconfirmedHolds()
+                            onDismiss()
+                        },
                         canProceed = canProceedToDrivers
                     )
                     
-                    AcceptanceStep.ASSIGN_DRIVERS -> DriverAssignmentContent(
-                        broadcast = broadcast,
+                    AcceptanceStep.ASSIGN_DRIVERS -> BroadcastDriverAssignmentContent(
                         vehicles = availableVehicles.filter { it.id in selectedVehicles },
-                        drivers = availableDrivers,
-                        assignments = assignments,
+                        driverState = driverAssignmentState,
+                        assignments = selectedAssignments,
+                        submissionResults = submissionResults.filterKeys { it in selectedVehicles },
+                        hasInvalidAssignments = hasInvalidAssignments,
+                        canSubmit = allDriversAssigned,
+                        isSubmitting = isSubmittingAssignments,
                         onAssignDriver = { vehicleId, driverId ->
-                            assignments = assignments + (vehicleId to driverId)
+                            assignments = selectedAssignments + (vehicleId to driverId)
+                            submissionResults = submissionResults - vehicleId
+                            errorMessage = null
+                        },
+                        onRetryLoadDrivers = {
+                            scope.launch { refreshDriverState(forceRefresh = true) }
                         },
                         onBack = { currentStep = AcceptanceStep.SELECT_TRUCKS },
                         onSubmit = { submitAssignments() },
-                        canSubmit = allDriversAssigned
                     )
                     
                     AcceptanceStep.SUBMITTING -> SubmittingContent(
                         progress = submissionProgress,
-                        totalCount = assignments.size
+                        totalCount = pendingSubmissionCount.coerceAtLeast(1)
                     )
                     
                     AcceptanceStep.SUCCESS -> SuccessContent(
-                        assignmentCount = assignments.size
+                        assignmentCount = selectedAssignments.size
                     )
                     
                     AcceptanceStep.ERROR -> ErrorContent(
                         message = errorMessage ?: "Unknown error",
                         onRetry = { currentStep = AcceptanceStep.SELECT_TRUCKS },
-                        onDismiss = onDismiss
+                        onDismiss = {
+                            releaseUnconfirmedHolds()
+                            onDismiss()
+                        }
                     )
+
+                    AcceptanceStep.CANCELLED -> CancelledContent()
                 }
             }
         }
@@ -1110,6 +1543,7 @@ private fun DriverAssignmentContent(
     vehicles: List<Vehicle>,
     drivers: List<Driver>,
     assignments: Map<String, String>,
+    hasInvalidAssignments: Boolean,
     onAssignDriver: (vehicleId: String, driverId: String) -> Unit,
     onBack: () -> Unit,
     onSubmit: () -> Unit,
@@ -1117,6 +1551,7 @@ private fun DriverAssignmentContent(
 ) {
     var expandedVehicleId by remember { mutableStateOf<String?>(null) }
     var isLoadingDrivers by remember { mutableStateOf(drivers.isEmpty()) }
+    val driversById = remember(drivers) { drivers.associateBy { it.id } }
     
     // Debounce state - tracks countdown for each assignment
     var debounceTimers by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
@@ -1296,13 +1731,13 @@ private fun DriverAssignmentContent(
                         )
                     }
                     Text(
-                        text = "No Drivers Available",
+                        text = "No drivers found",
                         color = PureWhite,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "You don't have any active drivers",
+                        text = "Add drivers to your fleet to continue",
                         color = MediumGray,
                         fontSize = 14.sp,
                         textAlign = TextAlign.Center
@@ -1321,7 +1756,7 @@ private fun DriverAssignmentContent(
             ) {
                 items(vehicles, key = { "driver_assign_${it.id}" }) { vehicle ->
                     val assignedDriverId = assignments[vehicle.id]
-                    val assignedDriver = drivers.find { it.id == assignedDriverId }
+                    val assignedDriver = assignedDriverId?.let { driversById[it] }
                     val isExpanded = expandedVehicleId == vehicle.id
                     val isLocked = vehicle.id in lockedAssignments && assignedDriverId != null
                     
@@ -1398,6 +1833,24 @@ private fun DriverAssignmentContent(
                                 )
                             }
                         }
+                    }
+                }
+
+                if (hasInvalidAssignments) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        colors = CardDefaults.cardColors(containerColor = AccentYellow.copy(alpha = 0.14f)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(
+                            text = "One assigned driver is on a trip. Reassign to continue.",
+                            color = AccentYellow,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                        )
                     }
                 }
                 
@@ -1522,6 +1975,9 @@ private fun VehicleDriverAssignmentCardEnhanced(
     onSelectDriver: (String) -> Unit
 ) {
     val showCountdown = remainingDebounceSeconds > 0 && !isLocked && assignedDriver != null
+    val assignedDriverStatus = assignedDriver?.assignmentAvailability()
+    val assignedDriverStatusColor = assignedDriverStatus?.color() ?: LightGray
+    val assignedDriverStatusText = assignedDriverStatus?.upperLabel() ?: ""
     
     Card(
         modifier = Modifier
@@ -1609,12 +2065,12 @@ private fun VehicleDriverAssignmentCardEnhanced(
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(
                                     text = assignedDriver.name,
-                                    color = SuccessGreen,
+                                    color = assignedDriverStatusColor,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "LOCKED",
+                                    text = "LOCKED • $assignedDriverStatusText",
                                     color = SuccessGreen,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
@@ -1638,7 +2094,7 @@ private fun VehicleDriverAssignmentCardEnhanced(
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(
                                     text = assignedDriver.name,
-                                    color = AccentYellow,
+                                    color = assignedDriverStatusColor,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
@@ -1680,12 +2136,12 @@ private fun VehicleDriverAssignmentCardEnhanced(
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(
                                     text = assignedDriver.name,
-                                    color = SuccessGreen,
+                                    color = assignedDriverStatusColor,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "⭐ ${"%.1f".format(assignedDriver.rating)}",
+                                    text = "$assignedDriverStatusText • ⭐ ${"%.1f".format(assignedDriver.rating)}",
                                     color = LightGray,
                                     fontSize = 12.sp
                                 )
@@ -1724,7 +2180,7 @@ private fun VehicleDriverAssignmentCardEnhanced(
                 
                 if (availableDrivers.isEmpty()) {
                     Text(
-                        text = "No available drivers",
+                        text = "No drivers left to assign",
                         color = MediumGray,
                         fontSize = 14.sp,
                         modifier = Modifier.padding(vertical = 8.dp)
@@ -1754,12 +2210,22 @@ private fun DriverSelectRowEnhanced(
     isSelected: Boolean,
     onSelect: () -> Unit
 ) {
+    val driverStatus = driver.assignmentAvailability()
+    val canAssign = driverStatus.isSelectableForAssignment()
+    val statusColor = driverStatus.color()
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(if (isSelected) SuccessGreen.copy(alpha = 0.15f) else BoldBlack)
-            .clickable { onSelect() }
+            .background(
+                when {
+                    isSelected -> SuccessGreen.copy(alpha = 0.15f)
+                    canAssign -> BoldBlack
+                    else -> MediumGray.copy(alpha = 0.35f)
+                }
+            )
+            .clickable(enabled = canAssign) { onSelect() }
             .padding(12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -1773,14 +2239,22 @@ private fun DriverSelectRowEnhanced(
                 modifier = Modifier
                     .size(40.dp)
                     .background(
-                        if (isSelected) SuccessGreen.copy(alpha = 0.3f) else MediumGray,
+                        when {
+                            isSelected -> SuccessGreen.copy(alpha = 0.3f)
+                            canAssign -> MediumGray
+                            else -> DarkGray
+                        },
                         CircleShape
                     ),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = driver.name.take(1).uppercase(),
-                    color = if (isSelected) SuccessGreen else PureWhite,
+                    color = when {
+                        isSelected -> SuccessGreen
+                        canAssign -> PureWhite
+                        else -> LightGray
+                    },
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -1789,7 +2263,11 @@ private fun DriverSelectRowEnhanced(
             Column {
                 Text(
                     text = driver.name,
-                    color = if (isSelected) SuccessGreen else PureWhite,
+                    color = when {
+                        isSelected -> SuccessGreen
+                        canAssign -> PureWhite
+                        else -> LightGray
+                    },
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -1812,44 +2290,71 @@ private fun DriverSelectRowEnhanced(
                         color = LightGray,
                         fontSize = 12.sp
                     )
-                    if (driver.isAvailable) {
-                        Text(
-                            text = "•",
-                            color = MediumGray,
-                            fontSize = 12.sp
-                        )
-                        Text(
-                            text = "AVAILABLE",
-                            color = SuccessGreen,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                    Text(
+                        text = "•",
+                        color = MediumGray,
+                        fontSize = 12.sp
+                    )
+                    Text(
+                        text = driverStatus.upperLabel(),
+                        color = statusColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                if (!canAssign) {
+                    val blockedReason = when (driverStatus) {
+                        DriverAssignmentAvailability.ON_TRIP -> "On trip, cannot assign right now"
+                        DriverAssignmentAvailability.OFFLINE -> "Offline, cannot assign right now"
+                        DriverAssignmentAvailability.ACTIVE -> "Unavailable for assignment"
                     }
+                    Text(
+                        text = blockedReason,
+                        color = AccentYellow,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
                 }
             }
         }
         
         // Selection indicator
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .background(
-                    if (isSelected) SuccessGreen else Color.Transparent,
-                    CircleShape
-                )
-                .border(
-                    width = 2.dp,
-                    color = if (isSelected) SuccessGreen else MediumGray,
-                    shape = CircleShape
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            if (isSelected) {
+        if (canAssign) {
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .background(
+                        if (isSelected) SuccessGreen else Color.Transparent,
+                        CircleShape
+                    )
+                    .border(
+                        width = 2.dp,
+                        color = if (isSelected) SuccessGreen else MediumGray,
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isSelected) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = "Selected",
+                        tint = PureWhite,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .background(AccentYellow.copy(alpha = 0.2f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
                 Icon(
-                    Icons.Default.Check,
-                    contentDescription = "Selected",
-                    tint = PureWhite,
-                    modifier = Modifier.size(16.dp)
+                    imageVector = Icons.Default.Block,
+                    contentDescription = "Not assignable",
+                    tint = AccentYellow,
+                    modifier = Modifier.size(14.dp)
                 )
             }
         }
@@ -1977,7 +2482,7 @@ private fun VehicleDriverAssignmentCard(
                 
                 if (availableDrivers.isEmpty()) {
                     Text(
-                        text = "No available drivers",
+                        text = "No drivers left to assign",
                         color = MediumGray,
                         fontSize = 14.sp,
                         modifier = Modifier.padding(vertical = 8.dp)
@@ -2310,3 +2815,47 @@ private fun ErrorContent(
     }
 }
 
+// =============================================================================
+// CANCELLED CONTENT — Customer cancelled while transporter was mid-selection
+// PRD 4.4: Full-screen dark overlay, fade-in 250ms, auto-dismiss after 1.5s
+// =============================================================================
+@Composable
+private fun CancelledContent() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BoldBlack.copy(alpha = 0.85f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(32.dp)
+        ) {
+            Text(
+                text = "😔",
+                fontSize = 56.sp
+            )
+            Text(
+                text = "ORDER CANCELLED",
+                color = ErrorRed,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = "Sorry, the customer cancelled this order.",
+                color = LightGray,
+                fontSize = 15.sp,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "(closing automatically...)",
+                color = MediumGray,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}

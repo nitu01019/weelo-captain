@@ -34,6 +34,7 @@ object ApiClient {
      */
     object BaseUrls {
         // Production - AWS Load Balancer (deployed backend)
+        // TODO: CRITICAL — Change to HTTPS when SSL certificate is on ALB
         const val PRODUCTION = "http://weelo-alb-380596483.ap-south-1.elb.amazonaws.com/api/v1/"
         
         // Staging - For testing before production
@@ -127,10 +128,13 @@ object ApiClient {
     /**
      * Network timeouts
      */
+    // PERFORMANCE FIX: Reduced from 30s to fail faster and show retry UI sooner.
+    // Backend with warm Redis responds in <2s. If it takes >15s, something is wrong
+    // and the circuit breaker / retry mechanism should kick in.
     object Timeouts {
-        const val CONNECT_TIMEOUT = 30L
-        const val READ_TIMEOUT = 30L
-        const val WRITE_TIMEOUT = 30L
+        const val CONNECT_TIMEOUT = 15L   // was 30L — TCP connect should be instant
+        const val READ_TIMEOUT = 20L      // was 30L — API responses should be <5s
+        const val WRITE_TIMEOUT = 15L     // was 30L — request upload is small
     }
     
     /**

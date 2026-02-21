@@ -1,5 +1,6 @@
 package com.weelo.logistics.data.repository
 
+import android.annotation.SuppressLint
 import android.content.Context
 import com.weelo.logistics.data.api.DriverData
 import com.weelo.logistics.data.api.DriverListData
@@ -62,8 +63,14 @@ class DriverRepository private constructor(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
     
+    @SuppressLint("StaticFieldLeak")
     companion object {
         private const val TAG = "DriverRepository"
+        private val STATUS_TOKEN_REGEX = Regex("[^a-z0-9]+")
+        private val ON_TRIP_STATUSES = setOf("on_trip", "in_trip", "busy", "assigned")
+        private val SUSPENDED_STATUSES = setOf("suspended", "blocked")
+        private val OFFLINE_STATUSES = setOf("inactive", "offline", "disabled")
+        private val ONLINE_STATUSES = setOf("active", "online", "available", "idle")
         
         @Volatile
         private var instance: DriverRepository? = null
@@ -109,19 +116,32 @@ class DriverRepository private constructor(
                 if (response.isSuccessful && response.body()?.success == true) {
                     val data = response.body()?.data
                     val drivers = data?.drivers?.map { mapToDriver(it) } ?: emptyList()
+                    val totalCount = data?.total?.takeIf { it > 0 } ?: drivers.size
+                    val onlineCount = (
+                        data?.online?.takeIf { it > 0 }
+                            ?: data?.available?.takeIf { it > 0 }
+                            ?: data?.active?.takeIf { it > 0 }
+                            ?: drivers.count { it.status == DriverStatus.ACTIVE && it.isAvailable }
+                        ).coerceAtMost(totalCount)
+                    val offlineCount = (
+                        data?.offline?.takeIf { it > 0 }
+                            ?: (totalCount - onlineCount)
+                        ).coerceAtLeast(0)
                     
                     val newCache = CachedDriverList(
                         drivers = drivers,
-                        total = data?.total ?: 0,
-                        online = data?.online ?: 0,
-                        offline = data?.offline ?: 0,
+                        total = totalCount,
+                        online = onlineCount,
+                        offline = offlineCount,
                         lastUpdated = System.currentTimeMillis()
                     )
                     
                     cachedDrivers = newCache
                     _driversState.value = DriverResult.Success(newCache)
                     
-                    timber.log.Timber.i("✅ Fetched ${drivers.size} drivers (${data?.online ?: 0} online)")
+                    timber.log.Timber.i(
+                        "✅ Fetched ${drivers.size} drivers ($onlineCount active/assignable, $offlineCount offline)"
+                    )
                     
                     DriverResult.Success(newCache)
                 } else {
@@ -134,7 +154,9 @@ class DriverRepository private constructor(
                     }
                     
                     timber.log.Timber.e("❌ Fetch drivers failed: $errorMsg")
-                    DriverResult.Error(errorMsg, response.code())
+                    val error = DriverResult.Error(errorMsg, response.code())
+                    _driversState.value = error
+                    error
                 }
             } catch (e: java.net.ConnectException) {
                 timber.log.Timber.e("❌ Connection error: ${e.message}")
@@ -143,7 +165,9 @@ class DriverRepository private constructor(
                     _driversState.value = DriverResult.Success(staleCache)
                     return@withContext DriverResult.Success(staleCache)
                 }
-                DriverResult.Error("Cannot connect to server. Is the backend running?")
+                val error = DriverResult.Error("Cannot connect to server. Is the backend running?")
+                _driversState.value = error
+                error
             } catch (e: Exception) {
                 timber.log.Timber.e(e, "❌ Fetch error: ${e.message}")
                 val staleCache = cachedDrivers?.copy(isStale = true)
@@ -151,7 +175,9 @@ class DriverRepository private constructor(
                     _driversState.value = DriverResult.Success(staleCache)
                     return@withContext DriverResult.Success(staleCache)
                 }
-                DriverResult.Error(e.message ?: "Network error")
+                val error = DriverResult.Error(e.message ?: "Network error")
+                _driversState.value = error
+                error
             } finally {
                 _isRefreshing.value = false
             }
@@ -201,6 +227,22 @@ class DriverRepository private constructor(
      * Map API DriverData to UI Driver model
      */
     private fun mapToDriver(data: DriverData): Driver {
+        val normalizedStatus = data.status
+            ?.trim()
+            ?.lowercase()
+            ?.replace(STATUS_TOKEN_REGEX, "_")
+            ?.trim('_')
+        val isOnTrip = data.isOnTrip ||
+            !data.currentTripId.isNullOrBlank() ||
+            normalizedStatus in ON_TRIP_STATUSES
+        val isSuspended = normalizedStatus in SUSPENDED_STATUSES
+        val isExplicitlyOffline = normalizedStatus in OFFLINE_STATUSES
+        val hasOnlineSignal = data.isOnline ||
+            data.isAvailable == true ||
+            (normalizedStatus in ONLINE_STATUSES)
+        val isOnline = hasOnlineSignal && !isOnTrip && !isSuspended && !isExplicitlyOffline
+        val isAvailableForAssignment = if (isOnTrip) false else (data.isAvailable ?: isOnline)
+
         return Driver(
             id = data.id,
             transporterId = data.transporterId,
@@ -208,17 +250,21 @@ class DriverRepository private constructor(
             mobileNumber = data.phone,
             licenseNumber = data.licenseNumber ?: "",
             assignedVehicleId = data.assignedVehicleId,
-            isAvailable = data.isOnline && !data.isOnTrip,
+            isAvailable = isAvailableForAssignment,
             rating = data.rating ?: 0f,
             totalTrips = data.totalTrips,
             profileImageUrl = null, // API doesn't return this yet
             status = when {
-                data.isOnTrip -> DriverStatus.ON_TRIP
-                data.isOnline -> DriverStatus.ACTIVE
+                isOnTrip -> DriverStatus.ON_TRIP
+                isSuspended -> DriverStatus.SUSPENDED
+                isOnline -> DriverStatus.ACTIVE
                 else -> DriverStatus.INACTIVE
             },
             createdAt = try {
-                java.time.Instant.parse(data.createdAt ?: "").toEpochMilli()
+                val ts = data.createdAt ?: ""
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }.parse(ts)?.time ?: System.currentTimeMillis()
             } catch (e: Exception) {
                 System.currentTimeMillis()
             }

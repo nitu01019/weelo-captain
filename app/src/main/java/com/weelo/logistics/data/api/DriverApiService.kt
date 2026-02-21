@@ -103,7 +103,8 @@ interface DriverApiService {
      */
     @GET("driver/earnings")
     suspend fun getDriverEarnings(
-        @Query("period") period: String = "month"  // today, week, month
+        @Query("period") period: String = "month",  // today, week, month
+        @Query("driverId") driverId: String? = null  // Phase 5: Transporter can query specific driver
     ): Response<DriverEarningsResponse>
     
     // ============== DRIVER TRIPS ==============
@@ -125,6 +126,20 @@ interface DriverApiService {
      */
     @GET("driver/trips/active")
     suspend fun getActiveTrip(): Response<ActiveTripResponse>
+
+    // ============== DRIVER PERFORMANCE ==============
+
+    /**
+     * Get driver performance metrics (acceptance rate, completion rate, rating, distance)
+     * GET /api/v1/driver/performance
+     *
+     * Response: { success, data: { rating, totalRatings, acceptanceRate,
+     *             onTimeDeliveryRate, completionRate, totalTrips, totalDistance } }
+     */
+    @GET("driver/performance")
+    suspend fun getDriverPerformance(
+        @Query("driverId") driverId: String? = null  // Phase 5: Transporter can query specific driver
+    ): Response<DriverPerformanceResponse>
 }
 
 // ============== REQUEST MODELS ==============
@@ -268,10 +283,13 @@ data class DriverListResponse(
 )
 
 data class DriverListData(
-    val drivers: List<DriverData>,
-    val total: Int,
-    val online: Int,
-    val offline: Int
+    val drivers: List<DriverData> = emptyList(),
+    val total: Int = 0,
+    val online: Int = 0,
+    val offline: Int = 0,
+    val active: Int = 0,
+    val available: Int = 0,
+    val cached: Boolean = false
 )
 
 /**
@@ -287,7 +305,9 @@ data class DriverData(
     val licenseNumber: String? = null,
     val licenseExpiry: String? = null,
     val isOnline: Boolean = false,
+    val isAvailable: Boolean? = null,
     val isOnTrip: Boolean = false,
+    val status: String? = null,
     val assignedVehicleId: String? = null,
     val assignedVehicleNumber: String? = null,
     val currentTripId: String? = null,
@@ -321,7 +341,11 @@ data class DashboardStats(
     val weekEarnings: Double = 0.0,
     val monthEarnings: Double = 0.0,
     val totalTrips: Int = 0,
-    val rating: Float = 0f
+    val rating: Float = 0f,
+    val totalRatings: Int = 0,
+    val acceptanceRate: Float = 0f,
+    val onTimeDeliveryRate: Float = 0f,
+    val totalDistance: Float = 0f
 )
 
 /**
@@ -421,4 +445,26 @@ data class TripLocation(
     val latitude: Double,
     val longitude: Double,
     val address: String
+)
+
+// ============== PERFORMANCE RESPONSE ==============
+
+/**
+ * Driver Performance Response
+ * Maps to backend GET /api/v1/driver/performance
+ */
+data class DriverPerformanceResponse(
+    val success: Boolean,
+    val data: PerformanceResponseData? = null,
+    val error: ApiError? = null
+)
+
+data class PerformanceResponseData(
+    val rating: Double = 0.0,
+    val totalRatings: Int = 0,
+    val acceptanceRate: Double = 0.0,
+    val onTimeDeliveryRate: Double = 0.0,
+    val completionRate: Double = 0.0,
+    val totalTrips: Int = 0,
+    val totalDistance: Double = 0.0
 )
