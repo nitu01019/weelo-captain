@@ -282,8 +282,8 @@ object SocketIOService {
         // The guard above only catches Connected state — if we're still in Connecting
         // (e.g., previous attempt timed out), we'd create a second socket instance
         // with duplicate listeners and events. Always clean up first.
-        if (_connectionState.value is SocketConnectionState.Connecting) {
-            timber.log.Timber.w("⚠️ Previous connection attempt still in progress — cleaning up before retry")
+        if (socket != null && _connectionState.value !is SocketConnectionState.Connected) {
+            timber.log.Timber.w("⚠️ Cleaning up stale socket before creating a new connection")
             socket?.off()
             socket?.disconnect()
             socket = null

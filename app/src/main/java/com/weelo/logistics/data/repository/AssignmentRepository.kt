@@ -7,6 +7,9 @@ import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.remote.RetrofitClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 
 /**
  * =============================================================================
@@ -44,6 +47,18 @@ class AssignmentRepository private constructor(
     @SuppressLint("StaticFieldLeak")
     companion object {
         private const val TAG = "AssignmentRepository"
+        private val ISO_PARSERS = listOf(
+            ThreadLocal.withInitial<SimpleDateFormat> {
+                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }
+            },
+            ThreadLocal.withInitial<SimpleDateFormat> {
+                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }
+            }
+        )
 
         @Volatile
         private var instance: AssignmentRepository? = null
@@ -419,20 +434,15 @@ class AssignmentRepository private constructor(
      * Parse ISO timestamp to epoch millis
      */
     private fun parseTimestamp(timestamp: String?): Long {
-        if (timestamp == null) return System.currentTimeMillis()
-        return try {
-            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
-                timeZone = java.util.TimeZone.getTimeZone("UTC")
-            }.parse(timestamp)?.time ?: System.currentTimeMillis()
-        } catch (e: Exception) {
+        if (timestamp.isNullOrBlank()) return System.currentTimeMillis()
+        for (parserLocal in ISO_PARSERS) {
             try {
-                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply {
-                    timeZone = java.util.TimeZone.getTimeZone("UTC")
-                }.parse(timestamp)?.time ?: System.currentTimeMillis()
-            } catch (e2: Exception) {
-                System.currentTimeMillis()
+                return parserLocal.get()?.parse(timestamp)?.time ?: System.currentTimeMillis()
+            } catch (_: Exception) {
+                // Try next parser format.
             }
         }
+        return System.currentTimeMillis()
     }
 }
 

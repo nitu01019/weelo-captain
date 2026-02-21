@@ -93,12 +93,9 @@ class DriverPerformanceViewModel : ViewModel() {
 
                 if (perfData != null) {
                     val totalTrips = perfData.totalTrips
-                    val completedTrips = totalTrips // All trips in performance are completed
-                    val cancelledTrips = if (perfData.completionRate > 0 && perfData.completionRate < 100) {
-                        ((totalTrips / (perfData.completionRate / 100.0)) - totalTrips).toInt()
-                    } else {
-                        0
-                    }
+                    val completionFraction = (perfData.completionRate / 100.0).coerceIn(0.0, 1.0)
+                    val completedTrips = (totalTrips * completionFraction).toInt()
+                    val cancelledTrips = (totalTrips - completedTrips).coerceAtLeast(0)
 
                     // Build monthly trend from earnings breakdown
                     val monthlyTrend = earningsData?.breakdown?.takeLast(6)?.map { breakdown: EarningsBreakdown ->

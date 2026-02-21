@@ -52,8 +52,8 @@ fun DriverDetailsScreen(
     // Phase 5: Real performance + earnings data (no more hardcoded 0s)
     var performanceData by remember { mutableStateOf<com.weelo.logistics.data.api.PerformanceResponseData?>(null) }
     var earningsThisMonth by remember { mutableStateOf(0.0) }
-    var earningsLastMonth by remember { mutableStateOf(0.0) }
-    var pendingPayment by remember { mutableStateOf(0.0) }
+    var earningsLastMonth by remember { mutableStateOf<Double?>(null) }
+    var pendingPayment by remember { mutableStateOf<Double?>(null) }
     
     // =========================================================================
     // REAL-TIME: Listen for this driver's online/offline status changes
@@ -122,6 +122,9 @@ fun DriverDetailsScreen(
                     }
                     if (earningsResponse.isSuccessful) {
                         earningsThisMonth = earningsResponse.body()?.data?.totalEarnings ?: 0.0
+                        // Current API does not return last-month/pending-payment fields.
+                        earningsLastMonth = null
+                        pendingPayment = null
                     }
                 } catch (e: Exception) {
                     timber.log.Timber.w("⚠️ Earnings fetch failed: ${e.message}")
@@ -267,19 +270,23 @@ fun DriverDetailsScreen(
                                 color = Success
                             )
                         }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("Last Month", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
-                            Text(
-                                "₹${String.format("%,.0f", earningsLastMonth)}",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = TextSecondary
-                            )
+                        earningsLastMonth?.let { lastMonth ->
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text("Last Month", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+                                Text(
+                                    "₹${String.format("%,.0f", lastMonth)}",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = TextSecondary
+                                )
+                            }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Divider()
-                    Spacer(Modifier.height(8.dp))
-                    DetailRow("Pending Payment", "₹${String.format("%,.0f", pendingPayment)}")
+                    pendingPayment?.let { pending ->
+                        Spacer(Modifier.height(8.dp))
+                        Divider()
+                        Spacer(Modifier.height(8.dp))
+                        DetailRow("Pending Payment", "₹${String.format("%,.0f", pending)}")
+                    }
                 }
                 
                 // Documents

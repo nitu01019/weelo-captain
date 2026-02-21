@@ -66,6 +66,7 @@ import kotlinx.coroutines.launch
 fun DriverTripNavigationScreen(
     tripId: String,
     @Suppress("UNUSED_PARAMETER") assignmentId: String = "",
+    orderId: String = "",
     pickupAddr: String = "",
     dropAddr: String = "",
     pickupLat: Double = 0.0,
@@ -103,6 +104,7 @@ fun DriverTripNavigationScreen(
     val distance = tripDistance
     val fare = tripFare
     val goodsType = tripGoodsType
+    val currentOrderId = orderId.trim()
     
     // =========================================================================
     // ORDER CANCELLATION — If active trip is cancelled, show dialog → navigate back
@@ -116,7 +118,7 @@ fun DriverTripNavigationScreen(
     var lastHandledCancelKey by remember { mutableStateOf("") }
     
     fun applyTripCancellation(
-        orderId: String,
+        eventOrderId: String,
         eventTripId: String,
         reason: String,
         message: String,
@@ -126,12 +128,17 @@ fun DriverTripNavigationScreen(
         pickupAddress: String,
         dropAddress: String
     ) {
-        if (eventTripId.isBlank() || eventTripId != tripId) {
-            timber.log.Timber.d("Ignoring cancel event for other trip: eventTripId=$eventTripId currentTripId=$tripId orderId=$orderId")
+        if ((eventTripId.isBlank() && currentOrderId.isBlank()) ||
+            (eventTripId.isNotBlank() && eventTripId != tripId) ||
+            (currentOrderId.isNotBlank() && eventOrderId.isNotBlank() && eventOrderId != currentOrderId)
+        ) {
+            timber.log.Timber.d(
+                "Ignoring cancel event for other trip/order: eventTripId=$eventTripId currentTripId=$tripId eventOrderId=$eventOrderId currentOrderId=$currentOrderId"
+            )
             return
         }
         
-        val eventKey = "$orderId:$eventTripId:$cancelledAt:$reason"
+        val eventKey = "${eventOrderId.ifBlank { currentOrderId }}:$eventTripId:$cancelledAt:$reason"
         if (eventKey == lastHandledCancelKey || showTripCancelledDialog) return
         lastHandledCancelKey = eventKey
         
@@ -141,7 +148,7 @@ fun DriverTripNavigationScreen(
         tripCancelPickupAddress = pickupAddress
         tripCancelDropAddress = dropAddress
         showTripCancelledDialog = true
-        timber.log.Timber.w("🚫 Active trip cancelled by customer: order=$orderId trip=$eventTripId reason=$tripCancelReason")
+        timber.log.Timber.w("🚫 Active trip cancelled by customer: order=$eventOrderId trip=$eventTripId reason=$tripCancelReason")
         
         // Stop GPS tracking immediately
         try {
@@ -152,7 +159,7 @@ fun DriverTripNavigationScreen(
     LaunchedEffect(tripId) {
         SocketIOService.tripCancelled.collect { notification ->
             applyTripCancellation(
-                orderId = notification.orderId,
+                eventOrderId = notification.orderId,
                 eventTripId = notification.tripId,
                 reason = notification.reason,
                 message = notification.message,
@@ -168,7 +175,7 @@ fun DriverTripNavigationScreen(
     LaunchedEffect(tripId) {
         SocketIOService.orderCancelled.collect { notification ->
             applyTripCancellation(
-                orderId = notification.orderId,
+                eventOrderId = notification.orderId,
                 eventTripId = notification.tripId,
                 reason = notification.reason,
                 message = notification.message,

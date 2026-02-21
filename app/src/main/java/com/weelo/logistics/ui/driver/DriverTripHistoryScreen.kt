@@ -75,7 +75,7 @@ fun DriverTripHistoryScreen(
         ) {
             SearchTextField(
                 value = searchQuery,
-                onValueChange = { viewModel.updateSearch(it.trim()) },
+                onValueChange = { viewModel.updateSearch(it) },
                 placeholder = stringResource(R.string.search_customer_location),
                 leadingIcon = Icons.Default.Search
             )
