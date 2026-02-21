@@ -125,11 +125,11 @@ class DriverDashboardViewModel : ViewModel() {
      * - Cache exists + stale → show cache, refresh in background
      * - No cache → 150ms grace → skeleton if still loading
      */
-    fun loadDashboardData(driverId: String = "") {
+    fun loadDashboardData(driverId: String = ""): Job {
         // Cancel any pending grace timer
         loadingGraceJob?.cancel()
         
-        viewModelScope.launch {
+        return viewModelScope.launch {
             // =========================================================================
             // STEP 1: Check cache first (INSTANT - 0ms)
             // =========================================================================
@@ -369,7 +369,8 @@ class DriverDashboardViewModel : ViewModel() {
         viewModelScope.launch {
             _isRefreshing.value = true
             // PERFORMANCE: Removed delay(1000) - was causing 1s perceived lag
-            loadDashboardData(driverId)
+            // Await the load job so _isRefreshing stays true until data is actually loaded
+            loadDashboardData(driverId).join()
             _isRefreshing.value = false
         }
     }
