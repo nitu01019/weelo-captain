@@ -150,8 +150,8 @@ dependencies {
     // Google Maps & Location Services
     implementation("com.google.android.gms:play-services-maps:18.2.0")
     implementation("com.google.android.gms:play-services-location:21.1.0")  // Updated to match customer app
-    implementation("com.google.android.gms:play-services-auth:21.3.0")      // SMS Retriever API (zero-permission OTP auto-read)
-    implementation("com.google.android.gms:play-services-auth-api-phone:18.1.0") // Phone number hint
+    implementation("com.google.android.gms:play-services-auth:21.5.0")      // SMS Retriever API (zero-permission OTP auto-read)
+    implementation("com.google.android.gms:play-services-auth-api-phone:18.1.0") // Phone number hint — 18.3.0 requires Kotlin 2.1 metadata
     implementation("com.google.maps.android:maps-compose:4.3.0")            // Compose Maps for embedded maps
     implementation("com.google.maps.android:android-maps-utils:3.8.2")      // Map utilities (markers, clustering)
     

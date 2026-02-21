@@ -309,7 +309,9 @@ class DriverDashboardViewModel : ViewModel() {
                         totalDistance = apiPerformance?.totalDistance ?: apiDashboard?.stats?.totalDistance?.toDouble() ?: 0.0
                     ),
                     activeTrip = apiActiveTrip?.let { trip: com.weelo.logistics.data.api.TripData ->
-                        val startTime = parseIsoTimestamp(trip.startedAt) ?: System.currentTimeMillis()
+                        // MINOR FIX: Use 0L as fallback for active trip startTime — avoids
+                        // making it look "just started" when timestamp is missing/malformed.
+                        val startTime = parseIsoTimestamp(trip.startedAt) ?: 0L
                         val estimatedDuration = if (trip.distanceKm > 0) {
                             // Estimate: distance / 30 km/h average speed, in minutes
                             ((trip.distanceKm / 30.0) * 60).toInt()
@@ -335,8 +337,11 @@ class DriverDashboardViewModel : ViewModel() {
                         )
                     },
                     recentTrips = apiDashboard?.recentTrips?.map { trip: com.weelo.logistics.data.api.TripData ->
-                        val completedAt = parseIsoTimestamp(trip.completedAt) ?: System.currentTimeMillis()
+                        // MINOR FIX: Stable fallback — use startAt, then 0L.
+                        // System.currentTimeMillis() would make every old trip appear
+                        // "just completed" and re-inflate duration on every refresh.
                         val startAt = parseIsoTimestamp(trip.startedAt)
+                        val completedAt = parseIsoTimestamp(trip.completedAt) ?: startAt ?: 0L
                         val duration = if (startAt != null) {
                             ((completedAt - startAt) / 60_000).toInt().coerceAtLeast(0)
                         } else 0
@@ -713,7 +718,9 @@ class DriverDashboardViewModel : ViewModel() {
             }
             null
         } catch (e: Exception) {
-            timber.log.Timber.w("⚠️ Failed to parse timestamp: $timestamp")
+            // MINOR FIX: Pass exception to Timber so stack trace is preserved.
+            // Helps diagnose timestamp format drift in production logs.
+            timber.log.Timber.w(e, "⚠️ Failed to parse timestamp: $timestamp")
             null
         }
     }

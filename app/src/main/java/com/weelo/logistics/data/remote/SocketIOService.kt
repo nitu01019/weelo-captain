@@ -274,6 +274,17 @@ object SocketIOService {
             return
         }
         
+        // CRITICAL FIX: Disconnect stale socket before creating a new one.
+        // The guard above only catches Connected state — if we're still in Connecting
+        // (e.g., previous attempt timed out), we'd create a second socket instance
+        // with duplicate listeners and events. Always clean up first.
+        if (_connectionState.value is SocketConnectionState.Connecting) {
+            timber.log.Timber.w("⚠️ Previous connection attempt still in progress — cleaning up before retry")
+            socket?.off()
+            socket?.disconnect()
+            socket = null
+        }
+        
         serverUrl = url
         authToken = token
         
@@ -868,24 +879,42 @@ object SocketIOService {
                 pickupCity = data.optJSONObject("pickupLocation")?.optString("city", "")
                     ?: data.optString("pickupCity", ""),
                 // CRITICAL FIX: Parse lat/lng from pickupLocation/pickup objects
-                // Backend sends coordinates in both formats for compatibility
-                pickupLatitude = data.optJSONObject("pickupLocation")?.optDouble("latitude", 0.0)
-                    ?: data.optJSONObject("pickup")?.optDouble("latitude", 0.0)
-                    ?: 0.0,
-                pickupLongitude = data.optJSONObject("pickupLocation")?.optDouble("longitude", 0.0)
-                    ?: data.optJSONObject("pickup")?.optDouble("longitude", 0.0)
-                    ?: 0.0,
+                // Backend sends coordinates in latitude/longitude keys OR lat/lng keys depending on path.
+                // Fall back through all variants to avoid 0.0 defaults breaking navigation.
+                pickupLatitude = data.optJSONObject("pickupLocation")?.let {
+                    it.optDouble("latitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lat", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: data.optJSONObject("pickup")?.let {
+                    it.optDouble("latitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lat", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: 0.0,
+                pickupLongitude = data.optJSONObject("pickupLocation")?.let {
+                    it.optDouble("longitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lng", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: data.optJSONObject("pickup")?.let {
+                    it.optDouble("longitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lng", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: 0.0,
                 dropAddress = data.optJSONObject("dropLocation")?.optString("address", "")
                     ?: data.optString("dropAddress", ""),
                 dropCity = data.optJSONObject("dropLocation")?.optString("city", "")
                     ?: data.optString("dropCity", ""),
                 // CRITICAL FIX: Parse lat/lng from dropLocation/drop objects
-                dropLatitude = data.optJSONObject("dropLocation")?.optDouble("latitude", 0.0)
-                    ?: data.optJSONObject("drop")?.optDouble("latitude", 0.0)
-                    ?: 0.0,
-                dropLongitude = data.optJSONObject("dropLocation")?.optDouble("longitude", 0.0)
-                    ?: data.optJSONObject("drop")?.optDouble("longitude", 0.0)
-                    ?: 0.0,
+                // Fall back through latitude/longitude AND lat/lng keys for full compatibility.
+                dropLatitude = data.optJSONObject("dropLocation")?.let {
+                    it.optDouble("latitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lat", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: data.optJSONObject("drop")?.let {
+                    it.optDouble("latitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lat", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: 0.0,
+                dropLongitude = data.optJSONObject("dropLocation")?.let {
+                    it.optDouble("longitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lng", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: data.optJSONObject("drop")?.let {
+                    it.optDouble("longitude", Double.NaN).takeIf { v -> !v.isNaN() }
+                        ?: it.optDouble("lng", Double.NaN).takeIf { v -> !v.isNaN() }
+                } ?: 0.0,
                 distanceKm = data.optInt("distance", data.optInt("distanceKm", 0)),
                 goodsType = data.optString("goodsType", "General"),
                 isUrgent = data.optBoolean("isUrgent", false),

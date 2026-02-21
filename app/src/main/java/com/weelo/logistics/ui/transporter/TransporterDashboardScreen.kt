@@ -289,6 +289,7 @@ fun TransporterDashboardScreen(
                 lastCancelCustomerPhone.isNotBlank()) {
                 val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
                     data = android.net.Uri.parse("tel:$lastCancelCustomerPhone")
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(intent)
             }
@@ -300,14 +301,19 @@ fun TransporterDashboardScreen(
                     val api = RetrofitClient.vehicleApi
                     val driverApi = RetrofitClient.driverApi
                     
-                    val vehicleResponse = api.getVehicles()
-                    if (vehicleResponse.isSuccessful) {
-                        vehicleStats = vehicleResponse.body()?.data
-                    }
-                    
-                    val driverResponse = driverApi.getDriverList()
-                    if (driverResponse.isSuccessful) {
-                        driverStats = driverResponse.body()?.data
+                    // MAJOR FIX: Wrap network calls in withContext(Dispatchers.IO).
+                    // scope.launch{} uses the main dispatcher by default — running Retrofit
+                    // calls on main thread risks ANR and UI jank.
+                    withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val vehicleResponse = api.getVehicles()
+                        if (vehicleResponse.isSuccessful) {
+                            vehicleStats = vehicleResponse.body()?.data
+                        }
+                        
+                        val driverResponse = driverApi.getDriverList()
+                        if (driverResponse.isSuccessful) {
+                            driverStats = driverResponse.body()?.data
+                        }
                     }
                 } catch (e: Exception) {
                     timber.log.Timber.w("Failed to refresh after cancel: ${e.message}")

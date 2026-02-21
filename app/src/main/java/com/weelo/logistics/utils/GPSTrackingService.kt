@@ -85,8 +85,11 @@ class GPSTrackingService : Service() {
         private const val LOCATION_BATCH_TIMEOUT_MS = 60_000L   // Or every 60 seconds
         private const val MAX_BATCH_BUFFER = 1000               // Cap buffer to prevent unbounded growth
 
-        // Reusable ISO-8601 UTC formatter — avoids per-point allocation
-        private val ISO_UTC_FORMAT by lazy {
+        // CRITICAL FIX: ThreadLocal ISO-8601 UTC formatter for thread-safety.
+        // flushLocationBatch() runs on Dispatchers.Default and flushLocationBatchSync()
+        // runs on Dispatchers.IO — concurrent SimpleDateFormat.format() calls on a shared
+        // instance cause data corruption. ThreadLocal gives each thread its own instance.
+        private val ISO_UTC_FORMAT = ThreadLocal.withInitial<java.text.SimpleDateFormat> {
             java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
             }
@@ -442,7 +445,7 @@ class GPSTrackingService : Service() {
                         speed = loc.speed,
                         bearing = loc.bearing,
                         accuracy = loc.accuracy,
-                        timestamp = ISO_UTC_FORMAT.format(java.util.Date(loc.timestamp))
+                        timestamp = ISO_UTC_FORMAT.get()!!.format(java.util.Date(loc.timestamp))
                     )
                 }
 
@@ -514,7 +517,7 @@ class GPSTrackingService : Service() {
                     speed = loc.speed,
                     bearing = loc.bearing,
                     accuracy = loc.accuracy,
-                    timestamp = ISO_UTC_FORMAT.format(java.util.Date(loc.timestamp))
+                    timestamp = ISO_UTC_FORMAT.get()!!.format(java.util.Date(loc.timestamp))
                 )
             }
             val tripId = batchToSend.first().tripId

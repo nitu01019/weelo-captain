@@ -113,12 +113,17 @@ private fun performLogout(navController: NavHostController, coroutineScope: Coro
     navController.context.findMainActivity()?.updateLocale("en")
     
     // 4. Navigate to role selection, clearing entire back stack
-    navController.navigateSmooth(
-        route = Screen.RoleSelection.route,
-        popUpToRoute = null,
-        inclusive = true,
-        restoreState = false
-    )
+    // CRITICAL FIX: Always pop the entire graph so back button cannot return to
+    // authenticated dashboards after logout. Using graph.id is safe even when
+    // the start destination varies by login state.
+    try {
+        navController.navigate(Screen.RoleSelection.route) {
+            popUpTo(navController.graph.id) { inclusive = true }
+            launchSingleTop = true
+        }
+    } catch (e: IllegalArgumentException) {
+        Timber.e(e, "❌ Logout navigation failed")
+    }
 }
 
 /**

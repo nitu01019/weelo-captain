@@ -171,6 +171,7 @@ fun DriverTripNavigationScreen(
                     androidx.compose.material3.TextButton(onClick = {
                         val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
                             data = android.net.Uri.parse("tel:$tripCancelCustomerPhone")
+                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         context.startActivity(intent)
                     }) {
@@ -337,7 +338,9 @@ fun DriverTripNavigationScreen(
                             if (customerPhone.isNotBlank()) {
                                 IconButton(
                                     onClick = {
-                                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$customerPhone"))
+                                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$customerPhone")).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
                                         context.startActivity(intent)
                                     },
                                     modifier = Modifier
@@ -430,13 +433,17 @@ fun DriverTripNavigationScreen(
                                     val targetLng = if (tripStatus == TripStatus.ACCEPTED) pickupLatLng.longitude else dropLatLng.longitude
                                     if (targetLat != 0.0 && targetLng != 0.0) {
                                         val uri = Uri.parse("google.navigation:q=$targetLat,$targetLng&mode=d")
-                                        val mapIntent = Intent(Intent.ACTION_VIEW, uri)
-                                        mapIntent.setPackage("com.google.android.apps.maps")
+                                        val mapIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+                                            setPackage("com.google.android.apps.maps")
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
                                         try {
                                             context.startActivity(mapIntent)
                                         } catch (e: Exception) {
                                             val webUri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$targetLat,$targetLng&travelmode=driving")
-                                            context.startActivity(Intent(Intent.ACTION_VIEW, webUri))
+                                            context.startActivity(Intent(Intent.ACTION_VIEW, webUri).apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            })
                                         }
                                     } else {
                                         Toast.makeText(context, "Location not available yet", Toast.LENGTH_SHORT).show()
