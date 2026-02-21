@@ -46,7 +46,9 @@ import com.weelo.logistics.ui.components.TruckSelectionSkeleton
 import com.weelo.logistics.ui.components.DriverAssignmentSkeleton
 import com.weelo.logistics.ui.components.DarkSkeletonBox
 import com.weelo.logistics.ui.components.DarkSkeletonCircle
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.weelo.logistics.data.remote.SocketIOService
 
 private const val TAG = "BroadcastAcceptance"
 
@@ -80,7 +82,8 @@ enum class AcceptanceStep {
     ASSIGN_DRIVERS,
     SUBMITTING,
     SUCCESS,
-    ERROR
+    ERROR,
+    CANCELLED  // Customer cancelled while transporter was mid-selection
 }
 
 private fun DriverAssignmentAvailability.color(): Color {
@@ -195,6 +198,21 @@ fun BroadcastAcceptanceScreen(
             }
             is com.weelo.logistics.data.repository.DriverResult.Loading -> {
                 driverAssignmentState = DriverAssignmentUiState.Loading
+            }
+        }
+    }
+
+    // ========== ORDER CANCELLED: Auto-dismiss with overlay (PRD 4.4) ==========
+    // If customer cancels while transporter is mid-selection, abort and show overlay
+    LaunchedEffect(Unit) {
+        SocketIOService.orderCancelled.collect { notification: com.weelo.logistics.data.remote.OrderCancelledNotification ->
+            if (notification.orderId == broadcast.broadcastId) {
+                isSubmittingAssignments = false  // Abort any in-flight submission
+                currentStep = AcceptanceStep.CANCELLED
+                scope.launch {
+                    delay(1_500L)
+                    onDismiss()
+                }
             }
         }
     }
@@ -455,6 +473,8 @@ fun BroadcastAcceptanceScreen(
                         onRetry = { currentStep = AcceptanceStep.SELECT_TRUCKS },
                         onDismiss = onDismiss
                     )
+
+                    AcceptanceStep.CANCELLED -> CancelledContent()
                 }
             }
         }
@@ -2521,6 +2541,51 @@ private fun ErrorContent(
                     Text("Try Again", fontWeight = FontWeight.Bold)
                 }
             }
+        }
+    }
+}
+
+// =============================================================================
+// CANCELLED CONTENT — Customer cancelled while transporter was mid-selection
+// PRD 4.4: Full-screen dark overlay, fade-in 250ms, auto-dismiss after 1.5s
+// =============================================================================
+@Composable
+private fun CancelledContent() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(BoldBlack.copy(alpha = 0.85f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(32.dp)
+        ) {
+            Text(
+                text = "😔",
+                fontSize = 56.sp
+            )
+            Text(
+                text = "ORDER CANCELLED",
+                color = ErrorRed,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = "Sorry, the customer cancelled this order.",
+                color = LightGray,
+                fontSize = 15.sp,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "(closing automatically...)",
+                color = MediumGray,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }

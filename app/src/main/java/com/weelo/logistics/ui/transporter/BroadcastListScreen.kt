@@ -193,6 +193,41 @@ fun BroadcastListScreen(
         }
     }
     
+    // ========== ORDER CANCELLED: Wire orderCancelled → broadcastDismissed infrastructure ==========
+    // PRD 4.3: When customer cancels, BroadcastListScreen must show dismiss overlay on that card
+    LaunchedEffect(Unit) {
+        SocketIOService.orderCancelled.collect { notification ->
+            val broadcastId = notification.orderId
+            if (broadcastId.isNotEmpty()) {
+                // Reuse existing broadcastDismissed infrastructure — convert to BroadcastDismissedNotification
+                val dismissNotification = BroadcastDismissedNotification(
+                    broadcastId = broadcastId,
+                    reason = "customer_cancelled",
+                    message = "Sorry, the customer cancelled this order",
+                    customerName = notification.customerName
+                )
+                val currentIndex = broadcasts.indexOfFirst { it.broadcastId == broadcastId }
+                dismissedCards = dismissedCards + (broadcastId to dismissNotification)
+
+                scope.launch {
+                    delay(1_000L)
+                    if (currentIndex >= 0 && broadcasts.size > 1) {
+                        val nextIndex = if (currentIndex < broadcasts.size - 1) currentIndex + 1 else currentIndex - 1
+                        listState.animateScrollToItem(nextIndex.coerceAtLeast(0))
+                        delay(300L)
+                    }
+                    dismissedCards = dismissedCards - broadcastId
+                    fetchBroadcasts(forceRefresh = true)
+                    delay(300L)
+                    if (broadcasts.isEmpty()) {
+                        timber.log.Timber.i("🏠 No broadcasts left after customer cancel — navigating back to dashboard")
+                        onNavigateBack()
+                    }
+                }
+            }
+        }
+    }
+
     // ========== GRACEFUL DISMISS: Listen for broadcast dismissals ==========
     // Animated fade-in overlay → 1s read time → scroll to next → remove card → auto-nav if empty
     LaunchedEffect(Unit) {
