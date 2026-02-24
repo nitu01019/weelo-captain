@@ -1,6 +1,7 @@
 package com.weelo.logistics.ui.components
 
 import androidx.compose.animation.core.*
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -473,6 +474,152 @@ fun QuickActionCard(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+        }
+    }
+}
+
+// =============================================================================
+// AUTH SCREEN SUPPORT CARDS (minimal compile-safe subset)
+// NOTE: These APIs are used by auth screens already merged to main.
+// Keep this section narrow to avoid pulling in unrelated local UI asset work.
+// =============================================================================
+
+enum class CardArtworkPlacement {
+    TOP_BLEED,
+    TOP_INSET
+}
+
+val IllustrationCanvas = Color(0xFFF7F3EA)
+
+enum class CardArtwork(@DrawableRes val drawableRes: Int) {
+    PLACEHOLDER(android.R.drawable.ic_menu_gallery)
+}
+
+data class CardMediaSpec(
+    val artwork: CardArtwork,
+    val headerHeight: Dp = 132.dp,
+    val placement: CardArtworkPlacement = CardArtworkPlacement.TOP_BLEED,
+    val containerColor: Color = IllustrationCanvas
+)
+
+fun bannerGeneratedArtSpec(
+    artwork: CardArtwork,
+    headerHeight: Dp,
+    overlayBrush: Brush? = null,
+    fitContentPadding: Dp = 2.dp,
+    imageFadeDurationMs: Int = 170
+) = CardMediaSpec(
+    artwork = artwork,
+    headerHeight = headerHeight,
+    placement = CardArtworkPlacement.TOP_BLEED,
+    containerColor = IllustrationCanvas
+)
+
+@Composable
+fun MediaHeaderCard(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    mediaSpec: CardMediaSpec? = null,
+    trailingHeaderContent: (@Composable BoxScope.() -> Unit)? = null,
+    footerContent: (@Composable ColumnScope.() -> Unit)? = null,
+    content: (@Composable ColumnScope.() -> Unit)? = null
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = Elevation.card),
+        shape = RoundedCornerShape(BorderRadius.large),
+        colors = CardDefaults.cardColors(containerColor = CardBackground)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.cardPaddingLarge)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+            if (!subtitle.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+            }
+            if (content != null) {
+                Spacer(modifier = Modifier.height(Spacing.medium))
+                content()
+            }
+            if (footerContent != null) {
+                Spacer(modifier = Modifier.height(Spacing.medium))
+                footerContent()
+            }
+        }
+    }
+}
+
+@Composable
+fun InlineInfoBannerCard(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    icon: ImageVector? = null,
+    iconTint: Color = Primary,
+    containerColor: Color = SurfaceVariant,
+    action: (@Composable () -> Unit)? = null
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        shape = RoundedCornerShape(BorderRadius.large),
+        elevation = CardDefaults.cardElevation(defaultElevation = Elevation.xs)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Spacing.medium, vertical = Spacing.medium),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.medium)
+        ) {
+            if (icon != null) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(BorderRadius.medium))
+                        .background(iconTint.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = iconTint,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+                if (!subtitle.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(Spacing.xs))
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+                }
+            }
+
+            action?.invoke()
         }
     }
 }
