@@ -2,6 +2,7 @@ package com.weelo.logistics.data.remote
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.weelo.logistics.data.api.*
@@ -368,6 +369,7 @@ object RetrofitClient {
                     Thread.sleep(delay)
                 } else {
                     timber.log.Timber.e("❌ All retries failed: ${e.message}")
+                    Log.e(TAG, "All retries failed (${e::class.java.simpleName}): ${e.message}", e)
                     throw e
                 }
             }

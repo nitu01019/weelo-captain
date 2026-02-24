@@ -201,9 +201,17 @@ fun OTPVerificationScreen(
                     R.string.auth_otp_rate_limited_retry_format,
                     state.retryAfterSeconds
                 )
+                if (lastAsyncAction == OtpAsyncAction.RESEND) {
+                    canResend = true
+                    resendTimer = 0
+                }
             }
             is AuthState.Error -> {
                 errorMessage = state.message
+                if (lastAsyncAction == OtpAsyncAction.RESEND) {
+                    canResend = true
+                    resendTimer = 0
+                }
                 if (lastAsyncAction == OtpAsyncAction.VERIFY) {
                     val verifySource = otpEntrySource
                     otpValue = ""
@@ -217,6 +225,10 @@ fun OTPVerificationScreen(
                 if (state.phone == phoneNumber && responseRole == role.lowercase()) {
                     successMessage = state.message
                     errorMessage = ""
+                    if (lastAsyncAction == OtpAsyncAction.RESEND) {
+                        resendTimer = 30
+                        canResend = false
+                    }
                 }
             }
             is AuthState.Authenticated -> {
