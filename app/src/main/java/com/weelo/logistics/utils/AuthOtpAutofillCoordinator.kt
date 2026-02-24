@@ -21,6 +21,7 @@ import timber.log.Timber
  * This coordinator prewarms the listener before send and keeps the state across navigation.
  */
 object AuthOtpAutofillCoordinator {
+    private enum class HelperAction { NONE, START, RESTART }
 
     enum class SessionStatus {
         PREPARED,
@@ -147,70 +148,31 @@ object AuthOtpAutofillCoordinator {
         }
     }
 
-    suspend fun prepareForOtpSend(context: Context, phone: String, role: String): Long = mutex.withLock {
-        ensureInitialized(context)
-        val normalizedRole = normalizedRole(role)
-        val existing = currentSession
-        val sameSession = existing?.phone == phone && normalizedRole(existing.role) == normalizedRole
-        val smsHelper = helper ?: error("SmsRetrieverHelper not initialized")
+    suspend fun prepareForOtpSend(context: Context, phone: String, role: String): Long {
+        lateinit var smsHelper: SmsRetrieverHelper
+        lateinit var normalizedRoleValue: String
+        var sessionId: Long
+        var helperAction = HelperAction.NONE
+        var reusedListening = false
 
-        if (sameSession && _uiState.value.isListening) {
-            Timber.d(
-                "Reusing active OTP autofill session=${existing?.sessionId} for " +
-                    "${maskPhone(phone)}/$normalizedRole"
-            )
-            return@withLock existing!!.sessionId
-        }
+        mutex.withLock {
+            ensureInitialized(context)
+            normalizedRoleValue = normalizedRole(role)
+            val existing = currentSession
+            val sameSession = existing?.phone == phone && normalizedRole(existing.role) == normalizedRoleValue
+            smsHelper = helper ?: error("SmsRetrieverHelper not initialized")
 
-        val sessionId = if (sameSession && existing != null) existing.sessionId else nextSessionId++
-        currentSession = OtpAutofillSession(
-            sessionId = sessionId,
-            phone = phone,
-            role = normalizedRole,
-            createdAtMs = System.currentTimeMillis(),
-            status = SessionStatus.PREPARED
-        )
-        lastDeliveredOtpKey = null
-        _uiState.value = OtpAutofillUiState(
-            otpCode = null,
-            isListening = false,
-            sessionId = sessionId,
-            phone = phone,
-            role = normalizedRole,
-            status = SessionStatus.PREPARED
-        )
+            if (sameSession && _uiState.value.isListening) {
+                reusedListening = true
+                sessionId = existing!!.sessionId
+                return@withLock
+            }
 
-        if (sameSession) {
-            smsHelper.start()
-        } else {
-            smsHelper.restart()
-        }
-        Timber.i(
-            "Prepared OTP autofill session=$sessionId for " +
-                "${maskPhone(phone)}/$normalizedRole"
-        )
-        return@withLock sessionId
-    }
-
-    suspend fun attachOtpScreen(context: Context, phone: String, role: String): Long? = mutex.withLock {
-        ensureInitialized(context)
-        val normalizedRole = normalizedRole(role)
-        val existing = currentSession
-        val smsHelper = helper ?: error("SmsRetrieverHelper not initialized")
-
-        if (existing == null ||
-            existing.phone != phone ||
-            normalizedRole(existing.role) != normalizedRole
-        ) {
-            Timber.w(
-                "No matching prewarmed OTP session for ${maskPhone(phone)}/$normalizedRole; " +
-                    "creating screen-attached session"
-            )
-            val newId = nextSessionId++
+            sessionId = if (sameSession && existing != null) existing.sessionId else nextSessionId++
             currentSession = OtpAutofillSession(
-                sessionId = newId,
+                sessionId = sessionId,
                 phone = phone,
-                role = normalizedRole,
+                role = normalizedRoleValue,
                 createdAtMs = System.currentTimeMillis(),
                 status = SessionStatus.PREPARED
             )
@@ -218,48 +180,133 @@ object AuthOtpAutofillCoordinator {
             _uiState.value = OtpAutofillUiState(
                 otpCode = null,
                 isListening = false,
-                sessionId = newId,
+                sessionId = sessionId,
                 phone = phone,
-                role = normalizedRole,
+                role = normalizedRoleValue,
                 status = SessionStatus.PREPARED
             )
-            smsHelper.start()
-            return@withLock newId
+            helperAction = if (sameSession) HelperAction.START else HelperAction.RESTART
         }
 
-        if (!_uiState.value.isListening && _uiState.value.otpCode == null) {
-            smsHelper.start()
+        if (reusedListening) {
+            Timber.d(
+                "Reusing active OTP autofill session=$sessionId for " +
+                    "${maskPhone(phone)}/$normalizedRoleValue"
+            )
+            return sessionId
         }
-        return@withLock existing.sessionId
+
+        val startOk = when (helperAction) {
+            HelperAction.START -> smsHelper.start()
+            HelperAction.RESTART -> smsHelper.restart()
+            HelperAction.NONE -> true
+        }
+        Timber.i(
+            "Prepared OTP autofill session=$sessionId for ${maskPhone(phone)}/$normalizedRoleValue " +
+                "(helperAction=$helperAction, startOk=$startOk)"
+        )
+        return sessionId
     }
 
-    suspend fun restartForResend(context: Context, phone: String, role: String): Long = mutex.withLock {
-        ensureInitialized(context)
-        val normalizedRole = normalizedRole(role)
-        val smsHelper = helper ?: error("SmsRetrieverHelper not initialized")
-        val sessionId = nextSessionId++
-        currentSession = OtpAutofillSession(
-            sessionId = sessionId,
-            phone = phone,
-            role = normalizedRole,
-            createdAtMs = System.currentTimeMillis(),
-            status = SessionStatus.PREPARED
-        )
-        lastDeliveredOtpKey = null
-        _uiState.value = OtpAutofillUiState(
-            otpCode = null,
-            isListening = false,
-            sessionId = sessionId,
-            phone = phone,
-            role = normalizedRole,
-            status = SessionStatus.PREPARED
-        )
-        smsHelper.restart()
+    suspend fun attachOtpScreen(context: Context, phone: String, role: String): Long? {
+        lateinit var smsHelper: SmsRetrieverHelper
+        lateinit var normalizedRoleValue: String
+        var sessionId: Long? = null
+        var helperAction = HelperAction.NONE
+        var createdFallbackSession = false
+
+        mutex.withLock {
+            ensureInitialized(context)
+            normalizedRoleValue = normalizedRole(role)
+            val existing = currentSession
+            smsHelper = helper ?: error("SmsRetrieverHelper not initialized")
+
+            if (existing == null ||
+                existing.phone != phone ||
+                normalizedRole(existing.role) != normalizedRoleValue
+            ) {
+                createdFallbackSession = true
+                val newId = nextSessionId++
+                currentSession = OtpAutofillSession(
+                    sessionId = newId,
+                    phone = phone,
+                    role = normalizedRoleValue,
+                    createdAtMs = System.currentTimeMillis(),
+                    status = SessionStatus.PREPARED
+                )
+                lastDeliveredOtpKey = null
+                _uiState.value = OtpAutofillUiState(
+                    otpCode = null,
+                    isListening = false,
+                    sessionId = newId,
+                    phone = phone,
+                    role = normalizedRoleValue,
+                    status = SessionStatus.PREPARED
+                )
+                sessionId = newId
+                helperAction = HelperAction.START
+                return@withLock
+            }
+
+            sessionId = existing.sessionId
+            if (!_uiState.value.isListening && _uiState.value.otpCode == null) {
+                helperAction = HelperAction.START
+            }
+        }
+
+        if (createdFallbackSession) {
+            Timber.w(
+                "No matching prewarmed OTP session for ${maskPhone(phone)}/$normalizedRoleValue; " +
+                    "created screen-attached session=$sessionId"
+            )
+        }
+
+        if (helperAction == HelperAction.START) {
+            val startOk = smsHelper.start()
+            Timber.d(
+                "Attached OTP screen to session=$sessionId (${maskPhone(phone)}/$normalizedRoleValue, startOk=$startOk)"
+            )
+        } else {
+            Timber.d("Attached OTP screen to existing active session=$sessionId (${maskPhone(phone)}/$normalizedRoleValue)")
+        }
+
+        return sessionId
+    }
+
+    suspend fun restartForResend(context: Context, phone: String, role: String): Long {
+        lateinit var smsHelper: SmsRetrieverHelper
+        lateinit var normalizedRoleValue: String
+        var sessionId: Long
+
+        mutex.withLock {
+            ensureInitialized(context)
+            normalizedRoleValue = normalizedRole(role)
+            smsHelper = helper ?: error("SmsRetrieverHelper not initialized")
+            sessionId = nextSessionId++
+            currentSession = OtpAutofillSession(
+                sessionId = sessionId,
+                phone = phone,
+                role = normalizedRoleValue,
+                createdAtMs = System.currentTimeMillis(),
+                status = SessionStatus.PREPARED
+            )
+            lastDeliveredOtpKey = null
+            _uiState.value = OtpAutofillUiState(
+                otpCode = null,
+                isListening = false,
+                sessionId = sessionId,
+                phone = phone,
+                role = normalizedRoleValue,
+                status = SessionStatus.PREPARED
+            )
+        }
+
+        val startOk = smsHelper.restart()
         Timber.i(
             "Restarted OTP autofill session=$sessionId for resend " +
-                "(${maskPhone(phone)}/$normalizedRole)"
+                "(${maskPhone(phone)}/$normalizedRoleValue, startOk=$startOk)"
         )
-        return@withLock sessionId
+        return sessionId
     }
 
     suspend fun clearSession(reason: OtpAutofillClearReason) = mutex.withLock {

@@ -113,6 +113,7 @@ class SmsRetrieverHelper(private val context: Context) {
         var immediateResult: Boolean? = null
         lateinit var deferred: CompletableDeferred<Boolean>
         var shouldInitiate = false
+        var receiverPrepared = false
 
         stateMutex.withLock {
             if (isStarted) {
@@ -138,40 +139,69 @@ class SmsRetrieverHelper(private val context: Context) {
 
             deferred = CompletableDeferred()
             startDeferred = deferred
+
+            try {
+                registerReceiver()
+                receiverPrepared = true
+                Timber.d("📱 SmsRetriever receiver registered during STARTING state")
+            } catch (e: Exception) {
+                Timber.e(e, "📱 Failed to register SMS BroadcastReceiver")
+                isStarted = false
+                _isListening.value = false
+                _retrieverState.value = RetrieverState.FAILED
+                startDeferred?.complete(false)
+                startDeferred = null
+                immediateResult = false
+                return@withLock
+            }
+
             shouldInitiate = true
         }
 
         immediateResult?.let { return it }
 
         if (shouldInitiate) {
-            val client = SmsRetriever.getClient(context)
-            client.startSmsRetriever()
-                .addOnSuccessListener {
-                    scope.launch {
-                        stateMutex.withLock {
-                            Timber.i("📱 SmsRetriever started — listening for OTP SMS (5-min window)")
-                            isStarted = true
-                            _isListening.value = true
-                            _retrieverState.value = RetrieverState.LISTENING
-                            registerReceiver()
-                            startTimeoutTimer()
-                            startDeferred?.complete(true)
-                            startDeferred = null
+            try {
+                Timber.d("📱 SmsRetriever start request initiated (receiverPrepared=$receiverPrepared)")
+                val client = SmsRetriever.getClient(context)
+                client.startSmsRetriever()
+                    .addOnSuccessListener {
+                        scope.launch {
+                            stateMutex.withLock {
+                                Timber.i("📱 SmsRetriever started — listening for OTP SMS (5-min window)")
+                                isStarted = true
+                                _isListening.value = true
+                                _retrieverState.value = RetrieverState.LISTENING
+                                startTimeoutTimer()
+                                startDeferred?.complete(true)
+                                startDeferred = null
+                            }
                         }
                     }
-                }
-                .addOnFailureListener { e ->
-                    scope.launch {
-                        stateMutex.withLock {
-                            Timber.e(e, "📱 SmsRetriever failed to start — manual OTP entry required")
-                            isStarted = false
-                            _isListening.value = false
-                            _retrieverState.value = RetrieverState.FAILED
-                            startDeferred?.complete(false)
-                            startDeferred = null
+                    .addOnFailureListener { e ->
+                        scope.launch {
+                            stateMutex.withLock {
+                                Timber.e(e, "📱 SmsRetriever failed to start — manual OTP entry required")
+                                unregisterReceiver()
+                                isStarted = false
+                                _isListening.value = false
+                                _retrieverState.value = RetrieverState.FAILED
+                                startDeferred?.complete(false)
+                                startDeferred = null
+                            }
                         }
                     }
+            } catch (e: Exception) {
+                stateMutex.withLock {
+                    Timber.e(e, "📱 SmsRetriever start request threw before callback")
+                    unregisterReceiver()
+                    isStarted = false
+                    _isListening.value = false
+                    _retrieverState.value = RetrieverState.FAILED
+                    startDeferred?.complete(false)
+                    startDeferred = null
                 }
+            }
         }
 
         return deferred.await()

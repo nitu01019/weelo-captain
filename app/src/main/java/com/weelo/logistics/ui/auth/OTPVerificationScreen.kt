@@ -95,6 +95,8 @@ fun OTPVerificationScreen(
     var otpEntrySource by remember { mutableStateOf(OtpEntrySource.NONE) }
     var lastAutoVerifiedOtpKey by remember { mutableStateOf<String?>(null) }
     var lastAsyncAction by remember { mutableStateOf(OtpAsyncAction.NONE) }
+    var pendingAutoReadOtp by remember { mutableStateOf<String?>(null) }
+    var pendingAutoReadSessionId by remember { mutableStateOf<Long?>(null) }
     
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -130,18 +132,48 @@ fun OTPVerificationScreen(
         )
     }
 
-    LaunchedEffect(autoReadOtp) {
-        autoReadOtp?.let { otp ->
-            val autoKey = "$phoneNumber|${role.lowercase()}|$otp|${otpAutofillSessionId ?: -1}"
-            if (otp.length == 6 && !isLoading && lastAutoVerifiedOtpKey != autoKey) {
-                timber.log.Timber.i("📱 Auto-filling OTP from SMS: ${otp.take(2)}****")
-                otpEntrySource = OtpEntrySource.SMS_AUTOFILL
-                otpValue = otp
-                errorMessage = ""
-                lastAutoVerifiedOtpKey = autoKey
-                verifyRequestNonce++
+    LaunchedEffect(autoReadOtp, otpAutofillSessionId, isLoading) {
+        val latestOtp = autoReadOtp?.takeIf { it.length == 6 }
+        if (latestOtp != null) {
+            if (isLoading) {
+                val pendingKey = "$phoneNumber|${role.lowercase()}|$latestOtp|${otpAutofillSessionId ?: -1}"
+                val existingPendingKey = pendingAutoReadOtp?.let { existing ->
+                    "$phoneNumber|${role.lowercase()}|$existing|${pendingAutoReadSessionId ?: -1}"
+                }
+                if (existingPendingKey != pendingKey) {
+                    pendingAutoReadOtp = latestOtp
+                    pendingAutoReadSessionId = otpAutofillSessionId
+                    timber.log.Timber.d(
+                        "📱 OTP autofill buffered while loading (session=%s)",
+                        otpAutofillSessionId ?: -1
+                    )
+                }
+                return@LaunchedEffect
             }
         }
+
+        val otpToProcess = when {
+            latestOtp != null -> latestOtp
+            !isLoading -> pendingAutoReadOtp
+            else -> null
+        } ?: return@LaunchedEffect
+
+        val sessionIdToProcess = if (latestOtp != null) otpAutofillSessionId else pendingAutoReadSessionId
+        val autoKey = "$phoneNumber|${role.lowercase()}|$otpToProcess|${sessionIdToProcess ?: -1}"
+        if (lastAutoVerifiedOtpKey == autoKey) return@LaunchedEffect
+
+        timber.log.Timber.i(
+            "📱 OTP autofill consumed in UI (session=%s, otp=%s****)",
+            sessionIdToProcess ?: -1,
+            otpToProcess.take(2)
+        )
+        otpEntrySource = OtpEntrySource.SMS_AUTOFILL
+        otpValue = otpToProcess
+        errorMessage = ""
+        lastAutoVerifiedOtpKey = autoKey
+        pendingAutoReadOtp = null
+        pendingAutoReadSessionId = null
+        verifyRequestNonce++
     }
 
     // Countdown timer (single source; resets when resendTimer/canResend changes)
@@ -203,6 +235,8 @@ fun OTPVerificationScreen(
                     if (!backendLang.isNullOrEmpty()) {
                         otpMainActivity?.updateLocale(backendLang)
                     }
+                    pendingAutoReadOtp = null
+                    pendingAutoReadSessionId = null
                     authViewModel.clearOtpAutofill(OtpAutofillClearReason.SUCCESS)
                     onVerifySuccess()
                 }
@@ -233,6 +267,9 @@ fun OTPVerificationScreen(
         lastAsyncAction = OtpAsyncAction.VERIFY
         successMessage = null
         errorMessage = ""
+        if (otpEntrySource == OtpEntrySource.SMS_AUTOFILL) {
+            timber.log.Timber.d("📱 OTP auto-verify triggered (session=%s)", otpAutofillSessionId ?: -1)
+        }
         authViewModel.verifyOtpForRole(phoneNumber, role, otpValue)
     }
     
@@ -302,6 +339,8 @@ fun OTPVerificationScreen(
                     role = role,
                     onNavigateBack = {
                         scope.launch {
+                            pendingAutoReadOtp = null
+                            pendingAutoReadSessionId = null
                             authViewModel.clearOtpAutofill(OtpAutofillClearReason.BACK_NAVIGATION)
                             authViewModel.resetState()
                             onNavigateBack()
@@ -360,6 +399,8 @@ fun OTPVerificationScreen(
                         successMessage = null
                         otpEntrySource = OtpEntrySource.NONE
                         lastAutoVerifiedOtpKey = null
+                        pendingAutoReadOtp = null
+                        pendingAutoReadSessionId = null
                         lastAsyncAction = OtpAsyncAction.RESEND
                         authViewModel.resendOtp(context.applicationContext, phoneNumber, role)
                     }
