@@ -17,7 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -25,37 +25,43 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.weelo.logistics.ui.components.CardArtwork
+import com.weelo.logistics.ui.components.CardArtworkPlacement
+import com.weelo.logistics.ui.components.CardMediaSpec
+import com.weelo.logistics.ui.components.InlineInfoBannerCard
+import com.weelo.logistics.ui.components.MediaHeaderCard
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.ui.components.rememberScreenConfig
 import com.weelo.logistics.utils.InputValidator
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import com.weelo.logistics.data.remote.RetrofitClient
-import com.weelo.logistics.data.api.VerifyOTPRequest
-import com.weelo.logistics.data.api.VerifyOTPResponse
-import com.weelo.logistics.data.api.SendOTPRequest
-import com.weelo.logistics.WeeloApp
-import com.weelo.logistics.utils.SmsRetrieverHelper
-import com.weelo.logistics.utils.AppSignatureHelper
+import com.weelo.logistics.utils.AuthOtpAutofillCoordinator
+import com.weelo.logistics.utils.AuthOtpAutofillCoordinator.OtpAutofillClearReason
+import com.weelo.logistics.R
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+
+private enum class OtpEntrySource { NONE, MANUAL, SMS_AUTOFILL }
+private enum class OtpAsyncAction { NONE, VERIFY, RESEND }
 
 /**
  * Modern OTP Verification Screen - Redesigned for speed and clarity
  * 
  * Key Features:
  * - NO delays - instant verification
- * - Auto-submit when 6 digits entered
+ * - Manual entry via Next button
+ * - SMS autofill triggers fast-path auto-verify
  * - Individual digit boxes (modern UI)
  * - SMS auto-read enabled (requires backend SMS format)
  * - Clear countdown timer
@@ -82,14 +88,21 @@ fun OTPVerificationScreen(
 ) {
     var otpValue by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(false) }
     var resendTimer by remember { mutableStateOf(30) }
     var canResend by remember { mutableStateOf(false) }
     var successMessage by remember { mutableStateOf<String?>(null) }
+    var verifyRequestNonce by remember { mutableIntStateOf(0) }
+    var otpEntrySource by remember { mutableStateOf(OtpEntrySource.NONE) }
+    var lastAutoVerifiedOtpKey by remember { mutableStateOf<String?>(null) }
+    var lastAsyncAction by remember { mutableStateOf(OtpAsyncAction.NONE) }
     
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
     val context = androidx.compose.ui.platform.LocalContext.current
+    val authViewModel: AuthViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val authState by authViewModel.authState.collectAsStateWithLifecycle()
+    val isLoading = authState is AuthState.Loading
+    val latestAuthState by rememberUpdatedState(authState)
     // Get real MainActivity via LocalView (LocalContext is locale-wrapped, can't cast directly)
     val otpView = androidx.compose.ui.platform.LocalView.current
     val otpMainActivity = remember {
@@ -102,288 +115,218 @@ fun OTPVerificationScreen(
     }
     
     // =========================================================================
-    // SMS AUTO-READ (Google SMS Retriever API — Zero Permission)
+    // SHARED SMS AUTO-READ COORDINATOR (prewarmed on LoginScreen)
     // =========================================================================
-    // Industry standard (Rapido/WhatsApp/GPay pattern):
-    // - TRANSPORTER login: OTP sent to own phone → auto-read works ✅
-    // - DRIVER login: OTP sent to transporter's phone → auto-read won't
-    //   trigger on driver's device (different phone), but enabling it is
-    //   harmless. If driver & transporter share a device, it works.
-    // - Graceful degradation: if auto-read fails, manual entry still works
-    // =========================================================================
-    val smsRetrieverHelper = remember {
-        SmsRetrieverHelper(context.applicationContext)
+    val otpAutofillState by authViewModel.otpAutofillUiState.collectAsStateWithLifecycle()
+    val autoReadOtp = otpAutofillState.otpCode
+    val isSmsListening = otpAutofillState.isListening
+    val otpAutofillSessionId = otpAutofillState.sessionId
+
+    LaunchedEffect(phoneNumber, role) {
+        authViewModel.attachOtpAutofill(
+            context = context.applicationContext,
+            phone = phoneNumber,
+            role = role
+        )
     }
-    
-    // Start SMS Retriever & log app hash (for backend SMS format setup)
-    DisposableEffect(Unit) {
-        smsRetrieverHelper.start()
-        
-        // Log app hash once (for backend SMS format configuration)
-        // Only in debug builds — not needed in production
-        if (timber.log.Timber.treeCount > 0) {
-            AppSignatureHelper.getAppSignatures(context.applicationContext)
-        }
-        
-        onDispose {
-            smsRetrieverHelper.stop()
-        }
-    }
-    
-    // Auto-fill OTP when SMS Retriever reads it
-    val autoReadOtp by smsRetrieverHelper.otpCode.collectAsState()
-    val isSmsListening by smsRetrieverHelper.isListening.collectAsState()
+
     LaunchedEffect(autoReadOtp) {
         autoReadOtp?.let { otp ->
-            if (otp.length == 6 && otpValue.length < 6 && !isLoading) {
+            val autoKey = "$phoneNumber|${role.lowercase()}|$otp|${otpAutofillSessionId ?: -1}"
+            if (otp.length == 6 && !isLoading && lastAutoVerifiedOtpKey != autoKey) {
                 timber.log.Timber.i("📱 Auto-filling OTP from SMS: ${otp.take(2)}****")
-                otpValue = otp // This triggers the auto-verify LaunchedEffect below
+                otpEntrySource = OtpEntrySource.SMS_AUTOFILL
+                otpValue = otp
+                errorMessage = ""
+                lastAutoVerifiedOtpKey = autoKey
+                verifyRequestNonce++
             }
         }
     }
-    
-    // Countdown timer
-    LaunchedEffect(Unit) {
-        while (resendTimer > 0) {
-            delay(1000)
+
+    // Countdown timer (single source; resets when resendTimer/canResend changes)
+    LaunchedEffect(resendTimer, canResend) {
+        if (canResend || resendTimer <= 0) return@LaunchedEffect
+        delay(1000)
+        if (resendTimer > 1) {
             resendTimer--
+        } else {
+            resendTimer = 0
+            canResend = true
         }
-        canResend = true
     }
-    
-    // Auto-verify when 6 digits entered - INSTANT ⚡
-    LaunchedEffect(otpValue) {
-        if (otpValue.length == 6) {
-            keyboardController?.hide()
-            // No delay — keyboard hides async, verification starts immediately
-            
-            val validation = InputValidator.validateOTP(otpValue)
-            if (!validation.isValid) {
-                errorMessage = validation.errorMessage!!
-                otpValue = ""
-                return@LaunchedEffect
+
+    LaunchedEffect(authState) {
+        when (val state = authState) {
+            is AuthState.Idle -> {
+                // no-op
             }
-            
-            isLoading = true
-            errorMessage = ""
-            
-            // Make actual API call to verify OTP
-            try {
-                val response = withContext(Dispatchers.IO) {
-                    if (role == "DRIVER") {
-                        // Driver: use /driver-auth/verify-otp (OTP was sent to transporter)
-                        RetrofitClient.driverAuthApi.verifyOtp(
-                            com.weelo.logistics.data.api.DriverVerifyOtpRequest(
-                                driverPhone = phoneNumber,
-                                otp = otpValue
-                            )
-                        )
-                    } else {
-                        // Transporter: use /auth/verify-otp
-                        RetrofitClient.authApi.verifyOTP(
-                            VerifyOTPRequest(
-                                phone = phoneNumber,
-                                otp = otpValue,
-                                role = role.lowercase()
-                            )
-                        )
-                    }
-                }
-                
-                isLoading = false
-                
-                if (response.isSuccessful) {
-                    val responseBody = response.body()
-                    
-                    // Check success based on role-specific response
-                    val isSuccess = if (role == "DRIVER") {
-                        (responseBody as? com.weelo.logistics.data.api.DriverVerifyOtpResponse)?.success == true
-                    } else {
-                        (responseBody as? VerifyOTPResponse)?.success == true
-                    }
-                    
-                    if (isSuccess) {
-                        if (role == "DRIVER") {
-                            // Driver response structure
-                            val driverResponse = responseBody as com.weelo.logistics.data.api.DriverVerifyOtpResponse
-                            driverResponse.data?.let {
-                                RetrofitClient.saveTokens(it.accessToken, it.refreshToken)
-                                RetrofitClient.saveUserInfo(it.driver.id, it.role)
-                                
-                                // ============================================================
-                                // CRITICAL: Restore ALL preferences from backend BEFORE
-                                // navigation fires. Must use withContext to ensure writes
-                                // complete before onVerifySuccess() triggers onboarding check.
-                                //
-                                // WHY: driver_onboarding_check reads from DriverPreferences
-                                // immediately. If we navigate before saving, the check sees
-                                // empty language → forces language screen every login.
-                                //
-                                // SCALABILITY: O(1) writes, no extra network call.
-                                // ============================================================
-                                val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences
-                                    .getInstance(context.applicationContext)
-                                
-                                // 1. Restore language from backend (if exists)
-                                // If backend has language → full save locally →
-                                // onboarding check will SKIP language screen.
-                                // If backend has no language → don't save →
-                                // onboarding check will SHOW language screen.
-                                val backendLang = it.driver.preferredLanguage
-                                if (!backendLang.isNullOrEmpty()) {
-                                    timber.log.Timber.i("🔑 Restoring language from backend: $backendLang → skipping language screen")
-                                    driverPrefs.saveLanguage(backendLang)
-                                } else {
-                                    timber.log.Timber.i("🔑 No language in backend → will show language selection screen")
-                                }
-                                
-                                // 2. Restore profile completion status from backend
-                                if (it.driver.isProfileCompleted == true) {
-                                    timber.log.Timber.i("🔑 Restoring profile completed from backend")
-                                    driverPrefs.markProfileCompleted()
-                                }
-                                
-                                // =========================================================
-                                // INSTANT LOCALE on Re-Login
-                                //
-                                // Apply backend language to locale IMMEDIATELY via
-                                // MainActivity.updateLocale(). No recreate(). No screen flash.
-                                // No WebSocket disruption.
-                                //
-                                // CompositionLocalProvider re-provides localized Context →
-                                // all stringResource() calls on dashboard resolve to
-                                // the correct language from the first frame.
-                                //
-                                // Normal flow continues: WebSocket + onVerifySuccess()
-                                // execute normally (no early return, no skipped code).
-                                // =========================================================
-                                if (!backendLang.isNullOrEmpty()) {
-                                    timber.log.Timber.i("🌐 Re-login with backend language '$backendLang' → instant locale update")
-                                    otpMainActivity?.updateLocale(backendLang)
-                                }
-                            }
-                        } else {
-                            // Transporter response structure
-                            val transporterResponse = responseBody as VerifyOTPResponse
-                            transporterResponse.data?.tokens?.let { tokens ->
-                                RetrofitClient.saveTokens(tokens.accessToken, tokens.refreshToken)
-                            }
-                            transporterResponse.data?.user?.let { user ->
-                                RetrofitClient.saveUserInfo(user.id, user.role)
-                            }
-                        }
-                        
-                        // ================================================================
-                        // CRITICAL: Connect WebSocket for real-time broadcast reception!
-                        // Without this, transporters won't receive booking notifications
-                        // ================================================================
-                        timber.log.Timber.i("🔌 Connecting WebSocket after successful login...")
-                        WeeloApp.getInstance()?.connectWebSocketIfLoggedIn()
-                        
-                        successMessage = "Verified successfully!"
-                        // Zero delay — navigate instantly to dashboard
-                        onVerifySuccess()
-                    } else {
-                        val errorMsg = if (role == "DRIVER") {
-                            (responseBody as? com.weelo.logistics.data.api.DriverVerifyOtpResponse)?.error?.message
-                        } else {
-                            (responseBody as? VerifyOTPResponse)?.error?.message
-                        }
-                        errorMessage = errorMsg ?: "Invalid OTP. Please try again."
-                        otpValue = ""
-                    }
-                } else {
-                    errorMessage = "Invalid OTP. Please try again."
+            is AuthState.Loading -> {
+                errorMessage = ""
+            }
+            is AuthState.RateLimited -> {
+                errorMessage = context.getString(
+                    R.string.auth_otp_rate_limited_retry_format,
+                    state.retryAfterSeconds
+                )
+            }
+            is AuthState.Error -> {
+                errorMessage = state.message
+                if (lastAsyncAction == OtpAsyncAction.VERIFY) {
+                    val verifySource = otpEntrySource
                     otpValue = ""
+                    if (verifySource != OtpEntrySource.SMS_AUTOFILL) {
+                        otpEntrySource = OtpEntrySource.NONE
+                    }
                 }
-            } catch (e: Exception) {
-                isLoading = false
-                errorMessage = "Network error. Please try again."
-                otpValue = ""
+            }
+            is AuthState.OTPSent -> {
+                val responseRole = state.role.lowercase()
+                if (state.phone == phoneNumber && responseRole == role.lowercase()) {
+                    successMessage = state.message
+                    errorMessage = ""
+                }
+            }
+            is AuthState.Authenticated -> {
+                errorMessage = ""
+            }
+            is AuthState.LoggedOut -> Unit
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        authViewModel.uiEffects.collectLatest { effect ->
+            when (effect) {
+                AuthUiEffect.OtpVerificationSucceeded -> {
+                    val authenticated = latestAuthState as? AuthState.Authenticated
+                    val backendLang = authenticated?.preferredLanguage
+                    if (!backendLang.isNullOrEmpty()) {
+                        otpMainActivity?.updateLocale(backendLang)
+                    }
+                    authViewModel.clearOtpAutofill(OtpAutofillClearReason.SUCCESS)
+                    onVerifySuccess()
+                }
             }
         }
+    }
+
+    // Hybrid verify trigger:
+    // - SMS autofill can increment verifyRequestNonce (fast path auto-verify)
+    // - Manual entry requires Next button (which also increments verifyRequestNonce)
+    LaunchedEffect(verifyRequestNonce) {
+        if (verifyRequestNonce <= 0) return@LaunchedEffect
+
+        if (otpValue.length != 6) {
+            errorMessage = context.getString(R.string.auth_otp_enter_six_digit)
+            return@LaunchedEffect
+        }
+
+        keyboardController?.hide()
+        val validation = InputValidator.validateOTP(otpValue)
+        if (!validation.isValid) {
+            errorMessage = validation.errorMessage!!
+            otpValue = ""
+            otpEntrySource = OtpEntrySource.NONE
+            return@LaunchedEffect
+        }
+
+        lastAsyncAction = OtpAsyncAction.VERIFY
+        successMessage = null
+        errorMessage = ""
+        authViewModel.verifyOtpForRole(phoneNumber, role, otpValue)
     }
     
     // Responsive layout support
     val screenConfig = rememberScreenConfig()
+    val otpContentWidthModifier = Modifier
+        .fillMaxWidth()
+        .widthIn(max = if (screenConfig.isLandscape) 560.dp else 520.dp)
     
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Background)
-    ) {
-        // Premium background decoration with green accents
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .alpha(0.08f)
-        ) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(x = 80.dp, y = (-40).dp)
-                    .size(200.dp)
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(Success, Color.Transparent)
-                        ),
-                        shape = RoundedCornerShape(50)
-                    )
-            )
-            // Bottom accent for landscape
-            if (screenConfig.isLandscape) {
+    Scaffold(
+        containerColor = Background,
+        bottomBar = {
+            Surface(
+                color = Surface,
+                tonalElevation = 0.dp,
+                shadowElevation = 8.dp
+            ) {
                 Box(
                     modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .offset(x = (-40).dp, y = 40.dp)
-                        .size(120.dp)
-                        .background(
-                            Brush.radialGradient(
-                                colors = listOf(Primary, Color.Transparent)
-                            ),
-                            shape = RoundedCornerShape(50)
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(horizontal = if (screenConfig.isLandscape) 48.dp else 24.dp, vertical = 14.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Button(
+                        onClick = {
+                            otpEntrySource = OtpEntrySource.MANUAL
+                            verifyRequestNonce++
+                        },
+                        enabled = otpValue.length == 6 && !isLoading,
+                        modifier = otpContentWidthModifier.height(54.dp),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Primary,
+                            contentColor = Color.Black,
+                            disabledContainerColor = SurfaceVariant,
+                            disabledContentColor = TextSecondary
                         )
-                )
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.Black
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                        }
+                        Text(stringResource(R.string.next), fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
-        
+    ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(
-                    horizontal = if (screenConfig.isLandscape) 48.dp else 24.dp,
-                    vertical = 24.dp
-                ),
+                .padding(innerPadding)
+                .padding(horizontal = if (screenConfig.isLandscape) 48.dp else 24.dp)
+                .padding(top = if (screenConfig.isLandscape) 16.dp else 24.dp, bottom = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Reduced spacing in landscape
-            Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 16.dp else 40.dp))
-            
-            // Header Section
-            OTPHeader(
-                phoneNumber = phoneNumber,
-                role = role,
-                onNavigateBack = onNavigateBack
-            )
-            
-            Spacer(modifier = Modifier.height(48.dp))
-            
-            // OTP Input Section
-            OTPInputCard(
-                otpValue = otpValue,
-                onOtpChange = { newValue ->
-                    if (newValue.length <= 6 && newValue.all { it.isDigit() }) {
-                        otpValue = newValue
-                        errorMessage = ""
+            Box(modifier = otpContentWidthModifier) {
+                OTPHeader(
+                    phoneNumber = phoneNumber,
+                    role = role,
+                    onNavigateBack = {
+                        scope.launch {
+                            authViewModel.clearOtpAutofill(OtpAutofillClearReason.BACK_NAVIGATION)
+                            authViewModel.resetState()
+                            onNavigateBack()
+                        }
                     }
-                },
-                errorMessage = errorMessage,
-                isLoading = isLoading
-            )
-            
-            // SMS Auto-Read Indicator (Rapido/GPay-style)
-            // Shows "Listening for SMS..." with animated dot while SMS Retriever is active
+                )
+            }
+
+            Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 18.dp else 24.dp))
+
+            Box(modifier = otpContentWidthModifier) {
+                OTPInputCard(
+                    otpValue = otpValue,
+                    onOtpChange = { newValue ->
+                        if (newValue.length <= 6 && newValue.all { it.isDigit() }) {
+                            otpEntrySource = OtpEntrySource.MANUAL
+                            otpValue = newValue
+                            errorMessage = ""
+                        }
+                    },
+                    errorMessage = errorMessage,
+                    isLoading = isLoading
+                )
+            }
+
             AnimatedVisibility(
                 visible = isSmsListening && otpValue.isEmpty() && !isLoading,
                 enter = fadeIn() + slideInVertically(),
@@ -391,74 +334,43 @@ fun OTPVerificationScreen(
             ) {
                 SmsListeningIndicator()
             }
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            // Success Message
+
             AnimatedVisibility(
                 visible = successMessage != null,
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
-                SuccessCard(message = successMessage ?: "")
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            // Resend OTP Section
-            ResendSection(
-                canResend = canResend,
-                resendTimer = resendTimer,
-                onResend = {
-                    canResend = false
-                    resendTimer = 30
-                    otpValue = ""
-                    errorMessage = ""
-                    
-                    scope.launch {
-                        // Restart SMS Retriever — fresh 5-min listening window
-                        // Without this, if 4+ min passed since first OTP request,
-                        // the resent SMS arrives but SmsRetriever has timed out
-                        smsRetrieverHelper.restart()
-                        
-                        // Call resend OTP API
-                        try {
-                            withContext(Dispatchers.IO) {
-                                if (role == "DRIVER") {
-                                    // Driver: use /driver-auth/send-otp (sends to transporter)
-                                    RetrofitClient.driverAuthApi.sendOtp(
-                                        com.weelo.logistics.data.api.DriverSendOtpRequest(
-                                            driverPhone = phoneNumber
-                                        )
-                                    )
-                                } else {
-                                    // Transporter: use /auth/send-otp
-                                    RetrofitClient.authApi.sendOTP(
-                                        SendOTPRequest(
-                                            phone = phoneNumber,
-                                            role = role.lowercase()
-                                        )
-                                    )
-                                }
-                            }
-                        } catch (e: Exception) {
-                            errorMessage = "Failed to resend OTP"
-                        }
-                        
-                        // Restart timer
-                        while (resendTimer > 0) {
-                            delay(1000)
-                            resendTimer--
-                        }
-                        canResend = true
-                    }
+                Box(modifier = otpContentWidthModifier.padding(top = 12.dp)) {
+                    SuccessCard(message = successMessage ?: "")
                 }
-            )
-            
-            Spacer(modifier = Modifier.weight(1f))
-            
-            // Footer Section
-            OTPFooter()
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Box(modifier = otpContentWidthModifier) {
+                ResendSection(
+                    canResend = canResend,
+                    resendTimer = resendTimer,
+                    onResend = {
+                        if (!canResend) return@ResendSection
+                        canResend = false
+                        resendTimer = 30
+                        otpValue = ""
+                        errorMessage = ""
+                        successMessage = null
+                        otpEntrySource = OtpEntrySource.NONE
+                        lastAutoVerifiedOtpKey = null
+                        lastAsyncAction = OtpAsyncAction.RESEND
+                        authViewModel.resendOtp(context.applicationContext, phoneNumber, role)
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Box(modifier = otpContentWidthModifier) {
+                OTPFooter()
+            }
         }
     }
 }
@@ -473,60 +385,77 @@ private fun OTPHeader(
     role: String,
     onNavigateBack: () -> Unit
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        // Logo/Icon
-        Surface(
-            modifier = Modifier.size(72.dp),
-            shape = RoundedCornerShape(20.dp),
-            color = Success.copy(alpha = 0.1f)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = Icons.Default.Message,
-                    contentDescription = null,
-                    tint = Success,
-                    modifier = Modifier.size(36.dp)
-                )
+            Surface(
+                onClick = onNavigateBack,
+                shape = RoundedCornerShape(16.dp),
+                color = Surface,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+                border = androidx.compose.foundation.BorderStroke(1.dp, Divider)
+            ) {
+                Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowBack,
+                        contentDescription = stringResource(R.string.cd_back),
+                        tint = TextPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Text(
+                text = stringResource(R.string.auth_otp_title),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary
+            )
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Surface,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+                border = androidx.compose.foundation.BorderStroke(1.dp, Divider)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Default.HelpOutline, contentDescription = null, tint = TextPrimary, modifier = Modifier.size(18.dp))
+                    Text(stringResource(R.string.help), style = MaterialTheme.typography.labelLarge, color = TextPrimary)
+                }
             }
         }
-        
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        // Title
+
+        Spacer(modifier = Modifier.height(22.dp))
+
         Text(
-            text = "Verify OTP",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
+            text = stringResource(R.string.auth_otp_enter_verification_code),
+            style = MaterialTheme.typography.bodyLarge,
             color = TextPrimary
         )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        // Subtitle
+
+        Spacer(modifier = Modifier.height(4.dp))
+
         Text(
             text = if (role == "DRIVER") {
-                "Enter OTP sent to your transporter"
+                stringResource(R.string.auth_otp_sent_to_transporter_format, phoneNumber)
             } else {
-                "Enter OTP sent to +91 $phoneNumber"
+                stringResource(R.string.auth_otp_sent_to_format, phoneNumber)
             },
             style = MaterialTheme.typography.bodyMedium,
-            color = TextSecondary,
-            textAlign = TextAlign.Center
+            color = TextSecondary
         )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        // Change number link
-        TextButton(onClick = onNavigateBack) {
-            Text(
-                text = "Change Number",
-                style = MaterialTheme.typography.bodySmall,
-                color = Primary
-            )
-        }
     }
 }
 
@@ -541,110 +470,82 @@ private fun OTPInputCard(
     errorMessage: String,
     isLoading: Boolean
 ) {
-    Card(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        // OTP Input Boxes - Clickable to show keyboard
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = "Enter 6-Digit OTP",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = TextPrimary
-            )
-            
-            Spacer(modifier = Modifier.height(20.dp))
-            
-            // OTP Input Boxes - Clickable to show keyboard
-            Box(
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    repeat(6) { index ->
-                        OTPDigitBox(
-                            digit = otpValue.getOrNull(index)?.toString() ?: "",
-                            isFilled = index < otpValue.length,
-                            isActive = index == otpValue.length,
-                            hasError = errorMessage.isNotEmpty()
-                        )
-                    }
+                repeat(6) { index ->
+                    OTPDigitBox(
+                        digit = otpValue.getOrNull(index)?.toString() ?: "",
+                        isFilled = index < otpValue.length,
+                        isActive = index == otpValue.length,
+                        hasError = errorMessage.isNotEmpty()
+                    )
                 }
-                
-                // Invisible overlay that captures clicks and shows keyboard
-                BasicTextField(
-                    value = otpValue,
-                    onValueChange = onOtpChange,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(60.dp), // Match digit box height
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.NumberPassword,
-                        autoCorrect = false
-                    ),
-                    enabled = !isLoading,
-                    decorationBox = { innerTextField ->
-                        // Transparent box that captures touch
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            innerTextField()
-                        }
-                    },
-                    textStyle = androidx.compose.ui.text.TextStyle(color = Color.Transparent)
+            }
+
+            // Invisible overlay that captures clicks and shows keyboard
+            BasicTextField(
+                value = otpValue,
+                onValueChange = onOtpChange,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(60.dp),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.NumberPassword,
+                    autoCorrect = false
+                ),
+                enabled = !isLoading,
+                decorationBox = { innerTextField ->
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        innerTextField()
+                    }
+                },
+                textStyle = androidx.compose.ui.text.TextStyle(color = Color.Transparent)
+            )
+        }
+
+        AnimatedVisibility(visible = isLoading) {
+            Row(
+                modifier = Modifier.padding(top = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = Primary,
+                    strokeWidth = 2.dp
+                )
+                Text(
+                    text = stringResource(R.string.auth_otp_verifying),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Primary
                 )
             }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            // Loading Indicator
-            if (isLoading) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        color = Primary,
-                        strokeWidth = 2.dp
-                    )
-                    Text(
-                        text = "Verifying...",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Primary
-                    )
-                }
-            }
-            
-            // Error Message
-            AnimatedVisibility(visible = errorMessage.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 12.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Error,
-                        contentDescription = null,
-                        tint = Error,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = errorMessage,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Error,
-                        textAlign = TextAlign.Center
-                    )
-                }
+        }
+
+        AnimatedVisibility(visible = errorMessage.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp)
+            ) {
+                InlineInfoBannerCard(
+                    title = stringResource(R.string.auth_otp_verification_failed_title),
+                    subtitle = errorMessage,
+                    icon = Icons.Default.ErrorOutline,
+                    iconTint = Error,
+                    containerColor = ErrorLight
+                )
             }
         }
     }
@@ -664,12 +565,12 @@ private fun OTPDigitBox(
     val borderColor = when {
         hasError -> Error
         isActive -> Primary
-        isFilled -> Success
+        isFilled -> Divider
         else -> TextDisabled.copy(alpha = 0.3f)
     }
     
     val backgroundColor = when {
-        isFilled -> Primary.copy(alpha = 0.05f)
+        isFilled -> Primary.copy(alpha = 0.03f)
         else -> Color.Transparent
     }
     
@@ -681,7 +582,7 @@ private fun OTPDigitBox(
     
     Box(
         modifier = Modifier
-            .size(48.dp)
+            .size(50.dp)
             .background(backgroundColor, RoundedCornerShape(12.dp))
             .border(animatedBorderWidth, borderColor, RoundedCornerShape(12.dp)),
         contentAlignment = Alignment.Center
@@ -705,44 +606,35 @@ private fun ResendSection(
     resendTimer: Int,
     onResend: () -> Unit
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    Surface(
+        onClick = { if (canResend) onResend() },
+        shape = RoundedCornerShape(24.dp),
+        color = Surface,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+        border = androidx.compose.foundation.BorderStroke(1.dp, Divider)
     ) {
-        if (!canResend) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             Icon(
-                imageVector = Icons.Default.Schedule,
+                imageVector = if (canResend) Icons.Default.Refresh else Icons.Default.Message,
                 contentDescription = null,
-                tint = TextSecondary,
+                tint = if (canResend) Primary else TextSecondary,
                 modifier = Modifier.size(18.dp)
             )
             Text(
-                text = "Resend OTP in ${resendTimer}s",
+                text = if (canResend) {
+                    stringResource(R.string.auth_otp_resend)
+                } else {
+                    stringResource(R.string.auth_otp_resend_in_format, resendTimer)
+                },
                 style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary
+                color = if (canResend) TextPrimary else TextSecondary,
+                fontWeight = FontWeight.Medium
             )
-        } else {
-            Text(
-                text = "Didn't receive OTP?",
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary
-            )
-            TextButton(onClick = onResend) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Resend",
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
         }
     }
 }
@@ -753,33 +645,13 @@ private fun ResendSection(
 
 @Composable
 private fun SuccessCard(message: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = SuccessLight)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.CheckCircle,
-                contentDescription = null,
-                tint = Success,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Success,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-    }
+    InlineInfoBannerCard(
+        title = stringResource(R.string.auth_otp_verified_title),
+        subtitle = message,
+        icon = Icons.Default.CheckCircle,
+        iconTint = Success,
+        containerColor = SuccessLight
+    )
 }
 
 // =============================================================================
@@ -819,7 +691,7 @@ private fun SmsListeningIndicator() {
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-            text = "Waiting for OTP SMS...",
+            text = stringResource(R.string.auth_otp_waiting_sms),
             style = MaterialTheme.typography.bodySmall,
             color = Success,
             fontWeight = FontWeight.Medium
@@ -833,20 +705,16 @@ private fun SmsListeningIndicator() {
 
 @Composable
 private fun OTPFooter() {
-    Row(
-        verticalAlignment = Alignment.CenterVertically
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = Icons.Default.Lock,
-            contentDescription = null,
-            tint = TextSecondary,
-            modifier = Modifier.size(16.dp)
-        )
-        Spacer(modifier = Modifier.width(6.dp))
         Text(
-            text = "Your data is secure and encrypted",
-            style = MaterialTheme.typography.bodySmall,
-            color = TextSecondary
+            text = stringResource(R.string.auth_otp_footer_sms_consent),
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextSecondary,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp
         )
     }
 }

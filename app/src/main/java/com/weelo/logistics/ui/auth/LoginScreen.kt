@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -23,8 +25,12 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.font.FontWeight
@@ -33,16 +39,21 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.weelo.logistics.R
+import com.weelo.logistics.ui.components.InlineInfoBannerCard
+import com.weelo.logistics.ui.components.IllustrationCanvas
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.ui.components.rememberScreenConfig
-import com.weelo.logistics.utils.ClickDebouncer
 import com.weelo.logistics.utils.InputValidator
-import com.weelo.logistics.data.remote.RetrofitClient
-import com.weelo.logistics.data.api.SendOTPRequest
-import kotlinx.coroutines.Dispatchers
+import com.weelo.logistics.utils.AuthOtpAutofillCoordinator
+import com.weelo.logistics.utils.AuthOtpAutofillCoordinator.OtpAutofillClearReason
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+
+private enum class OtpSendTrigger { AUTO, MANUAL_RETRY, IME_DONE }
 
 /**
  * Modern Login Screen - Redesigned for speed and clarity
@@ -59,7 +70,7 @@ import kotlinx.coroutines.withContext
  * @param onNavigateToOTP Navigate to OTP screen (instant, no delay)
  * @param onNavigateBack Back navigation
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class, ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class, ExperimentalComposeUiApi::class, FlowPreview::class)
 @Composable
 fun LoginScreen(
     role: String,
@@ -70,201 +81,270 @@ fun LoginScreen(
     var phoneNumber by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    var successMessage by remember { mutableStateOf<String?>(null) }
-    
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    var lastAutoSentPhone by remember { mutableStateOf<String?>(null) }
+    var inFlightOtpRequestPhone by remember { mutableStateOf<String?>(null) }
+    var expectedOtpSuccessPhone by remember { mutableStateOf<String?>(null) }
+    var handledOtpSuccessKey by remember { mutableStateOf<String?>(null) }
+
     val scope = rememberCoroutineScope()
-    val clickDebouncer = remember { ClickDebouncer(500L) }
     val keyboardController = LocalSoftwareKeyboardController.current
+    val context = LocalContext.current
 
     // Use AuthViewModel so DRIVER uses /driver-auth/* and TRANSPORTER uses /auth/*
     val authViewModel: AuthViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
-    val authState = authViewModel.authState.collectAsState().value
+    val authState by authViewModel.authState.collectAsStateWithLifecycle()
+    val normalizedRole = remember(role) { role.lowercase() }
+    val latestPhoneNumber by rememberUpdatedState(phoneNumber)
+
+    fun sendOtpNow(trigger: OtpSendTrigger, targetPhone: String) {
+        val phone = targetPhone.trim()
+        if (phone.length != 10) return
+
+        val validation = InputValidator.validatePhoneNumber(phone)
+        if (!validation.isValid) {
+            errorMessage = validation.errorMessage ?: context.getString(R.string.auth_login_invalid_phone)
+            return
+        }
+
+        if (isLoading || inFlightOtpRequestPhone == phone) return
+        if (trigger == OtpSendTrigger.AUTO && lastAutoSentPhone == phone) return
+
+        keyboardController?.hide()
+        errorMessage = ""
+        statusMessage = context.getString(R.string.auth_login_status_sending_otp)
+        isLoading = true
+        inFlightOtpRequestPhone = phone
+        expectedOtpSuccessPhone = phone
+        handledOtpSuccessKey = null
+
+        scope.launch {
+            try {
+                authViewModel.prepareOtpAutofillForSend(
+                    context = context.applicationContext,
+                    phone = phone,
+                    role = role
+                )
+                if (role == "DRIVER") {
+                    authViewModel.sendDriverOTP(phone)
+                } else {
+                    authViewModel.sendTransporterOTP(phone)
+                }
+            } catch (e: Exception) {
+                timber.log.Timber.e(e, "Send OTP error")
+                authViewModel.clearOtpAutofill(OtpAutofillClearReason.SEND_FAILED)
+                isLoading = false
+                inFlightOtpRequestPhone = null
+                statusMessage = null
+                errorMessage = context.getString(R.string.auth_error_network_try_again)
+            }
+        }
+    }
 
     // Reflect backend state instantly in UI
     LaunchedEffect(authState) {
-        when (authState) {
+        when (val state = authState) {
             is AuthState.Idle -> {
                 isLoading = false
+                if (inFlightOtpRequestPhone == null) statusMessage = null
             }
             is AuthState.Loading -> {
                 isLoading = true
                 errorMessage = ""
+                if (inFlightOtpRequestPhone != null) {
+                    statusMessage = context.getString(R.string.auth_login_status_sending_otp)
+                }
             }
             is AuthState.RateLimited -> {
                 isLoading = false
-                val retryAfter = authState.retryAfterSeconds
-                errorMessage = "Too many attempts. Try again in ${retryAfter}s"
+                inFlightOtpRequestPhone = null
+                authViewModel.clearOtpAutofill(OtpAutofillClearReason.SEND_FAILED)
+                val retryAfter = state.retryAfterSeconds
+                errorMessage = context.getString(R.string.auth_otp_rate_limited_retry_format, retryAfter)
+                statusMessage = null
             }
             is AuthState.Error -> {
                 isLoading = false
-                errorMessage = authState.message
+                inFlightOtpRequestPhone = null
+                authViewModel.clearOtpAutofill(OtpAutofillClearReason.SEND_FAILED)
+                errorMessage = state.message
+                statusMessage = null
             }
             is AuthState.OTPSent -> {
                 isLoading = false
-                // For driver, show message from backend that OTP is sent to transporter
-                successMessage = authState.message
+                val responsePhone = state.phone
+                val responseRole = state.role.lowercase()
+                val stateKey = "$responsePhone|$responseRole|${state.message}"
+
+                val isExpectedPhone = expectedOtpSuccessPhone == responsePhone
+                val isExpectedRole = responseRole == normalizedRole
+
+                if (isExpectedPhone && isExpectedRole && handledOtpSuccessKey != stateKey) {
+                    handledOtpSuccessKey = stateKey
+                    inFlightOtpRequestPhone = null
+                    lastAutoSentPhone = responsePhone
+                    statusMessage = state.message
+
+                    if (responsePhone.isNotEmpty()) {
+                        onNavigateToOTP(responsePhone, role)
+                    } else {
+                        errorMessage = context.getString(R.string.auth_login_enter_phone_number)
+                    }
+                } else {
+                    timber.log.Timber.w("Ignoring stale OTP sent state: phone=${state.phone} role=${state.role}")
+                }
             }
             is AuthState.Authenticated -> {
                 isLoading = false
+                inFlightOtpRequestPhone = null
             }
             is AuthState.LoggedOut -> {
                 isLoading = false
+                inFlightOtpRequestPhone = null
             }
         }
     }
-    
-    // Navigate after success - INSTANT (zero delay) ⚡
-    LaunchedEffect(successMessage) {
-        successMessage?.let {
-            // Guard: Never navigate with empty phone number
-            // (causes route mismatch crash: otp_verification//DRIVER/login)
-            if (phoneNumber.isNotEmpty()) {
-                onNavigateToOTP(phoneNumber, role)
-            } else {
-                timber.log.Timber.e("❌ Cannot navigate to OTP: phoneNumber is empty")
-                errorMessage = "Please enter your phone number"
-                successMessage = null
+
+    // Auto-send OTP only on LoginScreen, guarded with debounce + distinct value.
+    LaunchedEffect(role) {
+        snapshotFlow { latestPhoneNumber }
+            .debounce(350)
+            .distinctUntilChanged()
+            .collect { value ->
+                if (value.length < 10) {
+                    if (value.length < 10) {
+                        lastAutoSentPhone = null
+                    }
+                    return@collect
+                }
+                if (value.length == 10 && value.all(Char::isDigit)) {
+                    sendOtpNow(OtpSendTrigger.AUTO, value)
+                }
             }
-        }
     }
-    
-    Box(
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Background)
+            .background(IllustrationCanvas)
     ) {
-        // Premium background decoration with yellow accents
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .alpha(0.08f)
-        ) {
-            // Top-right yellow circle
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(x = 80.dp, y = (-40).dp)
-                    .size(200.dp)
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(Primary, Color.Transparent)
-                        ),
-                        shape = RoundedCornerShape(50)
-                    )
-            )
-            // Bottom-left yellow circle
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .offset(x = (-60).dp, y = 60.dp)
-                    .size(160.dp)
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(Primary, Color.Transparent)
-                        ),
-                        shape = RoundedCornerShape(50)
-                    )
-            )
-        }
-        
-        // Responsive layout support
         val screenConfig = rememberScreenConfig()
-        
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = if (screenConfig.isLandscape) 48.dp else 24.dp, vertical = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Reduced top spacing in landscape
-            Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 16.dp else 40.dp))
-            
-            // Header Section
-            LoginHeader(role = role, onNavigateBack = onNavigateBack)
-            
-            Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 24.dp else 48.dp))
-            
-            // Phone Input Section - constrained width in landscape
-            PhoneInputCard(
-                phoneNumber = phoneNumber,
-                onPhoneChange = {
-                    if (it.length <= 10 && it.all { char -> char.isDigit() }) {
-                        phoneNumber = it
-                        errorMessage = ""
-                    }
-                },
-                errorMessage = errorMessage,
-                onSubmit = {
-                    keyboardController?.hide()
-                    // Trigger send OTP
-                }
-            )
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            // Send OTP Button
-            ModernButton(
-                text = if (isLoading) "Sending..." else "Send OTP",
-                onClick = {
-                    if (!clickDebouncer.canClick()) return@ModernButton
-                    
-                    val validation = InputValidator.validatePhoneNumber(phoneNumber)
-                    if (!validation.isValid) {
-                        errorMessage = validation.errorMessage!!
-                        return@ModernButton
-                    }
-                    
-                    keyboardController?.hide()
-                    isLoading = true
-                    errorMessage = ""
-                    
-                    scope.launch {
-                        // Rate limiting is handled by AuthViewModel (single check)
-                        // DO NOT add a second check here — same GlobalRateLimiters.otp
-                        // singleton would consume 2 permits per request, causing
-                        // premature "Too many attempts" with only 1 real attempt.
-                        
-                        // Use AuthViewModel so driver route is correct
-                        try {
-                            timber.log.Timber.d("Requesting OTP for role=$role, phone=$phoneNumber")
+        val authContentWidthModifier = Modifier
+            .fillMaxWidth()
+            .widthIn(max = if (screenConfig.isLandscape) 620.dp else 560.dp)
+        val bannerHeight = if (screenConfig.isLandscape) 184.dp else 242.dp
 
-                            if (role == "DRIVER") {
-                                // IMPORTANT: sends OTP to transporter (server decides destination)
-                                authViewModel.sendDriverOTP(phoneNumber)
-                            } else {
-                                authViewModel.sendTransporterOTP(phoneNumber)
-                            }
-                        } catch (e: Exception) {
-                            isLoading = false
-                            timber.log.Timber.e(e, "Send OTP error: ${e.message}")
-                            errorMessage = "Network error. Please try again."
-                        }
-                    }
-                },
-                enabled = phoneNumber.length == 10 && !isLoading,
-                isLoading = isLoading,
-                modifier = Modifier.fillMaxWidth()
-            )
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            // Success Message (brief, then navigates)
-            AnimatedVisibility(
-                visible = successMessage != null,
-                enter = fadeIn(),
-                exit = fadeOut()
+        LoginHeroBanner(
+            role = role,
+            onNavigateBack = onNavigateBack,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(bannerHeight)
+        )
+
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = true)
+                .navigationBarsPadding(),
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            color = Surface,
+            shadowElevation = 10.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = if (screenConfig.isLandscape) 20.dp else 24.dp, vertical = 22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                SuccessCard(message = successMessage ?: "")
+                Box(modifier = authContentWidthModifier) {
+                    Column {
+                        Text(
+                            text = stringResource(R.string.auth_login_title),
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = if (role == "DRIVER") {
+                                stringResource(R.string.auth_login_subtitle_driver)
+                            } else {
+                                stringResource(R.string.auth_login_subtitle_transporter)
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextSecondary
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                PhoneInputCard(
+                    phoneNumber = phoneNumber,
+                    onPhoneChange = {
+                        if (it.length <= 10 && it.all(Char::isDigit)) {
+                            val wasTenDigits = phoneNumber.length == 10
+                            phoneNumber = it
+                            errorMessage = ""
+                            if (wasTenDigits && it.length < 10) {
+                                statusMessage = null
+                                inFlightOtpRequestPhone = null
+                                expectedOtpSuccessPhone = null
+                                lastAutoSentPhone = null
+                                scope.launch {
+                                    authViewModel.clearOtpAutofill(OtpAutofillClearReason.PHONE_CHANGED)
+                                }
+                            }
+                        }
+                    },
+                    errorMessage = errorMessage,
+                    onSubmit = {
+                        if (phoneNumber.length == 10) {
+                            sendOtpNow(OtpSendTrigger.IME_DONE, phoneNumber)
+                        }
+                    },
+                    onRetry = {
+                        sendOtpNow(OtpSendTrigger.MANUAL_RETRY, phoneNumber)
+                    },
+                    modifier = authContentWidthModifier
+                )
+
+                AnimatedVisibility(
+                    visible = isLoading || (!statusMessage.isNullOrBlank() && errorMessage.isBlank()),
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { it / 4 }),
+                    exit = fadeOut()
+                ) {
+                    Box(
+                        modifier = authContentWidthModifier
+                            .padding(top = 14.dp)
+                    ) {
+                        InlineInfoBannerCard(
+                            title = if (isLoading) {
+                                stringResource(R.string.auth_login_status_sending_otp)
+                            } else {
+                                stringResource(R.string.auth_otp_sent_title)
+                            },
+                            subtitle = statusMessage ?: stringResource(R.string.please_wait),
+                            icon = if (isLoading) Icons.Default.Schedule else Icons.Default.CheckCircle,
+                            iconTint = if (isLoading) Primary else Success,
+                            containerColor = if (isLoading) SurfaceVariant else SuccessLight
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                Box(modifier = authContentWidthModifier) {
+                    LoginFooter(
+                        role = role,
+                        onNavigateToSignup = onNavigateToSignup
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
             }
-            
-            Spacer(modifier = Modifier.weight(1f))
-            
-            // Footer Section
-            LoginFooter(
-                role = role,
-                onNavigateToSignup = onNavigateToSignup
-            )
         }
     }
 }
@@ -273,51 +353,86 @@ fun LoginScreen(
 // HEADER COMPONENT
 // =============================================================================
 
-@Suppress("UNUSED_PARAMETER")
 @Composable
-private fun LoginHeader(
+private fun LoginHeroBanner(
     role: String,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth()
+    val screenConfig = rememberScreenConfig()
+    val artworkRes = if (role == "DRIVER") {
+        com.weelo.logistics.R.drawable.card_auth_role_driver_soft
+    } else {
+        com.weelo.logistics.R.drawable.card_auth_role_transporter_soft
+    }
+    Box(
+        modifier = modifier
+            .background(IllustrationCanvas)
     ) {
-        // Premium Logo/Icon with yellow background
-        Surface(
-            modifier = Modifier.size(80.dp),
-            shape = RoundedCornerShape(24.dp),
-            color = Primary
+        Image(
+            painter = painterResource(id = artworkRes),
+            contentDescription = if (role == "DRIVER") {
+                stringResource(R.string.auth_login_cd_driver_banner)
+            } else {
+                stringResource(R.string.auth_login_cd_transporter_banner)
+            },
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .padding(horizontal = if (screenConfig.isLandscape) 20.dp else 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = if (role == "DRIVER") Icons.Default.DirectionsCar else Icons.Default.LocalShipping,
-                    contentDescription = null,
-                    tint = Color.Black,
-                    modifier = Modifier.size(40.dp)
-                )
+            Surface(
+                onClick = onNavigateBack,
+                shape = RoundedCornerShape(16.dp),
+                color = Color.White.copy(alpha = 0.94f)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.ArrowBack,
+                        contentDescription = stringResource(R.string.cd_back),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(stringResource(R.string.back), style = MaterialTheme.typography.labelLarge)
+                }
+            }
+
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color.White.copy(alpha = 0.94f)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (role == "DRIVER") Icons.Default.DirectionsCar else Icons.Default.LocalShipping,
+                        contentDescription = null,
+                        tint = Primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        if (role == "DRIVER") {
+                            stringResource(R.string.auth_role_driver)
+                        } else {
+                            stringResource(R.string.auth_role_transporter)
+                        },
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
             }
         }
-        
-        Spacer(modifier = Modifier.height(28.dp))
-        
-        // Title with premium styling
-        Text(
-            text = if (role == "DRIVER") "Driver Login" else "Transporter Login",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = TextPrimary
-        )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        // Subtitle
-        Text(
-            text = "Enter your phone number to continue",
-            style = MaterialTheme.typography.bodyMedium,
-            color = TextSecondary,
-            textAlign = TextAlign.Center
-        )
     }
 }
 
@@ -331,10 +446,12 @@ private fun PhoneInputCard(
     phoneNumber: String,
     onPhoneChange: (String) -> Unit,
     errorMessage: String,
-    onSubmit: () -> Unit
+    onSubmit: () -> Unit,
+    onRetry: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = Surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -343,7 +460,7 @@ private fun PhoneInputCard(
             modifier = Modifier.padding(20.dp)
         ) {
             Text(
-                text = "Phone Number",
+                text = stringResource(R.string.auth_login_phone_label),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = TextPrimary
@@ -357,7 +474,7 @@ private fun PhoneInputCard(
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = {
                     Text(
-                        text = "10-digit number",
+                        text = stringResource(R.string.auth_login_phone_placeholder),
                         color = TextDisabled
                     )
                 },
@@ -409,25 +526,21 @@ private fun PhoneInputCard(
                 )
             )
             
-            // Error Message
+            // Error Message (structured banner + input red state)
             AnimatedVisibility(visible = errorMessage.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Error,
-                        contentDescription = null,
-                        tint = Error,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = errorMessage,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Error
+                Column {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    InlineInfoBannerCard(
+                        title = stringResource(R.string.auth_login_send_otp_failed_title),
+                        subtitle = errorMessage,
+                        icon = Icons.Default.ErrorOutline,
+                        iconTint = Error,
+                        containerColor = ErrorLight,
+                        action = if (onRetry != null) {
+                            {
+                                TextButton(onClick = onRetry) { Text(stringResource(R.string.retry)) }
+                            }
+                        } else null
                     )
                 }
             }
@@ -435,7 +548,7 @@ private fun PhoneInputCard(
             // Character count
             if (phoneNumber.isNotEmpty()) {
                 Text(
-                    text = "${phoneNumber.length}/10",
+                    text = stringResource(R.string.auth_login_phone_count_format, phoneNumber.length),
                     style = MaterialTheme.typography.bodySmall,
                     color = TextDisabled,
                     modifier = Modifier
@@ -443,88 +556,6 @@ private fun PhoneInputCard(
                         .padding(top = 4.dp)
                 )
             }
-        }
-    }
-}
-
-// =============================================================================
-// MODERN BUTTON COMPONENT
-// =============================================================================
-
-@Composable
-private fun ModernButton(
-    text: String,
-    onClick: () -> Unit,
-    enabled: Boolean,
-    isLoading: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Button(
-        onClick = onClick,
-        enabled = enabled && !isLoading,
-        modifier = modifier.height(56.dp),
-        shape = RoundedCornerShape(14.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = Primary,
-            contentColor = Color.Black,
-            disabledContainerColor = Primary.copy(alpha = 0.4f),
-            disabledContentColor = Color.Black.copy(alpha = 0.5f)
-        ),
-        elevation = ButtonDefaults.buttonElevation(
-            defaultElevation = 4.dp,
-            pressedElevation = 8.dp,
-            disabledElevation = 0.dp
-        )
-    ) {
-        if (isLoading) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(24.dp),
-                color = Color.Black,
-                strokeWidth = 2.5.dp
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-        }
-        
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = FontWeight.Bold,
-            fontSize = 16.sp,
-            letterSpacing = 0.5.sp
-        )
-    }
-}
-
-// =============================================================================
-// SUCCESS CARD COMPONENT
-// =============================================================================
-
-@Composable
-private fun SuccessCard(message: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = SuccessLight)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.CheckCircle,
-                contentDescription = null,
-                tint = Success,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Success,
-                fontWeight = FontWeight.Medium
-            )
         }
     }
 }
@@ -555,9 +586,9 @@ private fun LoginFooter(
             Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = if (role == "DRIVER") {
-                    "OTP will be sent to your registered transporter"
+                    stringResource(R.string.auth_login_footer_driver_help)
                 } else {
-                    "You'll receive OTP on this number"
+                    stringResource(R.string.auth_login_footer_transporter_help)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = TextSecondary,
@@ -572,14 +603,14 @@ private fun LoginFooter(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Don't have an account?",
+                text = stringResource(R.string.auth_login_no_account),
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary
             )
             Spacer(modifier = Modifier.width(4.dp))
             TextButton(onClick = onNavigateToSignup) {
                 Text(
-                    text = "Sign Up",
+                    text = stringResource(R.string.auth_sign_up),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
                     color = Color.Black  // Black for premium Rapido look

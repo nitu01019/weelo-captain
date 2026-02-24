@@ -8,6 +8,7 @@ import android.os.Build
 import com.google.android.gms.auth.api.phone.SmsRetriever
 import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.common.api.Status
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -18,6 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 
 /**
@@ -57,6 +60,16 @@ import timber.log.Timber
  */
 class SmsRetrieverHelper(private val context: Context) {
 
+    enum class RetrieverState {
+        IDLE,
+        STARTING,
+        LISTENING,
+        OTP_RECEIVED,
+        TIMED_OUT,
+        FAILED,
+        STOPPED
+    }
+
     companion object {
         /** SMS Retriever API timeout — 5 minutes per Google's spec */
         private const val RETRIEVER_TIMEOUT_MS = 5 * 60 * 1000L
@@ -78,9 +91,14 @@ class SmsRetrieverHelper(private val context: Context) {
      */
     val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
 
+    private val _retrieverState = MutableStateFlow(RetrieverState.IDLE)
+    val retrieverState: StateFlow<RetrieverState> = _retrieverState.asStateFlow()
+
     private var receiver: SmsBroadcastReceiver? = null
     private var isStarted = false
     private var timeoutJob: Job? = null
+    private val stateMutex = Mutex()
+    private var startDeferred: CompletableDeferred<Boolean>? = null
     // SupervisorJob: child failure (e.g. timeout) doesn't cancel siblings
     // Recreated on each start() to ensure clean state after stop()
     private var scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -91,33 +109,72 @@ class SmsRetrieverHelper(private val context: Context) {
      *
      * Safe to call multiple times — skips if already started.
      */
-    fun start() {
-        if (isStarted) {
-            Timber.d("📱 SmsRetriever already started, skipping")
-            return
+    suspend fun start(): Boolean {
+        var immediateResult: Boolean? = null
+        lateinit var deferred: CompletableDeferred<Boolean>
+        var shouldInitiate = false
+
+        stateMutex.withLock {
+            if (isStarted) {
+                Timber.d("📱 SmsRetriever already started, skipping")
+                immediateResult = true
+                return@withLock
+            }
+
+            startDeferred?.let {
+                Timber.d("📱 SmsRetriever start already in progress, waiting for result")
+                deferred = it
+                return@withLock
+            }
+
+            // Reset previous OTP and state for a fresh start attempt
+            _otpCode.value = null
+            _isListening.value = false
+            _retrieverState.value = RetrieverState.STARTING
+
+            // Recreate scope (previous may have been cancelled by stop())
+            scope.cancel()
+            scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+            deferred = CompletableDeferred()
+            startDeferred = deferred
+            shouldInitiate = true
         }
 
-        // Reset previous OTP
-        _otpCode.value = null
-        
-        // Recreate scope (previous may have been cancelled by stop())
-        scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+        immediateResult?.let { return it }
 
-        // Start SMS Retriever client
-        val client = SmsRetriever.getClient(context)
-        client.startSmsRetriever()
-            .addOnSuccessListener {
-                Timber.i("📱 SmsRetriever started — listening for OTP SMS (5-min window)")
-                isStarted = true
-                _isListening.value = true
-                registerReceiver()
-                startTimeoutTimer()
-            }
-            .addOnFailureListener { e ->
-                Timber.e(e, "📱 SmsRetriever failed to start — manual OTP entry required")
-                _isListening.value = false
-                // Graceful degradation: user can still type OTP manually
-            }
+        if (shouldInitiate) {
+            val client = SmsRetriever.getClient(context)
+            client.startSmsRetriever()
+                .addOnSuccessListener {
+                    scope.launch {
+                        stateMutex.withLock {
+                            Timber.i("📱 SmsRetriever started — listening for OTP SMS (5-min window)")
+                            isStarted = true
+                            _isListening.value = true
+                            _retrieverState.value = RetrieverState.LISTENING
+                            registerReceiver()
+                            startTimeoutTimer()
+                            startDeferred?.complete(true)
+                            startDeferred = null
+                        }
+                    }
+                }
+                .addOnFailureListener { e ->
+                    scope.launch {
+                        stateMutex.withLock {
+                            Timber.e(e, "📱 SmsRetriever failed to start — manual OTP entry required")
+                            isStarted = false
+                            _isListening.value = false
+                            _retrieverState.value = RetrieverState.FAILED
+                            startDeferred?.complete(false)
+                            startDeferred = null
+                        }
+                    }
+                }
+        }
+
+        return deferred.await()
     }
 
     /**
@@ -127,15 +184,20 @@ class SmsRetrieverHelper(private val context: Context) {
      * Cancels the coroutine scope to prevent leaked coroutines
      * (e.g. timeout timer running after screen is gone).
      */
-    fun stop() {
-        timeoutJob?.cancel()
-        timeoutJob = null
-        unregisterReceiver()
-        isStarted = false
-        _isListening.value = false
-        // Cancel all coroutines in scope to prevent leaks
-        scope.cancel()
-        Timber.d("📱 SmsRetriever stopped")
+    suspend fun stop() {
+        stateMutex.withLock {
+            timeoutJob?.cancel()
+            timeoutJob = null
+            unregisterReceiver()
+            isStarted = false
+            _isListening.value = false
+            _retrieverState.value = RetrieverState.STOPPED
+            startDeferred?.complete(false)
+            startDeferred = null
+            // Cancel all coroutines in scope to prevent leaks
+            scope.cancel()
+            Timber.d("📱 SmsRetriever stopped")
+        }
     }
 
     /**
@@ -150,10 +212,10 @@ class SmsRetrieverHelper(private val context: Context) {
      *
      * restart() = stop() + start() → fresh 5-minute window.
      */
-    fun restart() {
+    suspend fun restart(): Boolean {
         Timber.d("📱 SmsRetriever restarting (fresh 5-min window)")
         stop()
-        start()
+        return start()
     }
 
     /**
@@ -167,9 +229,10 @@ class SmsRetrieverHelper(private val context: Context) {
             delay(RETRIEVER_TIMEOUT_MS)
             if (isStarted && _otpCode.value == null) {
                 Timber.d("📱 SmsRetriever 5-min timeout — hiding listening indicator")
+                unregisterReceiver()
+                isStarted = false
                 _isListening.value = false
-                // Note: don't call stop() here — Google Play Services handles
-                // the actual timeout. We only update the UI state.
+                _retrieverState.value = RetrieverState.TIMED_OUT
             }
         }
     }
@@ -185,13 +248,17 @@ class SmsRetrieverHelper(private val context: Context) {
                 Timber.i("📱 OTP auto-read received")
                 _otpCode.value = otp
                 _isListening.value = false
+                _retrieverState.value = RetrieverState.OTP_RECEIVED
+                isStarted = false
                 timeoutJob?.cancel()
                 // Auto-cleanup after receiving OTP (single use)
                 unregisterReceiver()
             },
             onTimeout = {
                 Timber.w("📱 SmsRetriever timeout — user must enter OTP manually")
+                unregisterReceiver()
                 _isListening.value = false
+                _retrieverState.value = RetrieverState.TIMED_OUT
                 isStarted = false
                 timeoutJob?.cancel()
             }

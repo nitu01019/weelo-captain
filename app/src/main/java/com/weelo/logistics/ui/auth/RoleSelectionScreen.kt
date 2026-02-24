@@ -2,10 +2,17 @@ package com.weelo.logistics.ui.auth
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.HelpOutline
@@ -13,17 +20,24 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.weelo.logistics.R
+import com.weelo.logistics.ui.components.CardArtwork
+import com.weelo.logistics.ui.components.InlineInfoBannerCard
+import com.weelo.logistics.ui.components.MediaHeaderCard
 import com.weelo.logistics.ui.components.PrimaryButton
+import com.weelo.logistics.ui.components.bannerGeneratedArtSpec
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.ui.components.rememberScreenConfig
 import androidx.compose.foundation.rememberScrollState
@@ -34,242 +48,212 @@ import androidx.compose.foundation.verticalScroll
  * Simple 2-card selection: Transporter or Driver
  * Added guide icon with dialog to explain roles
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun RoleSelectionScreen(
     onRoleSelected: (String) -> Unit
 ) {
     var showGuideDialog by remember { mutableStateOf(false) }
-    
-    // Responsive layout support
     val screenConfig = rememberScreenConfig()
-    
+    val pagerState = rememberPagerState(pageCount = { 2 })
+    val portraitPagerHeight = (screenConfig.screenWidth * (2f / 3f))
+        .coerceAtLeast(224.dp)
+        .coerceAtMost(if (screenConfig.screenHeight < 700.dp) 252.dp else 286.dp)
+    val pagerHeight = when {
+        screenConfig.isLandscape -> 208.dp
+        else -> portraitPagerHeight
+    }
+    val sheetMinHeight = if (screenConfig.isLandscape) 280.dp else 360.dp
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Background)
-            .verticalScroll(rememberScrollState())
-            .padding(
-                horizontal = if (screenConfig.isLandscape) 48.dp else 24.dp,
-                vertical = 24.dp
-            ),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .background(Color(0xFF113C95))
+            .statusBarsPadding()
+            .navigationBarsPadding()
     ) {
-        // Reduced top spacing in landscape
-        Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 16.dp else 60.dp))
-        
-        // Header with Guide Icon
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "You are a:",
-                style = MaterialTheme.typography.displaySmall,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary,
-                fontSize = 28.sp,
-                modifier = Modifier.weight(1f)
-            )
-            
-            // Guide/Help Icon Button
-            IconButton(
-                onClick = { showGuideDialog = true },
-                modifier = Modifier
-                    .size(48.dp)
-                    .shadow(8.dp, CircleShape)
-                    .background(
-                        brush = Brush.radialGradient(
-                            colors = listOf(Primary.copy(alpha = 0.15f), Color.White)
-                        ),
-                        shape = CircleShape
-                    )
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.HelpOutline,
-                    contentDescription = "Role Guide",
-                    tint = Primary,
-                    modifier = Modifier.size(28.dp)
-                )
-            }
-        }
-        
-        Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 24.dp else 48.dp))
-        
-        // Role Cards - Side by side in landscape, stacked in portrait
-        if (screenConfig.isLandscape) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Transporter Card
-                Box(modifier = Modifier.weight(1f)) {
-                    RoleCard(
-                        icon = Icons.Default.Business,
-                        title = "Transporter",
-                        description = "I own and manage vehicles",
-                        iconColor = Primary,
-                        onClick = { onRoleSelected("TRANSPORTER") }
-                    )
-                }
-                
-                // Driver Card
-                Box(modifier = Modifier.weight(1f)) {
-                    RoleCard(
-                        icon = Icons.Default.AccountCircle,
-                        title = "Driver",
-                        description = "I drive vehicles for trips",
-                        iconColor = Secondary,
-                        onClick = { onRoleSelected("DRIVER") }
-                    )
-                }
-            }
-        } else {
-            // Portrait - Stacked vertically
-            RoleCard(
-                icon = Icons.Default.Business,
-                title = "Transporter",
-                description = "I own and manage vehicles",
-                iconColor = Primary,
-                onClick = { onRoleSelected("TRANSPORTER") }
-            )
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            RoleCard(
-                icon = Icons.Default.AccountCircle,
-                title = "Driver",
-                description = "I drive vehicles for trips",
-                iconColor = Secondary,
-                onClick = { onRoleSelected("DRIVER") }
-            )
-        }
-        
-        Spacer(modifier = Modifier.weight(1f))
-    }
-    
-    // Guide Dialog
-    if (showGuideDialog) {
-        RoleGuideDialog(onDismiss = { showGuideDialog = false })
-    }
-}
+        Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 4.dp else 6.dp))
 
-/**
- * PRD-01 Compliant Role Card with Glassmorphic Design
- * Specs: 140dp height, 16dp border radius, elevated with glass effect
- * Instant tap to navigate (no selection state needed)
- */
-@Composable
-fun RoleCard(
-    icon: ImageVector,
-    title: String,
-    description: String,
-    iconColor: androidx.compose.ui.graphics.Color,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(140.dp)
-            .shadow(
-                elevation = 12.dp,
-                shape = RoundedCornerShape(20.dp),
-                ambientColor = iconColor.copy(alpha = 0.3f),
-                spotColor = iconColor.copy(alpha = 0.3f)
-            )
-    ) {
-        Card(
+        HorizontalPager(
+            state = pagerState,
             modifier = Modifier
-                .fillMaxSize()
-                .clickable(onClick = onClick),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = Color.White.copy(alpha = 0.95f)
-            ),
-            border = androidx.compose.foundation.BorderStroke(
-                width = 1.5.dp,
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        iconColor.copy(alpha = 0.4f),
-                        iconColor.copy(alpha = 0.1f)
-                    )
-                )
-            )
+                .fillMaxWidth()
+                .height(pagerHeight)
         ) {
+            page ->
+            val drawable = if (page == 0) {
+                R.drawable.auth_role_carousel_vehicles
+            } else {
+                R.drawable.auth_role_carousel_team
+            }
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                iconColor.copy(alpha = 0.08f),
-                                Color.White.copy(alpha = 0.05f)
-                            )
-                        )
-                    )
+                    .fillMaxWidth()
+                    .fillMaxHeight()
+                    .background(Color(0xFF113C95)),
+                contentAlignment = Alignment.Center
             ) {
-                Row(
+                androidx.compose.foundation.Image(
+                    painter = painterResource(id = drawable),
+                    contentDescription = if (page == 0) {
+                        stringResource(R.string.auth_role_cd_fleet_illustration)
+                    } else {
+                        stringResource(R.string.auth_role_cd_team_illustration)
+                    },
+                    contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(24.dp),
+                        .padding(horizontal = if (screenConfig.isLandscape) 2.dp else 0.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 10.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            repeat(2) { index ->
+                val isActive = pagerState.currentPage == index
+                val dotWidth by animateDpAsState(
+                    targetValue = if (isActive) 24.dp else 8.dp,
+                    animationSpec = tween(180),
+                    label = "rolePagerDotWidth"
+                )
+                val dotColor by animateColorAsState(
+                    targetValue = if (isActive) Primary else Color.White.copy(alpha = 0.35f),
+                    animationSpec = tween(180),
+                    label = "rolePagerDotColor"
+                )
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 4.dp)
+                        .size(width = dotWidth, height = 8.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(dotColor)
+                )
+            }
+        }
+
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = true),
+            color = Surface,
+            tonalElevation = 0.dp,
+            shadowElevation = 10.dp,
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = sheetMinHeight)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = if (screenConfig.isLandscape) 20.dp else 24.dp)
+                    .padding(top = 18.dp, bottom = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Icon container with glow effect
-                    Box(
-                        modifier = Modifier
-                            .size(64.dp)
-                            .shadow(
-                                elevation = 8.dp,
-                                shape = RoundedCornerShape(16.dp),
-                                ambientColor = iconColor.copy(alpha = 0.5f)
-                            )
-                            .background(
-                                brush = Brush.radialGradient(
-                                    colors = listOf(
-                                        iconColor.copy(alpha = 0.2f),
-                                        iconColor.copy(alpha = 0.05f)
-                                    )
-                                ),
-                                shape = RoundedCornerShape(16.dp)
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = title,
-                            modifier = Modifier.size(40.dp),
-                            tint = iconColor
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.auth_role_choose_to_continue),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextSecondary
                         )
                     }
-            
-            Spacer(modifier = Modifier.width(16.dp))
-            
-            // Text on right
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary,
-                    fontSize = 20.sp
+
+                    IconButton(
+                        onClick = { showGuideDialog = true },
+                        modifier = Modifier
+                            .size(46.dp)
+                            .background(Color.White, CircleShape)
+                            .border(1.dp, Divider, CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.HelpOutline,
+                            contentDescription = stringResource(R.string.auth_role_guide_cd),
+                            tint = Primary
+                        )
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(
+                        onClick = { onRoleSelected("TRANSPORTER") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, Divider),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = Color.White,
+                            contentColor = TextPrimary
+                        )
+                    ) {
+                        Icon(Icons.Default.Business, contentDescription = null, tint = Primary)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            stringResource(R.string.auth_role_transporter),
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.Start
+                        )
+                        Icon(Icons.Default.ArrowForward, contentDescription = null, tint = TextSecondary)
+                    }
+
+                    OutlinedButton(
+                        onClick = { onRoleSelected("DRIVER") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, Divider),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = Color.White,
+                            contentColor = TextPrimary
+                        )
+                    ) {
+                        Icon(Icons.Default.AccountCircle, contentDescription = null, tint = Secondary)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            stringResource(R.string.auth_role_driver),
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.Start
+                        )
+                        Icon(Icons.Default.ArrowForward, contentDescription = null, tint = TextSecondary)
+                    }
+                }
+
+                InlineInfoBannerCard(
+                    title = stringResource(R.string.auth_role_access_title),
+                    subtitle = stringResource(R.string.auth_role_access_subtitle),
+                    icon = Icons.Default.Info,
+                    iconTint = Primary
                 )
-                
-                Spacer(modifier = Modifier.height(4.dp))
-                
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary,
-                    fontSize = 14.sp
-                )
+
+                Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 10.dp else 18.dp))
             }
         }
-            }
-        }
+    }
+
+    if (showGuideDialog) {
+        RoleGuideDialog(onDismiss = { showGuideDialog = false })
     }
 }
 
@@ -302,7 +286,7 @@ fun RoleGuideDialog(onDismiss: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Choose Your Role",
+                        text = stringResource(R.string.auth_role_dialog_title),
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
@@ -314,24 +298,33 @@ fun RoleGuideDialog(onDismiss: () -> Unit) {
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = "Close",
+                            contentDescription = stringResource(R.string.auth_role_cd_close),
                             tint = TextSecondary
                         )
                     }
                 }
                 
                 Spacer(modifier = Modifier.height(20.dp))
+
+                InlineInfoBannerCard(
+                    title = stringResource(R.string.auth_role_quick_guide_title),
+                    subtitle = stringResource(R.string.auth_role_quick_guide_subtitle),
+                    icon = Icons.Default.Info,
+                    iconTint = Primary
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
                 
                 // Transporter Section
                 GuideRoleItem(
                     icon = Icons.Default.Business,
                     iconColor = Primary,
-                    title = "Transporter",
+                    title = stringResource(R.string.auth_role_transporter),
                     points = listOf(
-                        "Own and manage fleet of vehicles",
-                        "Post trip requirements and broadcast to drivers",
-                        "Track vehicles and manage drivers in real-time",
-                        "Monitor earnings and performance analytics"
+                        stringResource(R.string.auth_role_transporter_point_1),
+                        stringResource(R.string.auth_role_transporter_point_2),
+                        stringResource(R.string.auth_role_transporter_point_3),
+                        stringResource(R.string.auth_role_transporter_point_4)
                     )
                 )
                 
@@ -345,12 +338,12 @@ fun RoleGuideDialog(onDismiss: () -> Unit) {
                 GuideRoleItem(
                     icon = Icons.Default.AccountCircle,
                     iconColor = Secondary,
-                    title = "Driver",
+                    title = stringResource(R.string.auth_role_driver),
                     points = listOf(
-                        "Drive vehicles for transporters",
-                        "Receive trip requests and accept instantly",
-                        "Navigate with built-in GPS tracking",
-                        "Earn money per trip with transparent payments"
+                        stringResource(R.string.auth_role_driver_point_1),
+                        stringResource(R.string.auth_role_driver_point_2),
+                        stringResource(R.string.auth_role_driver_point_3),
+                        stringResource(R.string.auth_role_driver_point_4)
                     )
                 )
                 
@@ -358,7 +351,7 @@ fun RoleGuideDialog(onDismiss: () -> Unit) {
                 
                 // Got It Button
                 PrimaryButton(
-                    text = "Got It!",
+                    text = stringResource(R.string.auth_role_got_it),
                     onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth()
                 )

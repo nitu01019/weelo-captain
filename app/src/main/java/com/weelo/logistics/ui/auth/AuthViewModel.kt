@@ -1,5 +1,6 @@
 package com.weelo.logistics.ui.auth
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.weelo.logistics.WeeloApp
@@ -8,12 +9,19 @@ import com.weelo.logistics.data.api.VerifyOTPRequest
 import com.weelo.logistics.data.api.DriverSendOtpRequest
 import com.weelo.logistics.data.api.DriverVerifyOtpRequest
 import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.utils.AppSignatureHelper
+import com.weelo.logistics.utils.AuthOtpAutofillCoordinator
+import com.weelo.logistics.utils.AuthOtpAutofillCoordinator.OtpAutofillClearReason
 import com.weelo.logistics.utils.GlobalRateLimiters
 import com.weelo.logistics.utils.InputValidator
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -47,6 +55,64 @@ class AuthViewModel : ViewModel() {
     
     // Rate limiters
     private val otpRateLimiter = GlobalRateLimiters.otp
+    private var appHashLoggedForSession = false
+
+    private val _uiEffects = MutableSharedFlow<AuthUiEffect>(extraBufferCapacity = 16)
+    val uiEffects: SharedFlow<AuthUiEffect> = _uiEffects.asSharedFlow()
+
+    val otpAutofillUiState: StateFlow<AuthOtpAutofillCoordinator.OtpAutofillUiState> =
+        AuthOtpAutofillCoordinator.uiState
+
+    suspend fun prepareOtpAutofillForSend(context: Context, phone: String, role: String): Long {
+        return AuthOtpAutofillCoordinator.prepareForOtpSend(
+            context = context.applicationContext,
+            phone = phone,
+            role = role
+        )
+    }
+
+    suspend fun attachOtpAutofill(context: Context, phone: String, role: String) {
+        AuthOtpAutofillCoordinator.attachOtpScreen(
+            context = context.applicationContext,
+            phone = phone,
+            role = role
+        )
+        if (!appHashLoggedForSession && timber.log.Timber.treeCount > 0) {
+            AppSignatureHelper.getAppSignatures(context.applicationContext)
+            appHashLoggedForSession = true
+        }
+    }
+
+    suspend fun clearOtpAutofill(reason: OtpAutofillClearReason) {
+        AuthOtpAutofillCoordinator.clearSession(reason)
+    }
+
+    suspend fun restartOtpAutofill(context: Context, phone: String, role: String) {
+        AuthOtpAutofillCoordinator.restartForResend(
+            context = context.applicationContext,
+            phone = phone,
+            role = role
+        )
+    }
+
+    fun resendOtp(context: Context, phone: String, role: String) {
+        viewModelScope.launch {
+            restartOtpAutofill(context, phone, role)
+            if (role.equals("driver", ignoreCase = true)) {
+                sendDriverOTP(phone, skipLocalRateLimit = true)
+            } else {
+                sendTransporterOTP(phone, skipLocalRateLimit = true)
+            }
+        }
+    }
+
+    fun verifyOtpForRole(phone: String, role: String, otp: String) {
+        if (role.equals("driver", ignoreCase = true)) {
+            verifyDriverOTP(phone, otp)
+        } else {
+            verifyTransporterOTP(phone, otp)
+        }
+    }
     
     /**
      * Send OTP for Driver Login
@@ -57,7 +123,7 @@ class AuthViewModel : ViewModel() {
      * 
      * Calls: POST /api/v1/driver-auth/send-otp
      */
-    fun sendDriverOTP(driverPhone: String) {
+    fun sendDriverOTP(driverPhone: String, skipLocalRateLimit: Boolean = false) {
         viewModelScope.launch {
             // Step 1: Validate input
             val validation = InputValidator.validatePhoneNumber(driverPhone)
@@ -67,11 +133,13 @@ class AuthViewModel : ViewModel() {
             }
             
             // Step 2: Check rate limiting
-            val rateLimit = otpRateLimiter.tryAcquire(driverPhone)
-            if (!rateLimit) {
-                val retryAfter = otpRateLimiter.getTimeUntilReset(driverPhone) / 1000
-                _authState.value = AuthState.RateLimited(retryAfter)
-                return@launch
+            if (!skipLocalRateLimit) {
+                val rateLimit = otpRateLimiter.tryAcquire(driverPhone)
+                if (!rateLimit) {
+                    val retryAfter = otpRateLimiter.getTimeUntilReset(driverPhone) / 1000
+                    _authState.value = AuthState.RateLimited(retryAfter)
+                    return@launch
+                }
             }
             
             // Step 3: Show loading state
@@ -101,6 +169,7 @@ class AuthViewModel : ViewModel() {
                         _authState.value = AuthState.Error(errorMsg)
                     }
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     _authState.value = AuthState.Error(
                         when {
                             e.message?.contains("timeout", true) == true -> "Connection timed out. Please check your internet and try again."
@@ -122,14 +191,18 @@ class AuthViewModel : ViewModel() {
      * Calls: POST /api/v1/auth/send-otp with role="transporter"
      */
     fun sendTransporterOTP(transporterPhone: String) {
-        sendOTP(transporterPhone, "transporter")
+        sendTransporterOTP(transporterPhone, skipLocalRateLimit = false)
+    }
+
+    fun sendTransporterOTP(transporterPhone: String, skipLocalRateLimit: Boolean = false) {
+        sendOTP(transporterPhone, "transporter", skipLocalRateLimit)
     }
     
     /**
      * Generic Send OTP function (for Customer/Transporter)
      * NOT used for Driver - drivers use sendDriverOTP()
      */
-    private fun sendOTP(phone: String, role: String) {
+    private fun sendOTP(phone: String, role: String, skipLocalRateLimit: Boolean = false) {
         viewModelScope.launch {
             // Step 1: Validate input
             val validation = InputValidator.validatePhoneNumber(phone)
@@ -139,11 +212,13 @@ class AuthViewModel : ViewModel() {
             }
             
             // Step 2: Check rate limiting
-            val rateLimit = otpRateLimiter.tryAcquire(phone)
-            if (!rateLimit) {
-                val retryAfter = otpRateLimiter.getTimeUntilReset(phone) / 1000
-                _authState.value = AuthState.RateLimited(retryAfter)
-                return@launch
+            if (!skipLocalRateLimit) {
+                val rateLimit = otpRateLimiter.tryAcquire(phone)
+                if (!rateLimit) {
+                    val retryAfter = otpRateLimiter.getTimeUntilReset(phone) / 1000
+                    _authState.value = AuthState.RateLimited(retryAfter)
+                    return@launch
+                }
             }
             
             // Step 3: Show loading state
@@ -169,6 +244,7 @@ class AuthViewModel : ViewModel() {
                         _authState.value = AuthState.Error(errorMsg)
                     }
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     _authState.value = AuthState.Error(
                         when {
                             e.message?.contains("timeout", true) == true -> "Connection timed out. Please check your internet and try again."
@@ -224,6 +300,9 @@ class AuthViewModel : ViewModel() {
                         WeeloApp.getInstance()?.applicationContext?.let { ctx ->
                             val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences.getInstance(ctx)
                             driverPrefs.restoreLanguageIfNeeded(data?.driver?.preferredLanguage)
+                            if (data?.driver?.isProfileCompleted == true) {
+                                driverPrefs.markProfileCompleted()
+                            }
                         }
                         
                         // Connect WebSocket for real-time broadcasts
@@ -237,8 +316,11 @@ class AuthViewModel : ViewModel() {
                             refreshToken = data?.refreshToken ?: "",
                             isNewUser = false,
                             transporterId = data?.driver?.transporterId,
-                            transporterName = data?.driver?.transporterName
+                            transporterName = data?.driver?.transporterName,
+                            preferredLanguage = data?.driver?.preferredLanguage,
+                            isProfileCompleted = data?.driver?.isProfileCompleted ?: false
                         )
+                        _uiEffects.tryEmit(AuthUiEffect.OtpVerificationSucceeded)
                     } else {
                         val errorMsg = response.body()?.error?.message
                             ?.takeIf { !it.startsWith("{") }
@@ -246,6 +328,7 @@ class AuthViewModel : ViewModel() {
                         _authState.value = AuthState.Error(errorMsg)
                     }
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     _authState.value = AuthState.Error(
                         when {
                             e.message?.contains("timeout", true) == true -> "Connection timed out. Please check your internet and try again."
@@ -316,8 +399,10 @@ class AuthViewModel : ViewModel() {
                             role = role.uppercase(),
                             authToken = data?.tokens?.accessToken ?: "",
                             refreshToken = data?.tokens?.refreshToken ?: "",
-                            isNewUser = data?.isNewUser ?: false
+                            isNewUser = data?.isNewUser ?: false,
+                            preferredLanguage = data?.preferredLanguage
                         )
+                        _uiEffects.tryEmit(AuthUiEffect.OtpVerificationSucceeded)
                     } else {
                         val errorMsg = response.body()?.error?.message
                             ?.takeIf { !it.startsWith("{") }
@@ -325,6 +410,7 @@ class AuthViewModel : ViewModel() {
                         _authState.value = AuthState.Error(errorMsg)
                     }
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     _authState.value = AuthState.Error(
                         when {
                             e.message?.contains("timeout", true) == true -> "Connection timed out. Please check your internet and try again."
@@ -460,9 +546,13 @@ class AuthViewModel : ViewModel() {
             // OTP Errors
             "OTP_EXPIRED" -> "OTP has expired. Please request a new one."
             "INVALID_OTP" -> "Incorrect OTP. Please check and try again."
+            "OTP_INVALID" -> "Incorrect OTP. Please check and try again."
+            "OTP_NOT_FOUND" -> "No OTP request found. Please request a new OTP."
             "OTP_ALREADY_VERIFIED" -> "This OTP has already been used. Please request a new one."
             "OTP_MAX_ATTEMPTS" -> "Too many incorrect attempts. Please request a new OTP."
+            "MAX_ATTEMPTS" -> "Too many incorrect attempts. Please request a new OTP."
             "OTP_SEND_FAILED" -> "Could not send OTP. Please check your number and try again."
+            "OTP_VERIFY_IN_PROGRESS" -> "OTP verification is already in progress. Please try again."
             
             // User/Account Errors
             "USER_NOT_FOUND" -> "No account found with this phone number."
@@ -557,7 +647,9 @@ sealed class AuthState {
         val isNewUser: Boolean = false,
         // Driver-specific: which transporter this driver belongs to
         val transporterId: String? = null,
-        val transporterName: String? = null
+        val transporterName: String? = null,
+        val preferredLanguage: String? = null,
+        val isProfileCompleted: Boolean? = null
     ) : AuthState()
     
     // Error occurred - show error message
@@ -568,4 +660,8 @@ sealed class AuthState {
     
     // User logged out - navigate to login
     object LoggedOut : AuthState()
+}
+
+sealed class AuthUiEffect {
+    object OtpVerificationSucceeded : AuthUiEffect()
 }
