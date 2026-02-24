@@ -2,25 +2,23 @@
 <!--
     RELEASE Network Security Config — Weelo Captain App
     ====================================================
-    HTTPS enforced for ALL domains in release builds.
-    No cleartext traffic permitted — Play Store compliant.
-    When HTTPS listener is added to ALB, release builds automatically work.
+    Current infra uses HTTP on the AWS ALB (no HTTPS listener/domain yet).
+    Release builds allow cleartext ONLY for the exact ALB host.
+    All other domains remain HTTPS-only.
 -->
 <network-security-config>
 
-    <!-- Default: HTTPS only — no cleartext in release ever -->
+    <!-- Default: HTTPS only -->
     <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
 
-    <!-- Production domain — HTTPS enforced -->
+    <!-- Production domains — HTTPS enforced -->
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">weelo.in</domain>
         <domain includeSubdomains="true">api.weelo.in</domain>
-        <domain includeSubdomains="true">weelo-alb-380596483.ap-south-1.elb.amazonaws.com</domain>
-        <domain includeSubdomains="true">amazonaws.com</domain>
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
@@ -31,6 +29,12 @@
                 <pin digest="SHA-256">YOUR_INTERMEDIATE_CA_PIN_HERE=</pin>
             </pin-set>
         -->
+    </domain-config>
+
+    <!-- AWS ALB — HTTP only until HTTPS listener/domain is configured -->
+    <!-- Keep this scope narrow: exact ALB hostname only -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">weelo-alb-380596483.ap-south-1.elb.amazonaws.com</domain>
     </domain-config>
 
 </network-security-config>
