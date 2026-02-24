@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 /**
@@ -63,12 +64,29 @@ class AuthViewModel : ViewModel() {
     val otpAutofillUiState: StateFlow<AuthOtpAutofillCoordinator.OtpAutofillUiState> =
         AuthOtpAutofillCoordinator.uiState
 
-    suspend fun prepareOtpAutofillForSend(context: Context, phone: String, role: String): Long {
-        return AuthOtpAutofillCoordinator.prepareForOtpSend(
-            context = context.applicationContext,
-            phone = phone,
-            role = role
-        )
+    suspend fun prepareOtpAutofillForSend(context: Context, phone: String, role: String): Long? {
+        return try {
+            withTimeoutOrNull(1_500) {
+                AuthOtpAutofillCoordinator.prepareForOtpSend(
+                    context = context.applicationContext,
+                    phone = phone,
+                    role = role
+                )
+            }.also { sessionId ->
+                if (sessionId == null) {
+                    timber.log.Timber.w(
+                        "OTP autofill prewarm timed out; proceeding with OTP send (phone=%s, role=%s)",
+                        phone.takeLast(4),
+                        role
+                    )
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            timber.log.Timber.w(e, "OTP autofill prewarm failed; proceeding with manual OTP fallback")
+            null
+        }
     }
 
     suspend fun attachOtpAutofill(context: Context, phone: String, role: String) {

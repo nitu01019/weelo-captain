@@ -448,7 +448,7 @@ private fun OTPHeader(
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = if (role == "DRIVER") {
+            text = if (role.equals("driver", ignoreCase = true)) {
                 stringResource(R.string.auth_otp_sent_to_transporter_format, phoneNumber)
             } else {
                 stringResource(R.string.auth_otp_sent_to_format, phoneNumber)

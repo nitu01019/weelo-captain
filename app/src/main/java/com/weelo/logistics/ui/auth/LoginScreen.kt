@@ -125,7 +125,7 @@ fun LoginScreen(
                     phone = phone,
                     role = role
                 )
-                if (role == "DRIVER") {
+                if (normalizedRole == "driver") {
                     authViewModel.sendDriverOTP(phone)
                 } else {
                     authViewModel.sendTransporterOTP(phone)
@@ -268,7 +268,7 @@ fun LoginScreen(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = if (role == "DRIVER") {
+                            text = if (normalizedRole == "driver") {
                                 stringResource(R.string.auth_login_subtitle_driver)
                             } else {
                                 stringResource(R.string.auth_login_subtitle_transporter)
@@ -360,7 +360,8 @@ private fun LoginHeroBanner(
     modifier: Modifier = Modifier
 ) {
     val screenConfig = rememberScreenConfig()
-    val artworkRes = if (role == "DRIVER") {
+    val isDriver = role.equals("driver", ignoreCase = true)
+    val artworkRes = if (isDriver) {
         com.weelo.logistics.R.drawable.card_auth_role_driver_soft
     } else {
         com.weelo.logistics.R.drawable.card_auth_role_transporter_soft
@@ -371,7 +372,7 @@ private fun LoginHeroBanner(
     ) {
         Image(
             painter = painterResource(id = artworkRes),
-            contentDescription = if (role == "DRIVER") {
+            contentDescription = if (isDriver) {
                 stringResource(R.string.auth_login_cd_driver_banner)
             } else {
                 stringResource(R.string.auth_login_cd_transporter_banner)
@@ -416,14 +417,14 @@ private fun LoginHeroBanner(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = if (role == "DRIVER") Icons.Default.DirectionsCar else Icons.Default.LocalShipping,
+                        imageVector = if (isDriver) Icons.Default.DirectionsCar else Icons.Default.LocalShipping,
                         contentDescription = null,
                         tint = Primary,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        if (role == "DRIVER") {
+                        if (isDriver) {
                             stringResource(R.string.auth_role_driver)
                         } else {
                             stringResource(R.string.auth_role_transporter)
@@ -585,7 +586,7 @@ private fun LoginFooter(
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = if (role == "DRIVER") {
+                text = if (role.equals("driver", ignoreCase = true)) {
                     stringResource(R.string.auth_login_footer_driver_help)
                 } else {
                     stringResource(R.string.auth_login_footer_transporter_help)
