@@ -19,8 +19,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.weelo.logistics.R
 import com.weelo.logistics.data.api.VehicleData
 import com.weelo.logistics.data.cache.AppCache
 import com.weelo.logistics.data.cache.VehicleStats
@@ -196,20 +198,12 @@ fun FleetListScreen(
             when {
                 // Only show spinner if loading AND no cached data
                 isLoading && vehicles.isEmpty() -> {
-                    // First load - show spinner
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = Primary)
-                            Spacer(Modifier.height(16.dp))
-                            Text(
-                                "Loading vehicles...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = TextSecondary
-                            )
-                        }
+                    // First load - show list skeleton (faster perceived load than blocking spinner)
+                    ProvideShimmerBrush {
+                        SkeletonList(
+                            itemCount = 5,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
+                        )
                     }
                 }
                 
@@ -247,32 +241,21 @@ fun FleetListScreen(
                 }
                 
                 filteredVehicles.isEmpty() -> {
-                    // Empty State
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
                     ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.padding(32.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.LocalShipping,
-                                contentDescription = null,
-                                modifier = Modifier.size(80.dp),
-                                tint = TextDisabled
+                        if (vehicles.isEmpty()) {
+                            EmptyVehicles(
+                                onAddVehicle = onNavigateToAddVehicle
                             )
-                            Spacer(Modifier.height(16.dp))
-                            Text(
-                                if (vehicles.isEmpty()) "No vehicles yet" else "No vehicles match filter",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = TextSecondary
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                if (vehicles.isEmpty()) "Tap + to add your first vehicle" else "Try a different filter",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = TextSecondary
+                        } else {
+                            EmptyStateHost(
+                                spec = filterEmptyStateSpec(
+                                    artwork = EmptyStateArtwork.FLEET_FILTER,
+                                    title = stringResource(R.string.empty_title_fleet_filter),
+                                    subtitle = stringResource(R.string.empty_subtitle_fleet_filter)
+                                )
                             )
                         }
                     }

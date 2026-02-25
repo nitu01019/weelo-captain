@@ -1,13 +1,27 @@
 # Weelo Captain - ProGuard Rules for Production
 # Optimizes APK size and performance
 
+# Keep generic signatures + runtime annotations for Retrofit/Gson reflection.
+# Without this, release builds can fail at runtime with:
+# ClassCastException: Class cannot be cast to ParameterizedType
+-keepattributes Signature,InnerClasses,EnclosingMethod,*Annotation*
+
 # Keep application classes
 -keep class com.weelo.logistics.** { *; }
+-keep interface com.weelo.logistics.** { *; }
 
 # Retrofit & OkHttp
 -dontwarn okhttp3.**
 -keep class okhttp3.** { *; }
 -keep class retrofit2.** { *; }
+-keep interface retrofit2.** { *; }
+-keep class kotlin.coroutines.Continuation { *; }
+
+# Keep Retrofit API interfaces and HTTP-annotated methods for runtime parsing
+-keep interface com.weelo.logistics.data.api.** { *; }
+-keepclassmembers,allowshrinking,allowobfuscation interface * {
+    @retrofit2.http.* <methods>;
+}
 
 # Coil (Image Loading)
 -keep class coil.** { *; }

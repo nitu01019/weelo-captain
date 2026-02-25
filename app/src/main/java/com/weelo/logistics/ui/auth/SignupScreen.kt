@@ -1,6 +1,11 @@
 package com.weelo.logistics.ui.auth
 import com.weelo.logistics.ui.components.FuturisticPhoneInput
 import com.weelo.logistics.ui.components.FuturisticButton
+import com.weelo.logistics.ui.components.CardArtwork
+import com.weelo.logistics.ui.components.CardArtworkPlacement
+import com.weelo.logistics.ui.components.CardMediaSpec
+import com.weelo.logistics.ui.components.InlineInfoBannerCard
+import com.weelo.logistics.ui.components.MediaHeaderCard
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -28,6 +33,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -110,6 +116,9 @@ fun SignupScreen(
     
     // Responsive layout support
     val screenConfig = rememberScreenConfig()
+    val signupContentWidthModifier = Modifier
+        .fillMaxWidth()
+        .widthIn(max = if (screenConfig.isLandscape) 620.dp else 560.dp)
     
     Box(
         modifier = Modifier
@@ -201,7 +210,7 @@ fun SignupScreen(
                 }
             }
             
-            Spacer(modifier = Modifier.height(40.dp))
+            Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 24.dp else 40.dp))
             
             // Progress indicator
             LinearProgressIndicator(
@@ -217,101 +226,94 @@ fun SignupScreen(
                 trackColor = Color.White.copy(alpha = 0.2f)
             )
             
-            Spacer(modifier = Modifier.height(40.dp))
+            Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 24.dp else 40.dp))
             
-            when (currentStep) {
-                1 -> {
-                    // Step 1: Phone Number
-                    PhoneNumberStep(
-                        phoneNumber = phoneNumber,
-                        onPhoneChange = { 
-                            if (it.length <= 10 && it.all { char -> char.isDigit() }) {
-                                phoneNumber = it.trim()
+            Box(modifier = signupContentWidthModifier) {
+                when (currentStep) {
+                    1 -> {
+                        // Step 1: Phone Number
+                        PhoneNumberStep(
+                            phoneNumber = phoneNumber,
+                            onPhoneChange = {
+                                if (it.length <= 10 && it.all { char -> char.isDigit() }) {
+                                    phoneNumber = it.trim()
+                                    errorMessage = ""
+                                }
+                            },
+                            errorMessage = errorMessage,
+                            role = role,
+                            onNext = {
+                                if (!clickDebouncer.canClick()) return@PhoneNumberStep
+                                
+                                val validation = InputValidator.validatePhoneNumber(phoneNumber)
+                                if (!validation.isValid) {
+                                    errorMessage = validation.errorMessage!!
+                                    return@PhoneNumberStep
+                                }
+                                
+                                onNavigateToOTP(phoneNumber, role, true)
+                            }
+                        )
+                    }
+                    
+                    2 -> {
+                        FullNameStep(
+                            fullName = fullName,
+                            onNameChange = {
+                                fullName = it.trim()
                                 errorMessage = ""
+                            },
+                            errorMessage = errorMessage,
+                            onNext = {
+                                if (!clickDebouncer.canClick()) return@FullNameStep
+                                
+                                val validation = InputValidator.validateName(fullName)
+                                if (!validation.isValid) {
+                                    errorMessage = validation.errorMessage!!
+                                    return@FullNameStep
+                                }
+                                
+                                fullName = DataSanitizer.sanitizeForDisplay(fullName)
+                                currentStep = 3
                             }
-                        },
-                        errorMessage = errorMessage,
-                        role = role,
-                        onNext = {
-                            if (!clickDebouncer.canClick()) return@PhoneNumberStep
-                            
-                            // Use InputValidator for proper validation
-                            val validation = InputValidator.validatePhoneNumber(phoneNumber)
-                            if (!validation.isValid) {
-                                errorMessage = validation.errorMessage!!
-                                return@PhoneNumberStep
-                            }
-                            
-                            // Navigate to OTP verification
-                            onNavigateToOTP(phoneNumber, role, true)
-                        }
-                    )
-                }
-                
-                2 -> {
-                    // Step 2: Full Name
-                    FullNameStep(
-                        fullName = fullName,
-                        onNameChange = { 
-                            fullName = it.trim()
-                            errorMessage = ""
-                        },
-                        errorMessage = errorMessage,
-                        onNext = {
-                            if (!clickDebouncer.canClick()) return@FullNameStep
-                            
-                            // Use InputValidator for proper validation
-                            val validation = InputValidator.validateName(fullName)
-                            if (!validation.isValid) {
-                                errorMessage = validation.errorMessage!!
-                                return@FullNameStep
-                            }
-                            
-                            // Sanitize name for safety
-                            fullName = DataSanitizer.sanitizeForDisplay(fullName)
-                            currentStep = 3
-                        }
-                    )
-                }
-                
-                3 -> {
-                    // Step 3: Location
-                    LocationStep(
-                        location = location,
-                        isLoadingLocation = isLoadingLocation,
-                        errorMessage = errorMessage,
-                        onFetchLocation = {
-                            // Check permission
-                            when (PackageManager.PERMISSION_GRANTED) {
-                                ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.ACCESS_FINE_LOCATION
-                                ) -> {
-                                    scope.launch {
-                                        isLoadingLocation = true
-                                        location = fetchCurrentLocation(context) ?: "Unable to fetch location"
-                                        isLoadingLocation = false
+                        )
+                    }
+                    
+                    3 -> {
+                        LocationStep(
+                            location = location,
+                            isLoadingLocation = isLoadingLocation,
+                            errorMessage = errorMessage,
+                            onFetchLocation = {
+                                when (PackageManager.PERMISSION_GRANTED) {
+                                    ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.ACCESS_FINE_LOCATION
+                                    ) -> {
+                                        scope.launch {
+                                            isLoadingLocation = true
+                                            location = fetchCurrentLocation(context) ?: "Unable to fetch location"
+                                            isLoadingLocation = false
+                                        }
+                                    }
+                                    else -> {
+                                        locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
                                     }
                                 }
-                                else -> {
-                                    locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                            },
+                            onComplete = {
+                                if (location.isEmpty()) {
+                                    errorMessage = "Please fetch your location"
+                                } else {
+                                    isLoading = true
+                                    scope.launch {
+                                        onNavigateToLogin()
+                                    }
                                 }
-                            }
-                        },
-                        onComplete = {
-                            if (location.isEmpty()) {
-                                errorMessage = "Please fetch your location"
-                            } else {
-                                isLoading = true
-                                scope.launch {
-                                    // TODO BACKEND: Register user with API
-                                    // Navigate instantly - no fake delays ⚡
-                                    onNavigateToLogin()
-                                }
-                            }
-                        },
-                        isLoading = isLoading
-                    )
+                            },
+                            isLoading = isLoading
+                        )
+                    }
                 }
             }
             
@@ -319,7 +321,7 @@ fun SignupScreen(
             
             // Already have account
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = signupContentWidthModifier,
                 horizontalArrangement = Arrangement.Center
             ) {
                 Text(
@@ -349,27 +351,45 @@ fun PhoneNumberStep(
     role: String,
     onNext: () -> Unit
 ) {
+    val screenConfig = rememberScreenConfig()
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start
     ) {
-        Text(
-            text = "What's your phone\nnumber?",
-            fontSize = 32.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            lineHeight = 40.sp
+        MediaHeaderCard(
+            title = "What's your phone number?",
+            subtitle = if (role == "DRIVER") {
+                "We'll send a verification code to your registered transporter contact flow."
+            } else {
+                "We'll send you a verification code to continue."
+            },
+            mediaSpec = CardMediaSpec(
+                artwork = CardArtwork.AUTH_SIGNUP_PHONE,
+                headerHeight = if (screenConfig.isLandscape) 102.dp else 118.dp,
+                placement = CardArtworkPlacement.TOP_INSET,
+                contentScale = ContentScale.Fit,
+                containerColor = White,
+                showInsetFrame = true,
+                insetPadding = 8.dp,
+                enableImageFadeIn = true,
+                imageFadeDurationMs = 170
+            ),
+            trailingHeaderContent = {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color.White.copy(alpha = 0.95f)
+                ) {
+                    Text(
+                        text = if (role == "DRIVER") "Driver" else "Transporter",
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextPrimary
+                    )
+                }
+            }
         )
         
-        Spacer(modifier = Modifier.height(12.dp))
-        
-        Text(
-            text = "We'll send you a verification code",
-            fontSize = 14.sp,
-            color = Color.White.copy(alpha = 0.6f)
-        )
-        
-        Spacer(modifier = Modifier.height(40.dp))
+        Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 24.dp else 40.dp))
         
         FuturisticPhoneInput(
             value = phoneNumber,
@@ -378,7 +398,7 @@ fun PhoneNumberStep(
             error = errorMessage
         )
         
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 20.dp else 32.dp))
         
         FuturisticButton(
             text = "Send OTP",
@@ -395,27 +415,28 @@ fun FullNameStep(
     errorMessage: String,
     onNext: () -> Unit
 ) {
+    val screenConfig = rememberScreenConfig()
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start
     ) {
-        Text(
-            text = "What's your name?",
-            fontSize = 32.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
+        MediaHeaderCard(
+            title = "What's your name?",
+            subtitle = "Enter your full name as it appears on official documents.",
+            mediaSpec = CardMediaSpec(
+                artwork = CardArtwork.AUTH_SIGNUP_NAME,
+                headerHeight = if (screenConfig.isLandscape) 102.dp else 118.dp,
+                placement = CardArtworkPlacement.TOP_INSET,
+                contentScale = ContentScale.Fit,
+                containerColor = White,
+                showInsetFrame = true,
+                insetPadding = 8.dp,
+                enableImageFadeIn = true,
+                imageFadeDurationMs = 170
+            )
         )
         
-        Spacer(modifier = Modifier.height(12.dp))
-        
-        Text(
-            text = "Enter your full name as it appears\non official documents",
-            fontSize = 14.sp,
-            color = Color.White.copy(alpha = 0.6f),
-            lineHeight = 20.sp
-        )
-        
-        Spacer(modifier = Modifier.height(40.dp))
+        Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 24.dp else 40.dp))
         
         FuturisticTextInput(
             value = fullName,
@@ -425,7 +446,7 @@ fun FullNameStep(
             error = errorMessage
         )
         
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 20.dp else 32.dp))
         
         FuturisticButton(
             text = "Next",
@@ -444,26 +465,28 @@ fun LocationStep(
     onComplete: () -> Unit,
     isLoading: Boolean
 ) {
+    val screenConfig = rememberScreenConfig()
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start
     ) {
-        Text(
-            text = "Your Location",
-            fontSize = 32.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
+        MediaHeaderCard(
+            title = "Your Location",
+            subtitle = "This helps people find work near you.",
+            mediaSpec = CardMediaSpec(
+                artwork = CardArtwork.AUTH_SIGNUP_LOCATION,
+                headerHeight = if (screenConfig.isLandscape) 102.dp else 118.dp,
+                placement = CardArtworkPlacement.TOP_INSET,
+                contentScale = ContentScale.Fit,
+                containerColor = White,
+                showInsetFrame = true,
+                insetPadding = 8.dp,
+                enableImageFadeIn = true,
+                imageFadeDurationMs = 170
+            )
         )
         
-        Spacer(modifier = Modifier.height(12.dp))
-        
-        Text(
-            text = "This helps people find work near you",
-            fontSize = 14.sp,
-            color = Color.White.copy(alpha = 0.6f)
-        )
-        
-        Spacer(modifier = Modifier.height(40.dp))
+        Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 24.dp else 40.dp))
         
         // Location input with auto-fetch button
         Row(
@@ -476,7 +499,7 @@ fun LocationStep(
                     onValueChange = { /* Read-only for now */ },
                     label = "e.g. Mumbai, Delhi",
                     icon = Icons.Default.LocationOn,
-                    error = errorMessage,
+                    error = "",
                     readOnly = true
                 )
             }
@@ -512,8 +535,28 @@ fun LocationStep(
                 }
             }
         }
+
+        if (isLoadingLocation) {
+            Spacer(modifier = Modifier.height(12.dp))
+            InlineInfoBannerCard(
+                title = "Fetching location",
+                subtitle = "Getting your current location from device GPS...",
+                icon = Icons.Default.MyLocation,
+                iconTint = Primary,
+                containerColor = Color.White.copy(alpha = 0.08f)
+            )
+        } else if (errorMessage.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            InlineInfoBannerCard(
+                title = "Location required",
+                subtitle = errorMessage,
+                icon = Icons.Default.ErrorOutline,
+                iconTint = Error,
+                containerColor = Color.White.copy(alpha = 0.08f)
+            )
+        }
         
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(if (screenConfig.isLandscape) 20.dp else 32.dp))
         
         FuturisticButton(
             text = "Complete Registration",

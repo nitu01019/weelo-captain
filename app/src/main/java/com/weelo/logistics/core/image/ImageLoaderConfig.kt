@@ -63,8 +63,6 @@ object ImageLoaderConfig {
             // We control cache invalidation via URL-based cache keys instead.
             // New photo upload = new S3 path = automatic cache miss = fresh fetch.
             .respectCacheHeaders(false)
-            // Smooth crossfade transition (300ms — Instagram standard)
-            .crossfade(300)
             .build()
     }
     

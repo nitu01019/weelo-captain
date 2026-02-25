@@ -97,7 +97,7 @@ object Elevation {
 object AnimationDuration {
     val instant = 0
     val fast = 150
-    val normal = 300
+    val normal = 220
     val slow = 450
     val slower = 600
     
@@ -106,4 +106,11 @@ object AnimationDuration {
     val skeleton = 1000
     val pageTransition = 300
     val buttonPress = 100
+}
+
+object InteractionMotion {
+    // Premium-balanced motion profile for operational UI.
+    val micro = 150
+    val standard = 220
+    val emphasis = 300
 }

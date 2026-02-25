@@ -18,10 +18,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.ui.components.*
@@ -34,8 +37,8 @@ import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.launch
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.runtime.collectAsState
 import com.weelo.logistics.R
+import com.weelo.logistics.ui.utils.SocketUiEventDeduper
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.roundToInt
@@ -71,9 +74,9 @@ fun DriverDashboardScreen(
     onOpenFullMap: (String) -> Unit = {},
     onLogout: () -> Unit = {}
 ) {
-    val dashboardState by viewModel.dashboardState.collectAsState()
-    val isRefreshing by viewModel.isRefreshing.collectAsState()
-    val isToggling by viewModel.isToggling.collectAsState()
+    val dashboardState by viewModel.dashboardState.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val isToggling by viewModel.isToggling.collectAsStateWithLifecycle()
     // NOTE: viewModel.isInitialLoad is available for future use (e.g., showing
     // different UI on first launch vs returning user). Currently, the conditional
     // drawer + AnimatedContent handles state transitions automatically.
@@ -83,7 +86,9 @@ fun DriverDashboardScreen(
     // Network monitoring for offline banner
     val context = LocalContext.current
     val networkMonitor = remember { NetworkMonitor.getInstance(context) }
-    val isOnline by networkMonitor.isOnline.collectAsState()
+    val isOnline by networkMonitor.isOnline.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val socketEventDeduper = remember { SocketUiEventDeduper(maxEntries = 64) }
     
     // =========================================================================
     // CACHED DRAWER PROFILE — prevents flickering
@@ -95,22 +100,20 @@ fun DriverDashboardScreen(
     // PERFORMANCE: O(1) — just a reference swap, no allocation on recompose.
     // =========================================================================
     var cachedProfile by remember { mutableStateOf<DrawerUserProfile?>(null) }
-    val driverProfile = remember(dashboardState) {
-        when (val state = dashboardState) {
-            is DriverDashboardState.Success -> {
-                val profile = DrawerUserProfile(
-                    id = state.data.driverId,
-                    name = "Driver",
-                    phone = "",
-                    role = "driver"
-                )
-                cachedProfile = profile
-                profile
-            }
-            // Keep showing cached profile during loading/error — no flicker
-            else -> cachedProfile
+    val latestProfile = (dashboardState as? DriverDashboardState.Success)?.let { success ->
+        DrawerUserProfile(
+            id = success.data.driverId,
+            name = "Driver",
+            phone = "",
+            role = "driver"
+        )
+    }
+    LaunchedEffect(latestProfile) {
+        if (latestProfile != null) {
+            cachedProfile = latestProfile
         }
     }
+    val driverProfile = latestProfile ?: cachedProfile
     
     // Optimize: Use derivedStateOf for notification count
     val notificationCount by remember {
@@ -170,34 +173,54 @@ fun DriverDashboardScreen(
     val driverContext = androidx.compose.ui.platform.LocalContext.current
     var lastCancelledCustomerPhone by remember { mutableStateOf("") }
     
-    LaunchedEffect(Unit) {
-        SocketIOService.orderCancelled.collect { notification ->
-            timber.log.Timber.w("🚫 Order cancelled on driver dashboard: ${notification.orderId}")
-            lastCancelledCustomerPhone = notification.customerPhone
-            
-            val customerInfo = if (notification.customerName.isNotBlank()) 
-                "${notification.customerName}: " else ""
-            
-            val result = cancelSnackbarHostState.showSnackbar(
-                message = "❌ ${customerInfo}${notification.reason}",
-                actionLabel = if (notification.customerPhone.isNotBlank()) "📞 Call" else null,
-                duration = androidx.compose.material3.SnackbarDuration.Long
-            )
-            
-            // If user tapped "Call" action on snackbar
-            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed && 
-                lastCancelledCustomerPhone.isNotBlank()) {
-                val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
-                    data = android.net.Uri.parse("tel:$lastCancelledCustomerPhone")
-                    // FLAG_ACTIVITY_NEW_TASK required when launching from non-Activity context
-                    // (e.g. locale-wrapped context from MainActivity.attachBaseContext)
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            SocketIOService.orderCancelled.collect { notification ->
+                val dedupeKey = buildString {
+                    append(notification.orderId)
+                    append('|')
+                    append(notification.cancelledAt)
                 }
-                driverContext.startActivity(intent)
+                if (!socketEventDeduper.shouldHandle(dedupeKey)) {
+                    timber.log.Timber.d("⏭️ Skipping replayed order_cancelled event on driver dashboard: $dedupeKey")
+                    return@collect
+                }
+
+                timber.log.Timber.w("Order cancelled on driver dashboard: ${notification.orderId}")
+                lastCancelledCustomerPhone = notification.customerPhone
+
+                val customerInfo = if (notification.customerName.isNotBlank())
+                    "${notification.customerName}: " else ""
+                val cancelReason = notification.reason.ifBlank {
+                    driverContext.getString(R.string.order_cancelled)
+                }
+                val snackbarMessage = "$customerInfo$cancelReason"
+
+                val result = cancelSnackbarHostState.showSnackbar(
+                    message = snackbarMessage,
+                    actionLabel = if (notification.customerPhone.isNotBlank()) {
+                        driverContext.getString(R.string.call_customer)
+                    } else {
+                        null
+                    },
+                    duration = androidx.compose.material3.SnackbarDuration.Long
+                )
+
+                // If user tapped "Call" action on snackbar
+                if (result == androidx.compose.material3.SnackbarResult.ActionPerformed &&
+                    lastCancelledCustomerPhone.isNotBlank()) {
+                    val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
+                        data = android.net.Uri.parse("tel:$lastCancelledCustomerPhone")
+                        // FLAG_ACTIVITY_NEW_TASK required when launching from non-Activity context
+                        // (e.g. locale-wrapped context from MainActivity.attachBaseContext)
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    driverContext.startActivity(intent)
+                }
+
+                // Refresh dashboard data
+                viewModel.loadDashboardData()
             }
-            
-            // Refresh dashboard data
-            viewModel.loadDashboardData()
         }
     }
     
@@ -277,10 +300,20 @@ fun DriverDashboardScreen(
             ) {
                 Scaffold(
                     topBar = {
-                        DriverDashboardTopBar(
-                            driverName = "Driver",
-                            unreadCount = if (isContentReady) notificationCount else 0,
-                            onMenuClick = if (isContentReady) remember(scope, drawerState) { { scope.launch { drawerState.open() } } } else { {} },
+                        val dashboardContext = LocalContext.current
+                        val welcomeTitle = stringResource(
+                            R.string.welcome_format,
+                            "Driver"
+                        )
+                        DashboardTopBar(
+                            title = welcomeTitle,
+                            subtitle = getCurrentGreeting(dashboardContext),
+                            notificationCount = if (isContentReady) notificationCount else 0,
+                            onMenuClick = if (isContentReady) {
+                                remember(scope, drawerState) { { scope.launch { drawerState.open() } } }
+                            } else {
+                                {}
+                            },
                             onNotificationsClick = if (isContentReady) onNavigateToNotifications else { {} },
                             onProfileClick = if (isContentReady) onNavigateToProfile else { {} }
                         )
@@ -359,134 +392,6 @@ fun DriverDashboardScreen(
                 } // End Scaffold
             } // End ModalNavigationDrawer
     } // End run
-}
-
-/**
- * Driver Dashboard Top Bar with hamburger menu
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DriverDashboardTopBar(
-    driverName: String,
-    unreadCount: Int,
-    onMenuClick: () -> Unit,
-    onNotificationsClick: () -> Unit,
-    onProfileClick: () -> Unit
-) {
-    TopAppBar(
-        title = {
-            Column {
-                Text(
-                    text = stringResource(R.string.welcome_format, driverName.split(" ").firstOrNull() ?: "Driver"),
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-                val greetingContext = LocalContext.current
-                Text(
-                    text = getCurrentGreeting(greetingContext),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
-            }
-        },
-        navigationIcon = {
-            IconButton(onClick = onMenuClick) {
-                Icon(
-                    imageVector = Icons.Default.Menu,
-                    contentDescription = stringResource(R.string.cd_menu),
-                    tint = TextPrimary
-                )
-            }
-        },
-        actions = {
-            // Notifications with badge
-            IconButton(onClick = onNotificationsClick) {
-                Box {
-                    Icon(
-                        imageVector = Icons.Default.Notifications,
-                        contentDescription = stringResource(R.string.cd_notifications),
-                        tint = TextPrimary
-                    )
-                    if (unreadCount > 0) {
-                        Badge(
-                            containerColor = Error,
-                            modifier = Modifier.align(Alignment.TopEnd)
-                        ) {
-                            Text(
-                                text = if (unreadCount > 99) "99+" else unreadCount.toString(),
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
-                    }
-                }
-            }
-            // Profile
-            IconButton(onClick = onProfileClick) {
-                Icon(
-                    imageVector = Icons.Default.AccountCircle,
-                    contentDescription = stringResource(R.string.cd_profile),
-                    tint = TextPrimary
-                )
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = Surface
-        )
-    )
-}
-
-// Keep old DashboardTopBar for backward compatibility (can be removed later)
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DashboardTopBar(
-    unreadCount: Int,
-    onNotificationsClick: () -> Unit,
-    onProfileClick: () -> Unit
-) {
-    TopAppBar(
-        title = {
-            Column {
-                Text(
-                    text = stringResource(R.string.dashboard),
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-                val oldGreetingContext = LocalContext.current
-                Text(
-                    text = getCurrentGreeting(oldGreetingContext),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
-            }
-        },
-        actions = {
-            IconButton(onClick = onNotificationsClick) {
-                Box {
-                    Icon(
-                        imageVector = Icons.Default.Notifications,
-                        contentDescription = stringResource(R.string.cd_notifications)
-                    )
-                    if (unreadCount > 0) {
-                        NotificationBadge(
-                            count = unreadCount,
-                            modifier = Modifier.align(Alignment.TopEnd)
-                        )
-                    }
-                }
-            }
-            
-            IconButton(onClick = onProfileClick) {
-                Icon(
-                    imageVector = Icons.Default.AccountCircle,
-                    contentDescription = stringResource(R.string.cd_profile)
-                )
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        )
-    )
 }
 
 @Suppress("UNUSED_PARAMETER")
@@ -582,12 +487,19 @@ private fun DashboardContent(
             
             if (data.recentTrips.isEmpty()) {
                 item {
-                    EmptyState(
-                        icon = Icons.Default.History,
-                        title = stringResource(R.string.no_trips_yet),
-                        message = stringResource(R.string.no_trips_message),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        IllustratedEmptyState(
+                            illustrationRes = EmptyStateArtwork.TRIP_HISTORY.drawableRes,
+                            title = stringResource(R.string.empty_title_trip_history),
+                            subtitle = stringResource(R.string.empty_subtitle_trip_history),
+                            maxIllustrationWidthDp = 200,
+                            maxTextWidthDp = 280,
+                            sectionBackgroundColor = EmptyStateArtwork.TRIP_HISTORY.blendPalette().sectionBackground,
+                            sectionBlendMode = SectionBlendMode.PANEL,
+                            paletteHaloOverride = EmptyStateArtwork.TRIP_HISTORY.blendPalette().haloColor,
+                            paletteHaloAlphaOverride = EmptyStateArtwork.TRIP_HISTORY.blendPalette().haloAlpha
+                        )
+                    }
                 }
             } else {
                 // OPTIMIZATION: keys + contentType for efficient item recycling
@@ -612,12 +524,19 @@ private fun DashboardContent(
             
             if (data.notifications.isEmpty()) {
                 item {
-                    EmptyState(
-                        icon = Icons.Default.NotificationsNone,
-                        title = stringResource(R.string.no_notifications),
-                        message = stringResource(R.string.no_notifications_message),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        IllustratedEmptyState(
+                            illustrationRes = EmptyStateArtwork.NOTIFICATIONS_ALL_CAUGHT_UP.drawableRes,
+                            title = stringResource(R.string.empty_title_driver_notifications_caught_up),
+                            subtitle = stringResource(R.string.empty_subtitle_driver_notifications_caught_up),
+                            maxIllustrationWidthDp = 200,
+                            maxTextWidthDp = 280,
+                            sectionBackgroundColor = EmptyStateArtwork.NOTIFICATIONS_ALL_CAUGHT_UP.blendPalette().sectionBackground,
+                            sectionBlendMode = SectionBlendMode.PANEL,
+                            paletteHaloOverride = EmptyStateArtwork.NOTIFICATIONS_ALL_CAUGHT_UP.blendPalette().haloColor,
+                            paletteHaloAlphaOverride = EmptyStateArtwork.NOTIFICATIONS_ALL_CAUGHT_UP.blendPalette().haloAlpha
+                        )
+                    }
                 }
             } else {
                 // OPTIMIZATION: keys + contentType for efficient item recycling

@@ -17,8 +17,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.weelo.logistics.R
+import com.weelo.logistics.broadcast.BroadcastAssignmentCoordinator
+import com.weelo.logistics.broadcast.BroadcastAssignmentResult
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.repository.BroadcastRepository
 import com.weelo.logistics.data.repository.BroadcastResult
@@ -60,7 +64,11 @@ private fun DriverAssignmentAvailability.chipStatus(): ChipStatus {
 @Composable
 fun DriverAssignmentScreen(
     broadcastId: String,
-    selectedVehicleIds: List<String>,
+    holdId: String,
+    requiredVehicleType: String,
+    requiredVehicleSubtype: String,
+    requiredQuantity: Int,
+    preselectedVehicleIds: List<String> = emptyList(),
     onNavigateBack: () -> Unit,
     onNavigateToTracking: () -> Unit
 ) {
@@ -69,6 +77,7 @@ fun DriverAssignmentScreen(
     
     // Real repositories connected to backend
     val broadcastRepository = remember { BroadcastRepository.getInstance(context) }
+    val assignmentCoordinator = remember { BroadcastAssignmentCoordinator(broadcastRepository) }
     val vehicleRepository = remember { VehicleRepository.getInstance(context) }
     val driverRepository = remember { DriverRepository.getInstance(context) }
     
@@ -84,11 +93,19 @@ fun DriverAssignmentScreen(
     var successCount by remember { mutableStateOf(0) }
     val fleetDriversById = remember(fleetDrivers) { fleetDrivers.associateBy { it.id } }
     
+    val resolvedHoldId = remember(holdId) { holdId.trim().takeUnless { it.isBlank() } }
+
     // Fetch data from real backend
-    LaunchedEffect(broadcastId, selectedVehicleIds) {
+    LaunchedEffect(broadcastId, holdId, requiredVehicleType, requiredVehicleSubtype, requiredQuantity, preselectedVehicleIds) {
         scope.launch {
             isLoading = true
             errorMessage = null
+
+            if (preselectedVehicleIds.isEmpty() && resolvedHoldId == null) {
+                errorMessage = "Missing hold context. Reopen the request from broadcast list."
+                isLoading = false
+                return@launch
+            }
             
             // Fetch broadcast details
             when (val broadcastResult = broadcastRepository.getBroadcastById(broadcastId)) {
@@ -102,12 +119,42 @@ fun DriverAssignmentScreen(
                 is BroadcastResult.Loading -> {}
             }
             
-            // Fetch selected vehicles
+            // Fetch selected/matching vehicles
             when (val vehicleResult = vehicleRepository.fetchVehicles(forceRefresh = false)) {
                 is VehicleResult.Success -> {
-                    vehicles = vehicleRepository.mapToUiModels(
-                        vehicleResult.data.vehicles.filter { it.id in selectedVehicleIds }
-                    )
+                    val mappedVehicles = vehicleRepository.mapToUiModels(vehicleResult.data.vehicles)
+                    val availableVehicles = mappedVehicles.filter { it.status == VehicleStatus.AVAILABLE }
+
+                    vehicles = if (preselectedVehicleIds.isNotEmpty()) {
+                        availableVehicles.filter { it.id in preselectedVehicleIds }
+                    } else {
+                        val normalizedType = requiredVehicleType.trim().lowercase()
+                        val normalizedSubtype = requiredVehicleSubtype.trim().lowercase()
+                        val targetCount = requiredQuantity.coerceAtLeast(1)
+
+                        availableVehicles
+                            .filter { vehicle ->
+                                val vehicleTypeAliases = setOf(
+                                    vehicle.category.id.trim().lowercase(),
+                                    vehicle.category.name.trim().lowercase(),
+                                    vehicle.category.name.removeSuffix(" Truck").trim().lowercase()
+                                )
+                                val typeMatches = normalizedType.isBlank() ||
+                                    normalizedType == "_" ||
+                                    vehicleTypeAliases.contains(normalizedType)
+                                val subtypeMatches = normalizedSubtype.isBlank() ||
+                                    normalizedSubtype == "_" ||
+                                    vehicle.subtype.name.trim().lowercase() == normalizedSubtype
+                                typeMatches && subtypeMatches
+                            }
+                            .take(targetCount)
+                    }
+
+                    if (vehicles.isEmpty()) {
+                        errorMessage = "No available vehicles matched this hold."
+                    } else if (preselectedVehicleIds.isEmpty() && vehicles.size < requiredQuantity.coerceAtLeast(1)) {
+                        errorMessage = "Only ${vehicles.size} matching vehicle(s) available for required quantity ${requiredQuantity.coerceAtLeast(1)}."
+                    }
                 }
                 is VehicleResult.Error -> {
                     errorMessage = vehicleResult.message
@@ -205,8 +252,17 @@ fun DriverAssignmentScreen(
         )
         
         if (isLoading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Primary)
+            ProvideShimmerBrush {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    SectionSkeletonBlock(titleLineWidthFraction = 0.44f, rowCount = 2)
+                    SectionSkeletonBlock(titleLineWidthFraction = 0.36f, rowCount = 3, showLeadingAvatar = true)
+                    SkeletonList(itemCount = 3)
+                }
             }
         } else {
             LazyColumn(
@@ -345,51 +401,53 @@ fun DriverAssignmentScreen(
                         Spacer(Modifier.height(12.dp))
                     }
                     
-                    // Confirm Button - Calls acceptBroadcast API for each vehicle+driver pair
+                    // Confirm Button - canonical confirm-with-assignments flow
                     Button(
                         onClick = {
+                            if (isSubmitting) return@Button
+                            val submissionAssignments = readyAssignments
+                            if (submissionAssignments.isEmpty()) return@Button
+                            val currentHoldId = resolvedHoldId
+                            if (currentHoldId == null) {
+                                Toast.makeText(
+                                    context,
+                                    "Missing hold context. Reopen request from broadcast list.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                return@Button
+                            }
+
                             isSubmitting = true
-                            successCount = 0
+                            successCount = submissionAssignments.size
                             
                             scope.launch {
-                                var hasError = false
-                                
-                                // Call acceptBroadcast for each vehicle+driver assignment
-                                for ((vehicleId, driverId) in readyAssignments) {
-                                    timber.log.Timber.i(
-                                        "📤 Accepting broadcast: $broadcastId with vehicle: $vehicleId, driver: $driverId")
-                                    
-                                    when (val result = broadcastRepository.acceptBroadcast(
+                                when (
+                                    val result = assignmentCoordinator.confirmHoldAssignments(
                                         broadcastId = broadcastId,
-                                        vehicleId = vehicleId,
-                                        driverId = driverId
-                                    )) {
-                                        is BroadcastResult.Success -> {
-                                            successCount++
-                                            timber.log.Timber.i(
-                                                "✅ Assignment successful: ${result.data.assignmentId}")
-                                        }
-                                        is BroadcastResult.Error -> {
-                                            hasError = true
-                                            timber.log.Timber.e(
-                                                "❌ Assignment failed: ${result.message}")
-                                            Toast.makeText(context, 
-                                                "Failed to assign vehicle: ${result.message}", 
-                                                Toast.LENGTH_SHORT).show()
-                                        }
-                                        is BroadcastResult.Loading -> {}
+                                        holdId = currentHoldId,
+                                        assignments = submissionAssignments
+                                    )
+                                ) {
+                                    is BroadcastAssignmentResult.Success -> {
+                                        timber.log.Timber.i(
+                                            "✅ Assignment successful: assignments=%s trips=%s",
+                                            result.assignmentIds.size,
+                                            result.tripIds.size
+                                        )
+                                        showSuccessDialog = true
+                                    }
+
+                                    is BroadcastAssignmentResult.Error -> {
+                                        timber.log.Timber.e("❌ Assignment failed: %s", result.message)
+                                        Toast.makeText(
+                                            context,
+                                            "Failed to assign vehicles: ${result.message}",
+                                            Toast.LENGTH_LONG
+                                        ).show()
                                     }
                                 }
-                                
+
                                 isSubmitting = false
-                                
-                                if (successCount > 0) {
-                                    showSuccessDialog = true
-                                } else if (hasError) {
-                                    Toast.makeText(context, 
-                                        "Failed to assign vehicles. Please try again.", 
-                                        Toast.LENGTH_LONG).show()
-                                }
                             }
                         },
                         modifier = Modifier.fillMaxWidth().height(56.dp),
@@ -698,28 +756,18 @@ fun DriverPickerBottomSheet(
                 Spacer(Modifier.height(16.dp))
                 
                 if (drivers.isEmpty()) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(WarningLight)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(Icons.Default.Warning, null, tint = Warning, modifier = Modifier.size(48.dp))
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "No drivers available",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                "All drivers are already assigned in this flow",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextSecondary
-                            )
-                        }
-                    }
+                    IllustratedEmptyState(
+                        illustrationRes = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.drawableRes,
+                        title = stringResource(R.string.empty_title_no_assignment_drivers),
+                        subtitle = stringResource(R.string.empty_subtitle_no_assignment_drivers),
+                        maxIllustrationWidthDp = EmptyStateLayoutStyle.MODAL_COMPACT.maxIllustrationWidthDp,
+                        maxTextWidthDp = EmptyStateLayoutStyle.MODAL_COMPACT.maxTextWidthDp,
+                        showFramedIllustration = EmptyStateLayoutStyle.MODAL_COMPACT.showFramedIllustration,
+                        sectionBackgroundColor = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.blendPalette().sectionBackground,
+                        sectionBlendMode = SectionBlendMode.PANEL,
+                        paletteHaloOverride = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.blendPalette().haloColor,
+                        paletteHaloAlphaOverride = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.blendPalette().haloAlpha
+                    )
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxWidth(),

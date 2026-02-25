@@ -20,14 +20,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import com.weelo.logistics.R
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.data.repository.DriverProfileRepository
 import com.weelo.logistics.ui.components.CameraCaptureScreen
+import com.weelo.logistics.ui.components.OptimizedUriImage
+import com.weelo.logistics.ui.components.SimpleTopBar
 import kotlinx.coroutines.launch
 
 /**
@@ -142,12 +145,8 @@ fun DriverProfileCompletionScreen(
     
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Complete Your Profile", fontWeight = FontWeight.Bold) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF1A3A6B),
-                    titleContentColor = Color.White
-                )
+            SimpleTopBar(
+                title = stringResource(R.string.complete_your_profile)
             )
         }
     ) { paddingValues ->
@@ -390,11 +389,13 @@ private fun ProfilePhotoSection(
             contentAlignment = Alignment.Center
         ) {
             if (photoUri != null) {
-                AsyncImage(
-                    model = photoUri,
+                OptimizedUriImage(
+                    uri = photoUri,
                     contentDescription = "Driver Photo",
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    contentScale = ContentScale.Crop,
+                    crossfade = false,
+                    targetSizeDp = 120.dp
                 )
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -470,11 +471,13 @@ private fun PhotoUploadCard(
     ) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             if (photoUri != null) {
-                AsyncImage(
-                    model = photoUri,
+                OptimizedUriImage(
+                    uri = photoUri,
                     contentDescription = title,
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    contentScale = ContentScale.Crop,
+                    crossfade = false,
+                    targetSizeDp = 140.dp
                 )
             } else {
                 Column(

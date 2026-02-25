@@ -16,10 +16,12 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.weelo.logistics.R
 import com.weelo.logistics.ui.theme.*
 
 // =============================================================================
@@ -42,13 +44,13 @@ fun PrimaryButton(
     enabled: Boolean = true,
     isLoading: Boolean = false,
     icon: ImageVector? = null,
-    fullWidth: Boolean = true
+    fullWidth: Boolean = true,
+    loadingText: String? = null
 ) {
-    val buttonModifier = if (fullWidth) {
-        modifier.fillMaxWidth().height(ComponentSize.buttonHeight)
-    } else {
-        modifier.height(ComponentSize.buttonHeight)
-    }
+    val buttonModifier = modifier
+        .then(if (fullWidth) Modifier.fillMaxWidth() else Modifier)
+        .heightIn(min = ComponentSize.touchTarget)
+        .height(ComponentSize.buttonHeight)
     
     Button(
         onClick = onClick,
@@ -76,7 +78,7 @@ fun PrimaryButton(
             )
             Spacer(Modifier.width(12.dp))
             Text(
-                text = "Please wait...",
+                text = loadingText ?: stringResource(R.string.please_wait),
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 0.5.sp
@@ -113,13 +115,13 @@ fun SecondaryButton(
     enabled: Boolean = true,
     isLoading: Boolean = false,
     icon: ImageVector? = null,
-    fullWidth: Boolean = true
+    fullWidth: Boolean = true,
+    loadingText: String? = null
 ) {
-    val buttonModifier = if (fullWidth) {
-        modifier.fillMaxWidth().height(ComponentSize.buttonHeight)
-    } else {
-        modifier.height(ComponentSize.buttonHeight)
-    }
+    val buttonModifier = modifier
+        .then(if (fullWidth) Modifier.fillMaxWidth() else Modifier)
+        .heightIn(min = ComponentSize.touchTarget)
+        .height(ComponentSize.buttonHeight)
     
     Button(
         onClick = onClick,
@@ -140,11 +142,20 @@ fun SecondaryButton(
         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp)
     ) {
         if (isLoading) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(24.dp),
-                color = White,
-                strokeWidth = 2.5.dp
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    color = White,
+                    strokeWidth = 2.5.dp
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    text = loadingText ?: stringResource(R.string.please_wait),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.5.sp
+                )
+            }
         } else {
             if (icon != null) {
                 Icon(
@@ -179,11 +190,10 @@ fun OutlineButton(
     fullWidth: Boolean = true,
     borderColor: Color = Primary
 ) {
-    val buttonModifier = if (fullWidth) {
-        modifier.fillMaxWidth().height(ComponentSize.buttonHeight)
-    } else {
-        modifier.height(ComponentSize.buttonHeight)
-    }
+    val buttonModifier = modifier
+        .then(if (fullWidth) Modifier.fillMaxWidth() else Modifier)
+        .heightIn(min = ComponentSize.touchTarget)
+        .height(ComponentSize.buttonHeight)
     
     OutlinedButton(
         onClick = onClick,
@@ -303,7 +313,8 @@ fun GradientButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     isLoading: Boolean = false,
-    icon: ImageVector? = null
+    icon: ImageVector? = null,
+    loadingText: String? = null
 ) {
     Button(
         onClick = onClick,
@@ -350,7 +361,7 @@ fun GradientButton(
                     )
                     Spacer(Modifier.width(12.dp))
                     Text(
-                        text = "Please wait...",
+                        text = loadingText ?: stringResource(R.string.please_wait),
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.5.sp
@@ -391,7 +402,7 @@ fun ChipButton(
 ) {
     Surface(
         onClick = onClick,
-        modifier = modifier.height(36.dp),
+        modifier = modifier.heightIn(min = ComponentSize.touchTarget),
         enabled = enabled,
         color = if (selected) Primary else SurfaceVariant,
         contentColor = if (selected) OnPrimary else TextPrimary,

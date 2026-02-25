@@ -27,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,10 +43,14 @@ import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.repository.BroadcastRepository
 import com.weelo.logistics.data.repository.DriverRepository
 import com.weelo.logistics.data.repository.VehicleRepository
+import com.weelo.logistics.R
 import com.weelo.logistics.ui.components.TruckSelectionSkeleton
 import com.weelo.logistics.ui.components.DriverAssignmentSkeleton
 import com.weelo.logistics.ui.components.DarkSkeletonBox
 import com.weelo.logistics.ui.components.DarkSkeletonCircle
+import com.weelo.logistics.ui.components.EmptyStateArtwork
+import com.weelo.logistics.ui.components.EmptyStateLayoutStyle
+import com.weelo.logistics.ui.components.IllustratedEmptyState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -55,17 +60,17 @@ import com.weelo.logistics.data.remote.SocketIOService
 private const val TAG = "BroadcastAcceptance"
 
 // =============================================================================
-// RAPIDO STYLE COLORS - Same as BroadcastOverlayScreen
+// MONOCHROME BROADCAST PALETTE — white surfaces + black content
 // =============================================================================
-private val AccentYellow = Color(0xFFFDD835)
-private val AccentYellowDark = Color(0xFFF9A825)
-private val BoldBlack = Color(0xFF1A1A1A)
-private val DarkGray = Color(0xFF2D2D2D)
-private val MediumGray = Color(0xFF424242)
-private val LightGray = Color(0xFFE0E0E0)
-private val PureWhite = Color(0xFFFFFFFF)
-private val SuccessGreen = Color(0xFF2E7D32)
-private val ErrorRed = Color(0xFFD32F2F)
+private val AccentYellow = Color.Black
+private val AccentYellowDark = Color.Black
+private val BoldBlack = Color.White
+private val DarkGray = Color.White
+private val MediumGray = Color.Black.copy(alpha = 0.7f)
+private val LightGray = Color.Black.copy(alpha = 0.55f)
+private val PureWhite = Color.Black
+private val SuccessGreen = Color.Black
+private val ErrorRed = Color.Black
 
 /**
  * Data class for truck + driver assignment
@@ -147,7 +152,7 @@ private fun DriverAssignmentAvailability.color(): Color {
     return when (this) {
         DriverAssignmentAvailability.ACTIVE -> SuccessGreen
         DriverAssignmentAvailability.OFFLINE -> LightGray
-        DriverAssignmentAvailability.ON_TRIP -> AccentYellow
+        DriverAssignmentAvailability.ON_TRIP -> MediumGray
     }
 }
 
@@ -196,6 +201,7 @@ fun BroadcastAcceptanceScreen(
     val vehicleRepository = remember { VehicleRepository.getInstance(context) }
     val driverRepository = remember { DriverRepository.getInstance(context) }
     val broadcastRepository = remember { BroadcastRepository.getInstance(context) }
+    val assignmentCoordinator = remember { BroadcastAssignmentCoordinator(broadcastRepository) }
     
     // State
     var currentStep by remember { mutableStateOf(AcceptanceStep.LOADING) }
@@ -291,18 +297,6 @@ fun BroadcastAcceptanceScreen(
                     is com.weelo.logistics.data.repository.BroadcastResult.Loading -> Unit
                 }
             }
-        }
-    }
-
-    fun mapSubmissionError(apiCode: String?, fallbackMessage: String): String {
-        return when (apiCode) {
-            "DRIVER_BUSY" -> "Driver is already on another trip."
-            "DRIVER_NOT_IN_FLEET" -> "This driver does not belong to your fleet."
-            "VEHICLE_NOT_IN_FLEET" -> "This vehicle does not belong to your fleet."
-            "BROADCAST_FILLED" -> "This booking has already been fully assigned."
-            "BROADCAST_EXPIRED" -> "This booking request has expired."
-            "INVALID_ASSIGNMENT_STATE" -> "Assignment state changed. Please retry."
-            else -> fallbackMessage
         }
     }
 
@@ -506,33 +500,42 @@ fun BroadcastAcceptanceScreen(
                         timber.log.Timber.i(
                             "📤 Confirming hold ${hold.holdId} with ${holdAssignments.size} assignment(s)"
                         )
+                        BroadcastTelemetry.record(
+                            stage = BroadcastStage.BROADCAST_CONFIRM_ASSIGN_REQUESTED,
+                            status = BroadcastStatus.SUCCESS,
+                            attrs = mapOf(
+                                "broadcastId" to broadcast.broadcastId,
+                                "holdId" to hold.holdId,
+                                "assignmentCount" to holdAssignments.size.toString()
+                            )
+                        )
 
                         when (
-                            val result = broadcastRepository.confirmHoldWithAssignments(
+                            val result = assignmentCoordinator.confirmHoldAssignments(
+                                broadcastId = broadcast.broadcastId,
                                 holdId = hold.holdId,
                                 assignments = holdAssignments
                             )
                         ) {
-                            is com.weelo.logistics.data.repository.BroadcastResult.Success -> {
+                            is BroadcastAssignmentResult.Success -> {
                                 newlyConfirmed.add(hold.holdId)
                                 holdAssignments.forEach { (vehicleId, _) ->
                                     successCount++
                                     updatedSubmissionResults[vehicleId] = AssignmentSubmissionResult.Success
                                 }
                             }
-                            is com.weelo.logistics.data.repository.BroadcastResult.Error -> {
+                            is BroadcastAssignmentResult.Error -> {
                                 failedCount += holdAssignments.size
                                 holdAssignments.forEach { (vehicleId, _) ->
                                     updatedSubmissionResults[vehicleId] = AssignmentSubmissionResult.Failed(
                                         message = result.message,
-                                        code = null
+                                        code = result.apiCode
                                     )
                                 }
                                 timber.log.Timber.w(
                                     "⚠️ Hold confirm failed: holdId=${hold.holdId} msg=${result.message}"
                                 )
                             }
-                            is com.weelo.logistics.data.repository.BroadcastResult.Loading -> Unit
                         }
 
                         processedCount += holdAssignments.size
@@ -541,54 +544,10 @@ fun BroadcastAcceptanceScreen(
 
                     confirmedHoldIds = newlyConfirmed
                 } else {
-                    val assignmentsToSubmit = assignmentsToValidate.filter { (vehicleId, _) ->
-                        submissionResults[vehicleId] !is AssignmentSubmissionResult.Success
-                    }
-
-                    if (assignmentsToSubmit.isEmpty()) {
-                        currentStep = AcceptanceStep.SUCCESS
-                        kotlinx.coroutines.delay(1200)
-                        onSuccess()
-                        return@launch
-                    }
-
-                    pendingSubmissionCount = assignmentsToSubmit.size
-                    submissionProgress = 0f
-
-                    assignmentsToSubmit.forEachIndexed { index, (vehicleId, driverId) ->
-                        val idempotencyKey = "broadcast:${broadcast.broadcastId}:vehicle:$vehicleId:driver:$driverId"
-                        timber.log.Timber.i(
-                            "📤 Submitting assignment ${index + 1}/${assignmentsToSubmit.size}: vehicle=$vehicleId, driver=$driverId"
-                        )
-
-                        when (
-                            val result = broadcastRepository.acceptBroadcast(
-                                broadcastId = broadcast.broadcastId,
-                                vehicleId = vehicleId,
-                                driverId = driverId,
-                                idempotencyKey = idempotencyKey
-                            )
-                        ) {
-                            is com.weelo.logistics.data.repository.BroadcastResult.Success -> {
-                                successCount++
-                                updatedSubmissionResults[vehicleId] = AssignmentSubmissionResult.Success
-                            }
-                            is com.weelo.logistics.data.repository.BroadcastResult.Error -> {
-                                failedCount++
-                                val safeMessage = mapSubmissionError(result.apiCode, result.message)
-                                updatedSubmissionResults[vehicleId] = AssignmentSubmissionResult.Failed(
-                                    message = safeMessage,
-                                    code = result.apiCode
-                                )
-                                timber.log.Timber.w(
-                                    "⚠️ Assignment failed: vehicle=$vehicleId code=${result.apiCode ?: "unknown"} msg=$safeMessage"
-                                )
-                            }
-                            is com.weelo.logistics.data.repository.BroadcastResult.Loading -> Unit
-                        }
-
-                        submissionProgress = (index + 1).toFloat() / assignmentsToSubmit.size.coerceAtLeast(1)
-                    }
+                    failedCount = assignmentsToValidate.size
+                    errorMessage = "Legacy assignment path disabled. Reopen request and hold trucks before assigning drivers."
+                    currentStep = AcceptanceStep.ERROR
+                    return@launch
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -1067,34 +1026,17 @@ private fun TruckSelectionContent(
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.padding(32.dp)
+                    modifier = Modifier.padding(20.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(80.dp)
-                            .background(DarkGray, CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.LocalShipping,
-                            contentDescription = null,
-                            tint = MediumGray,
-                            modifier = Modifier.size(40.dp)
-                        )
-                    }
-                    Text(
-                        text = "No Matching Trucks",
-                        color = PureWhite,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
                     @Suppress("DEPRECATION")
                     val vehicleTypeName = broadcast.vehicleType?.name ?: "matching"
-                    Text(
-                        text = "You don't have any available $vehicleTypeName trucks",
-                        color = MediumGray,
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center
+                    IllustratedEmptyState(
+                        illustrationRes = EmptyStateArtwork.MATCHING_TRUCKS.drawableRes,
+                        title = stringResource(R.string.empty_title_no_matching_trucks),
+                        subtitle = stringResource(R.string.empty_subtitle_no_matching_trucks_format, vehicleTypeName),
+                        maxIllustrationWidthDp = 190,
+                        maxTextWidthDp = 260,
+                        showFramedIllustration = EmptyStateLayoutStyle.MODAL_COMPACT.showFramedIllustration
                     )
                 }
             }
@@ -1147,7 +1089,7 @@ private fun TruckSelectionContent(
         // ============== BOTTOM ACTION BAR ==============
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = BoldBlack,
+            color = PureWhite,
             shadowElevation = 8.dp
         ) {
             Column(
@@ -1269,7 +1211,7 @@ private fun TruckGroupHeader(
                 ) {
                     Text(
                         text = "REQUESTED",
-                        color = BoldBlack,
+                            color = PureWhite,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 0.5.sp
@@ -1492,7 +1434,7 @@ private fun VehicleSelectCard(
                     Icon(
                         Icons.Default.Check,
                         contentDescription = "Selected",
-                        tint = BoldBlack,
+                        tint = PureWhite,
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -1715,32 +1657,15 @@ private fun DriverAssignmentContent(
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.padding(32.dp)
+                    modifier = Modifier.padding(20.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(80.dp)
-                            .background(DarkGray, CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Person,
-                            contentDescription = null,
-                            tint = MediumGray,
-                            modifier = Modifier.size(40.dp)
-                        )
-                    }
-                    Text(
-                        text = "No drivers found",
-                        color = PureWhite,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Add drivers to your fleet to continue",
-                        color = MediumGray,
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center
+                    IllustratedEmptyState(
+                        illustrationRes = EmptyStateArtwork.MATCHING_DRIVERS.drawableRes,
+                        title = stringResource(R.string.empty_title_no_matching_drivers),
+                        subtitle = stringResource(R.string.empty_subtitle_no_matching_drivers),
+                        maxIllustrationWidthDp = 190,
+                        maxTextWidthDp = 260,
+                        showFramedIllustration = EmptyStateLayoutStyle.MODAL_COMPACT.showFramedIllustration
                     )
                 }
             }
@@ -1795,7 +1720,7 @@ private fun DriverAssignmentContent(
         // ============== BOTTOM ACTION BAR ==============
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = BoldBlack,
+            color = PureWhite,
             shadowElevation = 8.dp
         ) {
             Column(
@@ -2106,7 +2031,7 @@ private fun VehicleDriverAssignmentCardEnhanced(
                                 ) {
                                     Text(
                                         text = "${remainingDebounceSeconds}s",
-                                        color = BoldBlack,
+                                        color = PureWhite,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Black
                                     )
@@ -2179,11 +2104,16 @@ private fun VehicleDriverAssignmentCardEnhanced(
                 Spacer(modifier = Modifier.height(12.dp))
                 
                 if (availableDrivers.isEmpty()) {
-                    Text(
-                        text = "No drivers left to assign",
-                        color = MediumGray,
-                        fontSize = 14.sp,
-                        modifier = Modifier.padding(vertical = 8.dp)
+                    IllustratedEmptyState(
+                        illustrationRes = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.drawableRes,
+                        title = stringResource(R.string.empty_title_no_drivers_left),
+                        subtitle = stringResource(R.string.empty_subtitle_no_drivers_left),
+                        maxIllustrationWidthDp = 150,
+                        maxTextWidthDp = 240,
+                        showFramedIllustration = false,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
                     )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2481,11 +2411,16 @@ private fun VehicleDriverAssignmentCard(
                 Spacer(modifier = Modifier.height(12.dp))
                 
                 if (availableDrivers.isEmpty()) {
-                    Text(
-                        text = "No drivers left to assign",
-                        color = MediumGray,
-                        fontSize = 14.sp,
-                        modifier = Modifier.padding(vertical = 8.dp)
+                    IllustratedEmptyState(
+                        illustrationRes = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.drawableRes,
+                        title = stringResource(R.string.empty_title_no_drivers_left),
+                        subtitle = stringResource(R.string.empty_subtitle_no_drivers_left),
+                        maxIllustrationWidthDp = 150,
+                        maxTextWidthDp = 240,
+                        showFramedIllustration = false,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
                     )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2832,9 +2767,11 @@ private fun CancelledContent() {
             verticalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.padding(32.dp)
         ) {
-            Text(
-                text = "😔",
-                fontSize = 56.sp
+            Icon(
+                imageVector = Icons.Default.Cancel,
+                contentDescription = null,
+                tint = ErrorRed,
+                modifier = Modifier.size(56.dp)
             )
             Text(
                 text = "ORDER CANCELLED",

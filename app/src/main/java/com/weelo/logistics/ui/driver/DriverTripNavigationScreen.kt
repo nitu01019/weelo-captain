@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -22,6 +23,7 @@ import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.LatLngBounds
 import com.google.maps.android.compose.*
+import com.weelo.logistics.R
 import com.weelo.logistics.data.api.TripTrackingData
 import com.weelo.logistics.data.model.TripStatus
 import com.weelo.logistics.data.remote.RetrofitClient
@@ -148,7 +150,7 @@ fun DriverTripNavigationScreen(
         tripCancelPickupAddress = pickupAddress
         tripCancelDropAddress = dropAddress
         showTripCancelledDialog = true
-        timber.log.Timber.w("🚫 Active trip cancelled by customer: order=$eventOrderId trip=$eventTripId reason=$tripCancelReason")
+        timber.log.Timber.w("Active trip cancelled by customer: order=$eventOrderId trip=$eventTripId reason=$tripCancelReason")
         
         // Stop GPS tracking immediately
         try {
@@ -191,27 +193,39 @@ fun DriverTripNavigationScreen(
     if (showTripCancelledDialog) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { },
-            title = { androidx.compose.material3.Text("🚫 Trip Cancelled", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, color = androidx.compose.ui.graphics.Color(0xFFD32F2F)) },
+            title = {
+                androidx.compose.material3.Text(
+                    text = stringResource(R.string.trip_cancelled_title),
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    color = Error
+                )
+            },
             text = { 
                 androidx.compose.foundation.layout.Column {
-                    androidx.compose.material3.Text("Customer has cancelled this trip.", fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    androidx.compose.material3.Text(
+                        stringResource(R.string.trip_cancelled_message),
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                    )
                     androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.ui.Modifier.height(8.dp))
                     androidx.compose.material3.Text("Reason: $tripCancelReason")
                     androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.ui.Modifier.height(4.dp))
-                    androidx.compose.material3.Text("Your vehicle has been released.", color = androidx.compose.ui.graphics.Color.Gray)
+                    androidx.compose.material3.Text(
+                        stringResource(R.string.trip_cancelled_vehicle_released),
+                        color = TextSecondary
+                    )
                     if (tripCancelCustomerName.isNotBlank()) {
                         androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.ui.Modifier.height(12.dp))
                         androidx.compose.material3.Text("Customer: $tripCancelCustomerName", fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
                     }
                     if (tripCancelCustomerPhone.isNotBlank()) {
-                        androidx.compose.material3.Text("📞 $tripCancelCustomerPhone", color = androidx.compose.ui.graphics.Color(0xFF1976D2))
+                        androidx.compose.material3.Text("Phone: $tripCancelCustomerPhone", color = InfoDark)
                     }
                     if (tripCancelPickupAddress.isNotBlank()) {
                         androidx.compose.foundation.layout.Spacer(modifier = androidx.compose.ui.Modifier.height(8.dp))
-                        androidx.compose.material3.Text("📍 $tripCancelPickupAddress", fontSize = 13.sp, color = androidx.compose.ui.graphics.Color.Gray)
+                        androidx.compose.material3.Text("Pickup: $tripCancelPickupAddress", fontSize = 13.sp, color = TextSecondary)
                     }
                     if (tripCancelDropAddress.isNotBlank()) {
-                        androidx.compose.material3.Text("📌 $tripCancelDropAddress", fontSize = 13.sp, color = androidx.compose.ui.graphics.Color.Gray)
+                        androidx.compose.material3.Text("Drop: $tripCancelDropAddress", fontSize = 13.sp, color = TextSecondary)
                     }
                 }
             },
@@ -220,7 +234,7 @@ fun DriverTripNavigationScreen(
                     showTripCancelledDialog = false
                     onNavigateBack()
                 }) {
-                    androidx.compose.material3.Text("Go to Dashboard")
+                    androidx.compose.material3.Text(stringResource(R.string.go_to_dashboard))
                 }
             },
             dismissButton = {
@@ -232,7 +246,10 @@ fun DriverTripNavigationScreen(
                         }
                         context.startActivity(intent)
                     }) {
-                        androidx.compose.material3.Text("📞 Call Customer", color = androidx.compose.ui.graphics.Color(0xFF1976D2))
+                        androidx.compose.material3.Text(
+                            stringResource(R.string.call_customer),
+                            color = InfoDark
+                        )
                     }
                 }
             }
@@ -484,7 +501,7 @@ fun DriverTripNavigationScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             SecondaryButton(
-                                text = "🗺 Navigate",
+                                text = "Navigate",
                                 onClick = {
                                     val targetLat = if (tripStatus == TripStatus.ACCEPTED) pickupLatLng.latitude else dropLatLng.latitude
                                     val targetLng = if (tripStatus == TripStatus.ACCEPTED) pickupLatLng.longitude else dropLatLng.longitude
@@ -512,10 +529,10 @@ fun DriverTripNavigationScreen(
                             // Status-based action button
                             PrimaryButton(
                                 text = when (tripStatus) {
-                                    TripStatus.ACCEPTED -> "📍 Reached Pickup"
-                                    TripStatus.AT_PICKUP -> "📦 Loading Complete"
-                                    TripStatus.LOADING_COMPLETE -> "🚀 Start Trip"
-                                    TripStatus.IN_PROGRESS -> "✅ Complete Trip"
+                                    TripStatus.ACCEPTED -> "Reached Pickup"
+                                    TripStatus.AT_PICKUP -> "Loading Complete"
+                                    TripStatus.LOADING_COMPLETE -> "Start Trip"
+                                    TripStatus.IN_PROGRESS -> "Complete Trip"
                                     TripStatus.COMPLETED -> "Trip Completed ✓"
                                     else -> "Start"
                                 },
@@ -528,8 +545,8 @@ fun DriverTripNavigationScreen(
                                                     trackingApi, tripId, "at_pickup",
                                                     onSuccess = {
                                                         tripStatus = TripStatus.AT_PICKUP
-                                                        Toast.makeText(context, "📍 Marked as reached pickup!", Toast.LENGTH_SHORT).show()
-                                                        timber.log.Timber.i("📍 Trip $tripId → at_pickup")
+                                                        Toast.makeText(context, "Marked as reached pickup", Toast.LENGTH_SHORT).show()
+                                                        timber.log.Timber.i("Trip $tripId -> at_pickup")
                                                     },
                                                     onError = { msg ->
                                                         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
@@ -544,8 +561,8 @@ fun DriverTripNavigationScreen(
                                                     trackingApi, tripId, "loading_complete",
                                                     onSuccess = {
                                                         tripStatus = TripStatus.LOADING_COMPLETE
-                                                        Toast.makeText(context, "📦 Loading complete!", Toast.LENGTH_SHORT).show()
-                                                        timber.log.Timber.i("📦 Trip $tripId → loading_complete")
+                                                        Toast.makeText(context, "Loading complete", Toast.LENGTH_SHORT).show()
+                                                        timber.log.Timber.i("Trip $tripId -> loading_complete")
                                                     },
                                                     onError = { msg ->
                                                         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
@@ -561,8 +578,8 @@ fun DriverTripNavigationScreen(
                                                     onSuccess = {
                                                         tripStatus = TripStatus.IN_PROGRESS
                                                         GPSTrackingService.startTracking(context, tripId, driverId)
-                                                        Toast.makeText(context, "🚀 Trip started! GPS tracking active.", Toast.LENGTH_SHORT).show()
-                                                        timber.log.Timber.i("🚀 Trip $tripId → in_transit, GPS started")
+                                                        Toast.makeText(context, "Trip started. GPS tracking active.", Toast.LENGTH_SHORT).show()
+                                                        timber.log.Timber.i("Trip $tripId -> in_transit, GPS started")
                                                     },
                                                     onError = { msg ->
                                                         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()

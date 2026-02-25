@@ -245,6 +245,68 @@ object NavAnimations {
     
     val none: EnterTransition = EnterTransition.None
     val noneExit: ExitTransition = ExitTransition.None
+
+    private enum class RouteProfile {
+        AUTH,
+        MODAL_FLOW,
+        HEAVY_REALTIME,
+        STANDARD
+    }
+
+    private fun routeProfile(route: String?): RouteProfile {
+        if (route.isNullOrBlank()) return RouteProfile.STANDARD
+        return when {
+            route == Screen.RoleSelection.route ||
+                route == Screen.Login.route ||
+                route == Screen.Signup.route ||
+                route.startsWith("login") ||
+                route.startsWith("signup") ||
+                route.startsWith("otp_verification") -> RouteProfile.AUTH
+
+            route.startsWith("truck_hold_confirm") -> RouteProfile.MODAL_FLOW
+
+            route == "transporter_profile" -> RouteProfile.HEAVY_REALTIME
+
+            route.startsWith("live_tracking") ||
+                route.startsWith("trip_tracking") ||
+                route.startsWith("driver_trip_navigation") ||
+                route.startsWith("trip_accept_decline") -> RouteProfile.HEAVY_REALTIME
+
+            else -> RouteProfile.STANDARD
+        }
+    }
+
+    fun enterForRoute(initialRoute: String?, targetRoute: String?): EnterTransition =
+        when (routeProfile(targetRoute)) {
+            RouteProfile.AUTH -> fadeIn
+            RouteProfile.MODAL_FLOW -> fadeInWithScale
+            RouteProfile.HEAVY_REALTIME -> fadeIn
+            RouteProfile.STANDARD -> slideInFromRight
+        }
+
+    fun exitForRoute(initialRoute: String?, targetRoute: String?): ExitTransition =
+        when (routeProfile(targetRoute)) {
+            RouteProfile.AUTH -> fadeOut
+            RouteProfile.MODAL_FLOW -> fadeOutWithScale
+            RouteProfile.HEAVY_REALTIME -> fadeOut
+            RouteProfile.STANDARD -> slideOutToLeft
+        }
+
+    fun popEnterForRoute(initialRoute: String?, targetRoute: String?): EnterTransition =
+        when (routeProfile(targetRoute)) {
+            RouteProfile.AUTH -> fadeIn
+            RouteProfile.MODAL_FLOW -> fadeInWithScale
+            RouteProfile.HEAVY_REALTIME -> fadeIn
+            RouteProfile.STANDARD -> slideInFromLeft
+        }
+
+    fun popExitForRoute(initialRoute: String?, targetRoute: String?): ExitTransition =
+        when (routeProfile(initialRoute)) {
+            RouteProfile.AUTH -> fadeOut
+            RouteProfile.MODAL_FLOW -> fadeOutWithScale
+            RouteProfile.HEAVY_REALTIME -> fadeOut
+            RouteProfile.STANDARD -> slideOutToRight
+        }
 }
 
 /**

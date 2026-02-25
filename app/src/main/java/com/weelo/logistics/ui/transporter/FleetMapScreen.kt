@@ -11,8 +11,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.weelo.logistics.R
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
@@ -209,15 +211,17 @@ fun FleetMapScreen(
             ) {
                 when {
                     isLoading && fleetData == null -> {
-                        // Loading state
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = Primary)
-                            Spacer(Modifier.height(16.dp))
-                            Text(
-                                "Loading fleet locations...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = TextSecondary
-                            )
+                        // Loading state: structured placeholder keeps layout stable.
+                        ProvideShimmerBrush {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                SectionSkeletonBlock(titleLineWidthFraction = 0.42f, rowCount = 2)
+                                SkeletonList(itemCount = 3)
+                            }
                         }
                     }
                     
@@ -253,27 +257,13 @@ fun FleetMapScreen(
                     
                     fleetData?.drivers?.isEmpty() == true -> {
                         // Empty state
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                Icons.Default.LocalShipping,
-                                null,
-                                modifier = Modifier.size(80.dp),
-                                tint = Primary.copy(alpha = 0.3f)
+                        EmptyStateHost(
+                            spec = noActiveLiveDataEmptyStateSpec(
+                                artwork = EmptyStateArtwork.FLEET_MAP_IDLE,
+                                title = stringResource(R.string.empty_title_no_active_drivers_map),
+                                subtitle = stringResource(R.string.empty_subtitle_no_active_drivers_map)
                             )
-                            Spacer(Modifier.height(16.dp))
-                            Text(
-                                "No Active Drivers",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = TextSecondary
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "Your drivers will appear here\nwhen they start trips",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = TextDisabled
-                            )
-                        }
+                        )
                     }
                     
                     else -> {

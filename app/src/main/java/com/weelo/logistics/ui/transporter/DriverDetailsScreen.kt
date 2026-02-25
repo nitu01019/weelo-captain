@@ -48,6 +48,7 @@ fun DriverDetailsScreen(
     var driver by remember { mutableStateOf<DriverData?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var reloadTrigger by remember { mutableStateOf(0) }
     
     // Phase 5: Real performance + earnings data (no more hardcoded 0s)
     var performanceData by remember { mutableStateOf<com.weelo.logistics.data.api.PerformanceResponseData?>(null) }
@@ -68,7 +69,7 @@ fun DriverDetailsScreen(
     }
     
     // Try cache first (INSTANT)
-    LaunchedEffect(driverId) {
+    LaunchedEffect(driverId, reloadTrigger) {
         // Step 1: Check cache immediately (0ms)
         val cachedDriver = AppCache.getDriver(driverId)
         if (cachedDriver != null) {
@@ -146,13 +147,18 @@ fun DriverDetailsScreen(
         if (isLoading) {
             SkeletonProfileLoading(Modifier.fillMaxSize())
         } else if (errorMessage != null) {
-            Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
-                    Icon(Icons.Default.Error, null, Modifier.size(64.dp), tint = TextDisabled)
-                    Spacer(Modifier.height(16.dp))
-                    Text(errorMessage ?: "Error", style = MaterialTheme.typography.bodyLarge, color = TextSecondary)
-                }
-            }
+            RetryErrorStatePanel(
+                title = if (errorMessage == "Driver not found") "Driver not found" else "Could not load driver",
+                message = errorMessage ?: "Failed to load driver details",
+                onRetry = {
+                    errorMessage = null
+                    driver = null
+                    isLoading = true
+                    reloadTrigger += 1
+                },
+                illustrationRes = EmptyStateArtwork.DRIVER_DETAILS_NOT_FOUND.drawableRes,
+                modifier = Modifier.fillMaxSize()
+            )
         } else driver?.let { d ->
             Column(
                 Modifier
@@ -161,30 +167,30 @@ fun DriverDetailsScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Driver Profile Card
-                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(SecondaryLight)) {
-                    Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        // Avatar with online/offline indicator dot
+                HeroEntityCard(
+                    title = d.name ?: "Driver",
+                    subtitle = "+91 ${d.phone}",
+                    mediaSpec = CardMediaSpec(artwork = CardArtwork.DETAIL_DRIVER),
+                    leadingAvatar = {
                         Box(
-                            Modifier.size(86.dp),  // Slightly larger to accommodate dot
+                            Modifier.size(64.dp),
                             Alignment.Center
                         ) {
                             Box(
-                                Modifier.size(80.dp).background(Primary.copy(alpha = 0.1f), CircleShape),
+                                Modifier.size(56.dp).background(Primary.copy(alpha = 0.1f), CircleShape),
                                 Alignment.Center
                             ) {
                                 val initial = (d.name?.firstOrNull() ?: d.phone.lastOrNull() ?: 'D').uppercase()
                                 Text(
                                     text = initial.toString(),
-                                    style = MaterialTheme.typography.displaySmall,
+                                    style = MaterialTheme.typography.headlineSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = Primary
                                 )
                             }
-                            // Online/Offline dot (WhatsApp/Rapido style)
                             Box(
                                 modifier = Modifier
-                                    .size(18.dp)
+                                    .size(14.dp)
                                     .align(Alignment.BottomEnd)
                                     .background(
                                         color = White,
@@ -201,20 +207,8 @@ fun DriverDetailsScreen(
                                     )
                             )
                         }
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            text = d.name ?: "Driver",
-                            style = MaterialTheme.typography.headlineMedium, 
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "+91 ${d.phone}",
-                            style = MaterialTheme.typography.bodyLarge, 
-                            color = TextSecondary
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        // Status chip
+                    },
+                    statusContent = {
                         StatusChip(
                             text = when {
                                 d.isOnTrip -> "On Trip"
@@ -227,8 +221,50 @@ fun DriverDetailsScreen(
                                 else -> ChipStatus.COMPLETED
                             }
                         )
+                    },
+                    metaContent = {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                modifier = Modifier.weight(1f),
+                                shape = MaterialTheme.shapes.medium,
+                                color = SurfaceVariant
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text("Trips", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        text = "${performanceData?.totalTrips ?: d.totalTrips}",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                }
+                            }
+                            Surface(
+                                modifier = Modifier.weight(1f),
+                                shape = MaterialTheme.shapes.medium,
+                                color = SurfaceVariant
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text("Rating", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        text = String.format(
+                                            "%.1f",
+                                            performanceData?.rating ?: d.rating?.toDouble() ?: 4.5
+                                        ),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextPrimary
+                                    )
+                                }
+                            }
+                        }
                     }
-                }
+                )
                 
                 // Contact Information - Real data
                 SectionCard("Contact Information") {

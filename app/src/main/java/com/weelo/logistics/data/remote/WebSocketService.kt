@@ -1,5 +1,6 @@
 package com.weelo.logistics.data.remote
 
+import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +27,10 @@ import kotlin.math.min
  * 4. Buffered event flows
  * =============================================================================
  */
+@Deprecated(
+    message = "Legacy polling path. Use SocketIOService + BroadcastFlowCoordinator.",
+    replaceWith = ReplaceWith("SocketIOService")
+)
 object WebSocketService {
     
     private const val TAG = "WebSocketService"
@@ -80,6 +85,10 @@ object WebSocketService {
      * Connect to real-time service
      */
     fun connect(serverUrl: String, token: String) {
+        if (BroadcastFeatureFlagsRegistry.current().broadcastDisableLegacyWebsocketPath) {
+            timber.log.Timber.w("Legacy WebSocketService disabled by feature flag")
+            return
+        }
         if (isConnected || isConnecting) {
             timber.log.Timber.d("Already connected/connecting")
             return

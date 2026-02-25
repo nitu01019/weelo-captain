@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.weelo.logistics.R
 import com.weelo.logistics.ui.components.CameraCaptureScreen
 import com.weelo.logistics.ui.components.OptimizedNetworkImage
+import com.weelo.logistics.ui.components.PrimaryTopBar
 import com.weelo.logistics.ui.components.SkeletonProfileLoading
 
 /**
@@ -127,18 +128,9 @@ fun DriverProfileScreenWithPhotos(
     
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.my_profile)) },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, stringResource(R.string.cd_back))
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF1A3A6B),
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White
-                )
+            PrimaryTopBar(
+                title = stringResource(R.string.my_profile),
+                onBackClick = onNavigateBack
             )
         }
     ) { paddingValues ->

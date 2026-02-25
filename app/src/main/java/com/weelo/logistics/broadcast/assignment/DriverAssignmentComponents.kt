@@ -49,22 +49,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.weelo.logistics.R
 import com.weelo.logistics.data.model.Driver
 import com.weelo.logistics.data.model.Vehicle
 import com.weelo.logistics.ui.components.DriverAssignmentSkeleton
+import com.weelo.logistics.ui.components.EmptyStateArtwork
+import com.weelo.logistics.ui.components.EmptyStateLayoutStyle
+import com.weelo.logistics.ui.components.IllustratedEmptyState
 
-private val AccentYellow = Color(0xFFFDD835)
-private val BoldBlack = Color(0xFF1A1A1A)
-private val DarkGray = Color(0xFF2D2D2D)
-private val MediumGray = Color(0xFF424242)
-private val LightGray = Color(0xFFE0E0E0)
-private val PureWhite = Color(0xFFFFFFFF)
-private val SuccessGreen = Color(0xFF2E7D32)
-private val ErrorRed = Color(0xFFD32F2F)
+private val AccentYellow = Color.Black
+private val BoldBlack = Color.White
+private val DarkGray = Color.White
+private val MediumGray = Color.Black.copy(alpha = 0.7f)
+private val LightGray = Color.Black.copy(alpha = 0.55f)
+private val PureWhite = Color.Black
+private val SuccessGreen = Color.Black
+private val ErrorRed = Color.Black
 
 @Composable
 fun BroadcastDriverAssignmentContent(
@@ -181,12 +186,44 @@ fun BroadcastDriverAssignmentContent(
             }
 
             is DriverAssignmentUiState.Empty -> {
-                BlockedStateCard(
-                    title = "No assignable drivers",
-                    message = driverState.message,
-                    retryable = true,
-                    onRetry = onRetryLoadDrivers
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = DarkGray),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            IllustratedEmptyState(
+                                illustrationRes = EmptyStateArtwork.MATCHING_DRIVERS.drawableRes,
+                                title = stringResource(R.string.empty_title_no_assignable_drivers),
+                                subtitle = driverState.message.ifBlank {
+                                    stringResource(R.string.empty_subtitle_no_assignable_drivers)
+                                },
+                                maxIllustrationWidthDp = EmptyStateLayoutStyle.CARD_COMPACT.maxIllustrationWidthDp,
+                                maxTextWidthDp = EmptyStateLayoutStyle.CARD_COMPACT.maxTextWidthDp,
+                                showFramedIllustration = EmptyStateLayoutStyle.CARD_COMPACT.showFramedIllustration
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = onRetryLoadDrivers,
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = PureWhite),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MediumGray)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(stringResource(R.string.retry))
+                            }
+                        }
+                    }
+                }
             }
 
             is DriverAssignmentUiState.Ready -> {
@@ -473,10 +510,13 @@ private fun BroadcastVehicleDriverAssignmentCard(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 if (availableDrivers.isEmpty()) {
-                    Text(
-                        text = "No drivers available for this truck",
-                        color = LightGray,
-                        fontSize = 12.sp
+                    IllustratedEmptyState(
+                        illustrationRes = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.drawableRes,
+                        title = stringResource(R.string.empty_title_no_drivers_for_truck),
+                        subtitle = stringResource(R.string.empty_subtitle_no_drivers_for_truck),
+                        maxIllustrationWidthDp = 140,
+                        maxTextWidthDp = 220,
+                        showFramedIllustration = false
                     )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -653,7 +693,7 @@ private fun BlockedStateCard(
                     Spacer(modifier = Modifier.height(14.dp))
                     Button(
                         onClick = onRetry,
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentYellow, contentColor = BoldBlack)
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentYellow, contentColor = Color.White)
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))

@@ -16,8 +16,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.weelo.logistics.R
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.data.repository.AssignmentRepository
@@ -171,32 +173,13 @@ fun DriverTripNotificationScreen(
             }
         } else if (notifications.isEmpty()) {
             // Empty State
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(32.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Notifications,
-                        null,
-                        modifier = Modifier.size(80.dp),
-                        tint = TextDisabled
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        "No notifications yet",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = TextSecondary
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Trip assignments will appear here",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextDisabled
-                    )
-                }
-            }
+            EmptyStateHost(
+                spec = allCaughtUpEmptyStateSpec(
+                    artwork = EmptyStateArtwork.NOTIFICATIONS_ALL_CAUGHT_UP,
+                    title = stringResource(R.string.empty_title_trip_notifications),
+                    subtitle = stringResource(R.string.empty_subtitle_trip_notifications)
+                )
+            )
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),

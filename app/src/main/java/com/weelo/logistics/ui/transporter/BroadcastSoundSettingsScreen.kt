@@ -15,10 +15,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.core.notification.BroadcastSoundService
 import com.weelo.logistics.core.notification.BroadcastSoundService.SoundOption
+import com.weelo.logistics.R
+import com.weelo.logistics.ui.components.PrimaryTopBar
 import com.weelo.logistics.ui.theme.*
 
 /**
@@ -51,18 +54,9 @@ fun BroadcastSoundSettingsScreen(
     
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Notification Sound") },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Primary,
-                    titleContentColor = White,
-                    navigationIconContentColor = White
-                )
+            PrimaryTopBar(
+                title = stringResource(R.string.notification_sound),
+                onBackClick = onNavigateBack
             )
         }
     ) { padding ->

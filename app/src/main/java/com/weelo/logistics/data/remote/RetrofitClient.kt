@@ -17,6 +17,9 @@ import java.io.IOException
 import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
@@ -65,6 +68,8 @@ object RetrofitClient {
     private var appContext: Context? = null
     private var securePrefs: SharedPreferences? = null
     private var cache: Cache? = null
+    private val _authState = MutableStateFlow(false)
+    val authState: StateFlow<Boolean> = _authState.asStateFlow()
     
     // Token storage keys
     private const val PREFS_NAME = "weelo_secure_prefs"
@@ -117,6 +122,7 @@ object RetrofitClient {
             securePrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             timber.log.Timber.w("⚠️ Using fallback SharedPreferences: ${e.message}")
         }
+        _authState.value = isLoggedIn()
     }
     
     // ==========================================================================
@@ -665,6 +671,10 @@ object RetrofitClient {
     val tripApi: TripApiService by lazy {
         retrofit.create(TripApiService::class.java)
     }
+
+    val notificationApi: NotificationApiService by lazy {
+        retrofit.create(NotificationApiService::class.java)
+    }
     
     val transporterApi: com.weelo.logistics.data.api.TransporterApiService by lazy {
         retrofit.create(com.weelo.logistics.data.api.TransporterApiService::class.java)
@@ -720,6 +730,7 @@ object RetrofitClient {
             putString(KEY_REFRESH_TOKEN, refreshToken)
             apply()
         }
+        _authState.value = accessToken.isNotBlank()
     }
     
     /**
@@ -758,7 +769,8 @@ object RetrofitClient {
      * Clear all tokens and user data (logout)
      */
     fun clearAllData() {
-        securePrefs?.edit()?.clear()?.apply()
+        securePrefs?.edit()?.clear()?.commit()
+        _authState.value = false
     }
     
     /**

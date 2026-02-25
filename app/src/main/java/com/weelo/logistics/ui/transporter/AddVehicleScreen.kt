@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -22,8 +23,10 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Construction
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Scale
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,18 +36,27 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.weelo.logistics.R
 import com.weelo.logistics.data.model.*
 // MockDataRepository removed — all data from real API
+import com.weelo.logistics.ui.components.CardArtwork
+import com.weelo.logistics.ui.components.CardMediaSpec
+import com.weelo.logistics.ui.components.IllustrationCanvas
+import com.weelo.logistics.ui.components.InlineInfoBannerCard
+import com.weelo.logistics.ui.components.MediaHeaderCard
 import com.weelo.logistics.ui.components.PrimaryButton
 import com.weelo.logistics.ui.components.PrimaryTextField
 import com.weelo.logistics.ui.components.PrimaryTopBar
+import com.weelo.logistics.ui.components.rememberScreenConfig
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.ripple.rememberRipple
 
@@ -63,6 +75,7 @@ fun AddVehicleScreen(
     onNavigateBack: () -> Unit,
     onVehicleAdded: () -> Unit
 ) {
+    val screenConfig = rememberScreenConfig()
     // STATE: Always starts fresh - NO persistence
     var currentStep by remember { mutableStateOf(0) }
     var selectedVehicleType by remember { mutableStateOf<VehicleType?>(null) }
@@ -225,46 +238,65 @@ fun AddVehicleScreen(
                     // State will be cleared on back navigation
                 }
                 
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+                        .padding(horizontal = if (screenConfig.isLandscape) 48.dp else 24.dp, vertical = 24.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = Success,
-                        modifier = Modifier.size(80.dp)
-                    )
-                    Spacer(Modifier.height(24.dp))
-                    Text(
-                        text = "Vehicles Added Successfully!",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "${selectedSubtypes.values.sum()} vehicles have been added to your fleet",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = TextSecondary
-                    )
-                    Spacer(Modifier.height(32.dp))
-                    PrimaryButton(
-                        text = "Done",
-                        onClick = {
-                            // CLEAR all state before navigating back
-                            currentStep = 0
-                            selectedVehicleType = null
-                            selectedCategory = null
-                            selectedSubtypes = emptyMap()
-                            intermediateSelection = null
-                            onVehicleAdded()
-                            onNavigateBack()
-                        }
-                    )
+                    val successContentWidth = if (screenConfig.isLandscape) 560.dp else 460.dp
+                    Column(
+                        modifier = Modifier
+                            .widthIn(max = successContentWidth)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        MediaHeaderCard(
+                            title = "Vehicles Added Successfully",
+                            subtitle = "Your fleet has been updated and is ready for trip assignments.",
+                            mediaSpec = CardMediaSpec(
+                                artwork = CardArtwork.DETAIL_VEHICLE,
+                                headerHeight = if (screenConfig.isLandscape) 108.dp else 124.dp
+                            ),
+                            trailingHeaderContent = {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = White.copy(alpha = 0.94f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Success, modifier = Modifier.size(18.dp))
+                                        Text("Saved", style = MaterialTheme.typography.labelMedium, color = TextPrimary)
+                                    }
+                                }
+                            }
+                        )
+
+                        InlineInfoBannerCard(
+                            title = "Fleet updated",
+                            subtitle = "${selectedSubtypes.values.sum()} vehicle(s) were added to your fleet.",
+                            icon = Icons.Default.LocalShipping,
+                            iconTint = Primary,
+                            containerColor = SurfaceVariant
+                        )
+
+                        PrimaryButton(
+                            text = "Done",
+                            onClick = {
+                                // CLEAR all state before navigating back
+                                currentStep = 0
+                                selectedVehicleType = null
+                                selectedCategory = null
+                                selectedSubtypes = emptyMap()
+                                intermediateSelection = null
+                                onVehicleAdded()
+                                onNavigateBack()
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -274,34 +306,37 @@ fun AddVehicleScreen(
 
 @Composable
 fun StepIndicator(currentStep: Int) {
+    val screenConfig = rememberScreenConfig()
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(White)
-            .padding(16.dp),
+            .padding(horizontal = if (screenConfig.isLandscape) 24.dp else 16.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        StepDot(step = 1, currentStep = currentStep, label = "Category *")
+        StepDot(step = 1, currentStep = currentStep, label = "Category")
         StepLine(isActive = currentStep > 1)
-        StepDot(step = 2, currentStep = currentStep, label = "Type *")
+        StepDot(step = 2, currentStep = currentStep, label = "Subtype")
         StepLine(isActive = currentStep > 2)
-        StepDot(step = 3, currentStep = currentStep, label = "Details *")
+        StepDot(step = 3, currentStep = currentStep, label = "Details")
     }
 }
 
 @Composable
 fun RowScope.StepDot(step: Int, currentStep: Int, label: String) {
+    val screenConfig = rememberScreenConfig()
+    val dotSize = if (screenConfig.isLandscape) 28.dp else 32.dp
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.weight(1f)
     ) {
         Box(
             modifier = Modifier
-                .size(32.dp)
+                .size(dotSize)
                 .background(
                     color = if (step <= currentStep) Primary else Divider,
-                    shape = androidx.compose.foundation.shape.CircleShape
+                    shape = CircleShape
                 ),
             contentAlignment = Alignment.Center
         ) {
@@ -315,7 +350,11 @@ fun RowScope.StepDot(step: Int, currentStep: Int, label: String) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = if (step <= currentStep) Primary else TextSecondary
+            color = if (step <= currentStep) Primary else TextSecondary,
+            textAlign = TextAlign.Center,
+            maxLines = if (screenConfig.isLandscape) 1 else 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 4.dp)
         )
     }
 }
@@ -333,6 +372,7 @@ fun RowScope.StepLine(isActive: Boolean) {
 
 @Composable
 fun SelectVehicleTypeStep(onVehicleTypeSelected: (VehicleType) -> Unit) {
+    val screenConfig = rememberScreenConfig()
     // OPTIMIZATION: Cache vehicle types list - never changes
     val vehicleTypes = remember { VehicleTypeCatalog.getAllVehicleTypes() }
     var showComingSoonDialog by remember { mutableStateOf(false) }
@@ -346,24 +386,42 @@ fun SelectVehicleTypeStep(onVehicleTypeSelected: (VehicleType) -> Unit) {
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(
-            text = "Select Vehicle Type",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = TextPrimary
+        MediaHeaderCard(
+            title = "Select Vehicle Type",
+            subtitle = "Choose the primary vehicle class for your fleet onboarding.",
+            mediaSpec = CardMediaSpec(
+                artwork = CardArtwork.ADD_VEHICLE_TYPE_SELECTOR,
+                headerHeight = if (screenConfig.isLandscape) 120.dp else 136.dp,
+                placement = com.weelo.logistics.ui.components.CardArtworkPlacement.TOP_BLEED,
+                contentScale = ContentScale.Fit,
+                containerColor = IllustrationCanvas,
+                showInsetFrame = false,
+                fitContentPadding = 2.dp,
+                enableImageFadeIn = true,
+                imageFadeDurationMs = 170
+            ),
+            trailingHeaderContent = {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = White.copy(alpha = 0.94f)
+                ) {
+                    Text(
+                        text = "Step 1",
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextPrimary
+                    )
+                }
+            }
         )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "Choose the type of vehicle you want to add to your fleet",
-            style = MaterialTheme.typography.bodyMedium,
-            color = TextSecondary
-        )
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
         
         LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
+            modifier = Modifier.weight(1f),
+            columns = GridCells.Adaptive(minSize = if (screenConfig.isLandscape) 180.dp else 150.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 8.dp)
         ) {
             items(
                 items = vehicleTypes,
@@ -422,10 +480,10 @@ fun VehicleTypeCard(vehicleType: VehicleType, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(1f),
+            .height(196.dp),
         onClick = onClick,
-        elevation = CardDefaults.cardElevation(4.dp),
-        shape = RoundedCornerShape(16.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (vehicleType.isAvailable) 4.dp else 1.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (vehicleType.isAvailable) 
                 White
@@ -433,53 +491,89 @@ fun VehicleTypeCard(vehicleType: VehicleType, onClick: () -> Unit) {
                 Color(0xFFF5F5F5) // Gray for coming soon
         )
     ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier.padding(16.dp)
+        Column(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(92.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                if (vehicleType.isAvailable) iconColor.copy(alpha = 0.18f) else Color.Gray.copy(alpha = 0.12f),
+                                White
+                            )
+                        )
+                    ),
+                contentAlignment = Alignment.Center
             ) {
+                if (!vehicleType.isAvailable) {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        color = White.copy(alpha = 0.9f)
+                    ) {
+                        Text(
+                            text = "Soon",
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary
+                        )
+                    }
+                }
+                
                 // Icon with background circle
                 Box(
                     modifier = Modifier
-                        .size(80.dp)
+                        .size(58.dp)
                         .background(
-                            color = if (vehicleType.isAvailable) 
-                                iconColor.copy(alpha = 0.1f) 
-                            else 
-                                Color.Gray.copy(alpha = 0.1f),
-                            shape = androidx.compose.foundation.shape.CircleShape
+                            color = if (vehicleType.isAvailable)
+                                iconColor.copy(alpha = 0.12f)
+                            else
+                                Color.Gray.copy(alpha = 0.10f),
+                            shape = CircleShape
                         ),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = icon,
                         contentDescription = vehicleType.name,
-                        modifier = Modifier.size(48.dp),
+                        modifier = Modifier.size(28.dp),
                         tint = if (vehicleType.isAvailable) iconColor else Color.Gray
                     )
                 }
-                
-                Spacer(modifier = Modifier.height(16.dp))
-                
+            }
+
+            Column(
+                horizontalAlignment = Alignment.Start,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp)
+            ) {
                 Text(
                     text = vehicleType.name,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = if (vehicleType.isAvailable) TextPrimary else TextSecondary
+                    color = if (vehicleType.isAvailable) TextPrimary else TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                
-                if (!vehicleType.isAvailable) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Coming Soon",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextSecondary
-                    )
-                }
+                Text(
+                    text = vehicleType.category,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = vehicleType.description.ifBlank { "Vehicle onboarding option" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }
@@ -490,6 +584,7 @@ fun SelectCategoryStep(
     onCategorySelected: (TruckCategory) -> Unit,
     @Suppress("UNUSED_PARAMETER") onBack: () -> Unit
 ) {
+    val screenConfig = rememberScreenConfig()
     // onBack will be used when back navigation from category selection is implemented
     // Performance: Use remember with key to cache categories
     val categories = remember(Unit) { VehicleCatalog.getAllCategories() }
@@ -499,24 +594,42 @@ fun SelectCategoryStep(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(
-            text = "Select Truck Category",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = TextPrimary
+        MediaHeaderCard(
+            title = "Select Truck Category",
+            subtitle = "Choose the category to view available subtypes and capacities.",
+            mediaSpec = CardMediaSpec(
+                artwork = CardArtwork.ADD_VEHICLE_TRUCK_CATEGORY,
+                headerHeight = if (screenConfig.isLandscape) 120.dp else 136.dp,
+                placement = com.weelo.logistics.ui.components.CardArtworkPlacement.TOP_BLEED,
+                contentScale = ContentScale.Fit,
+                containerColor = IllustrationCanvas,
+                showInsetFrame = false,
+                fitContentPadding = 2.dp,
+                enableImageFadeIn = true,
+                imageFadeDurationMs = 170
+            ),
+            trailingHeaderContent = {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = White.copy(alpha = 0.94f)
+                ) {
+                    Text(
+                        text = "${categories.size} categories",
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextPrimary
+                    )
+                }
+            }
         )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "Choose the type of truck you want to add",
-            style = MaterialTheme.typography.bodyMedium,
-            color = TextSecondary
-        )
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
         
         LazyVerticalGrid(
-            columns = GridCells.Fixed(2), // 2 columns for larger, popped-out cards
+            modifier = Modifier.weight(1f),
+            columns = GridCells.Adaptive(minSize = if (screenConfig.isLandscape) 190.dp else 160.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(bottom = 12.dp)
         ) {
             items(
                 items = categories,
@@ -549,75 +662,77 @@ fun CategoryCard(category: TruckCategory, onClick: () -> Unit) {
 
     // Granular Scaling based on user request ("Increase all very little except Tanker, Mini, Open")
     val scaleFactor = when (category.id.lowercase()) {
-        "container" -> 1.6f       // Increased
-        "lcv" -> 1.52f            // Increased
-        "bulker" -> 1.48f         // Increased (removed haulage)
-        "trailer" -> 1.35f        // Increased (was 1.25)
-        "tipper", "dumper", "others" -> 1.45f // Increased
-        "tanker" -> 1.45f         // Excluded from increase (kept same)
-        "mini" -> 1.42f           // Excluded from increase (kept same)
-        "open" -> 1.35f           // Excluded from increase (kept same)
-        else -> 1.3f              // Default
+        "container" -> 1.42f
+        "lcv" -> 1.36f
+        "bulker" -> 1.34f
+        "trailer" -> 1.24f
+        "tipper", "dumper", "others" -> 1.30f
+        "tanker" -> 1.28f
+        "mini" -> 1.28f
+        "open" -> 1.22f
+        else -> 1.18f
     }
-
-    // Glassy Gradient Brush
-    val glassBrush = androidx.compose.ui.graphics.Brush.linearGradient(
-        colors = listOf(
-            Color(0xFFFFFFFF),
-            Color(0xFFF0F4F8),
-            Color(0xFFE1E8ED)
-        ),
-        start = androidx.compose.ui.geometry.Offset(0f, 0f),
-        end = androidx.compose.ui.geometry.Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
-    )
-
-    // RIPPLE FIX: Use MutableInteractionSource with Light Blue Ripple
-    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(1.1f),
-        elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
-        shape = RoundedCornerShape(24.dp), 
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent), 
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFFFFF))
+            .height(220.dp),
+        onClick = onClick,
+        elevation = CardDefaults.cardElevation(defaultElevation = 5.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = White),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Divider)
     ) {
-        // Parent Box for layering
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            // Layer 1: Glassy Background
-            Box(
-                 modifier = Modifier
-                     .fillMaxSize()
-                     .background(glassBrush)
-            )
-            
-            // Layer 2: Maximized Image
-            Image(
-                painter = painterResource(id = imageRes),
-                contentDescription = category.name,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .scale(scaleFactor),
-                contentScale = ContentScale.Crop
-            )
-            
-            // Layer 3: Interaction Overlay (Ripple on Top)
+        Column(modifier = Modifier.fillMaxSize()) {
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        interactionSource = interactionSource,
-                        indication = androidx.compose.material.ripple.rememberRipple(
-                            bounded = true,
-                            color = Color(0xFF64B5F6) // Light Blue Ripple
-                        ),
-                        onClick = onClick
-                    )
-            )
+                    .fillMaxWidth()
+                    .height(126.dp)
+                    .background(SurfaceVariant)
+                    .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource(id = imageRes),
+                    contentDescription = category.name,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .scale(scaleFactor),
+                    contentScale = ContentScale.Crop
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.08f))
+                            )
+                        )
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = category.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = category.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }
@@ -860,20 +975,24 @@ fun IntermediateTypeButton(
                 .padding(24.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary
-                )
-            }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = subtitle,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
             
             Spacer(modifier = Modifier.width(16.dp))
             
@@ -920,11 +1039,11 @@ fun SubtypeCounterItem(
     
     val contentScaleFactor = remember(category.id) {
         when (category.id.lowercase()) {
-            "container" -> 1.7f
-            "mini" -> 1.5f
-            "open" -> 1.5f
-            "trailer" -> 1.3f
-            "dumper" -> 1.3f
+            "container" -> 1.28f
+            "mini" -> 1.20f
+            "open" -> 1.20f
+            "trailer" -> 1.12f
+            "dumper" -> 1.12f
             else -> 1.0f
         }
     }
@@ -948,7 +1067,7 @@ fun SubtypeCounterItem(
     
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shadowElevation = 12.dp, // Shadow for "pop out"
+        shadowElevation = 7.dp, // Reduced shadow for lower GPU cost on long lists
         tonalElevation = 0.dp,   // 0.dp to prevent "Orange" tint interaction with Primary color
         shape = RoundedCornerShape(20.dp),
         color = Color.White,     // Pure White
@@ -989,13 +1108,17 @@ fun SubtypeCounterItem(
                     text = subtype.name,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    color = TextPrimary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "${subtype.capacityTons} Ton",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             

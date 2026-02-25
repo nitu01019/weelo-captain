@@ -119,23 +119,30 @@ fun DriverTripHistoryScreen(
             is TripHistoryState.Success -> {
                 val trips = state.trips
                 if (trips.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), Alignment.Center) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.padding(32.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.History, null,
-                                Modifier.size(64.dp), tint = TextDisabled
+                    if (searchQuery.isEmpty() && selectedFilter == "All") {
+                        EmptyStateHost(
+                            spec = noActivityYetEmptyStateSpec(
+                                artwork = EmptyStateArtwork.TRIP_HISTORY,
+                                title = stringResource(R.string.empty_title_trip_history),
+                                subtitle = stringResource(R.string.empty_subtitle_trip_history)
                             )
-                            Spacer(Modifier.height(16.dp))
-                            Text(
-                                if (searchQuery.isEmpty()) stringResource(R.string.no_trip_history)
-                                else stringResource(R.string.no_trips_found),
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = TextSecondary
-                            )
-                        }
+                        )
+                    } else {
+                        EmptyStateHost(
+                            spec = if (searchQuery.isNotEmpty()) {
+                                searchEmptyStateSpec(
+                                    artwork = EmptyStateArtwork.TRIP_FILTER,
+                                    title = stringResource(R.string.empty_title_trip_history_search),
+                                    subtitle = stringResource(R.string.empty_subtitle_trip_history_search)
+                                )
+                            } else {
+                                filterEmptyStateSpec(
+                                    artwork = EmptyStateArtwork.TRIP_FILTER,
+                                    title = stringResource(R.string.empty_title_trip_filter),
+                                    subtitle = stringResource(R.string.empty_subtitle_trip_filter)
+                                )
+                            }
+                        )
                     }
                 } else {
                     TripHistoryContent(

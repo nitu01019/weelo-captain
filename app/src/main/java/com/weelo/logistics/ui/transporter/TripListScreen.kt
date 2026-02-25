@@ -10,8 +10,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.weelo.logistics.R
 import com.weelo.logistics.data.api.TripData
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.ui.components.*
@@ -100,10 +102,24 @@ fun TripListScreen(
                 }
             } else if (filteredTrips.isEmpty()) {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
-                        Icon(Icons.Default.LocalShipping, null, Modifier.size(64.dp), tint = TextDisabled)
-                        Spacer(Modifier.height(16.dp))
-                        Text("No trips found", style = MaterialTheme.typography.bodyLarge, color = TextSecondary)
+                    if (trips.isEmpty() && selectedFilter == "All") {
+                        EmptyStateHost(
+                            spec = noActivityYetEmptyStateSpec(
+                                artwork = EmptyStateArtwork.TRIPS_FIRST_RUN,
+                                title = stringResource(R.string.empty_trips_title),
+                                subtitle = stringResource(R.string.empty_trips_subtitle),
+                                actionLabel = stringResource(R.string.empty_action_create_trip)
+                            ),
+                            onAction = onNavigateToCreateTrip
+                        )
+                    } else {
+                        EmptyStateHost(
+                            spec = filterEmptyStateSpec(
+                                artwork = EmptyStateArtwork.TRIP_FILTER,
+                                title = stringResource(R.string.empty_title_trip_filter),
+                                subtitle = stringResource(R.string.empty_subtitle_trip_filter)
+                            )
+                        )
                     }
                 }
             } else {

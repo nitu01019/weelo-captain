@@ -82,6 +82,19 @@ android {
             "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
             "-opt-in=kotlin.RequiresOptIn"
         )
+
+        val composeCompilerReportsEnabled =
+            (project.findProperty("composeCompilerReports")?.toString()?.toBoolean() == true)
+        if (composeCompilerReportsEnabled) {
+            val composeMetricsDir = layout.buildDirectory.dir("compose-metrics").get().asFile.absolutePath
+            val composeReportsDir = layout.buildDirectory.dir("compose-reports").get().asFile.absolutePath
+            freeCompilerArgs += listOf(
+                "-P",
+                "plugin:androidx.compose.compiler.plugins.kotlin:metricsDestination=$composeMetricsDir",
+                "-P",
+                "plugin:androidx.compose.compiler.plugins.kotlin:reportsDestination=$composeReportsDir"
+            )
+        }
     }
     
     // Performance optimizations

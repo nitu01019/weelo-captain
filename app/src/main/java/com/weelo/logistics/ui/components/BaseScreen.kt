@@ -15,8 +15,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.weelo.logistics.R
 import com.weelo.logistics.ui.theme.Primary
 import com.weelo.logistics.ui.theme.Surface
 import com.weelo.logistics.ui.theme.TextPrimary
@@ -85,7 +87,7 @@ fun BaseScreen(
                             IconButton(onClick = onNavigateBack) {
                                 Icon(
                                     imageVector = Icons.Default.ArrowBack,
-                                    contentDescription = "Back",
+                                    contentDescription = stringResource(R.string.cd_back),
                                     tint = TextPrimary
                                 )
                             }
@@ -206,7 +208,7 @@ fun <T> LazyListScreen(
                         IconButton(onClick = onNavigateBack) {
                             Icon(
                                 imageVector = Icons.Default.ArrowBack,
-                                contentDescription = "Back",
+                                contentDescription = stringResource(R.string.cd_back),
                                 tint = TextPrimary
                             )
                         }

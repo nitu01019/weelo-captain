@@ -15,17 +15,11 @@ import retrofit2.http.*
  * BROADCAST FLOW:
  * ===============
  * 
- * TRANSPORTER SIDE (Weelo App):
- * 1. Create broadcast with trip details
- * 2. Backend broadcasts to eligible drivers via WebSocket/FCM
- * 3. Transporter sees responses from drivers in real-time
- * 4. Transporter assigns drivers to trips
- * 
- * DRIVER SIDE (Weelo Captain App):
- * 1. Receive broadcast notification via FCM
- * 2. View broadcast details
- * 3. Accept or decline the trip
- * 4. If accepted, trip is assigned and shows in active trips
+ * CUSTOMER -> TRANSPORTER -> DRIVER FLOW:
+ * 1. Customer request is broadcast to eligible transporters.
+ * 2. Transporter reviews active requests and commits trucks/drivers.
+ * 3. Driver receives trip assignment only after transporter confirms assignment.
+ * 4. Driver accepts/declines assignment updates, not raw customer broadcast.
  * 
  * REAL-TIME UPDATES:
  * ==================
@@ -41,12 +35,13 @@ import retrofit2.http.*
 interface BroadcastApiService {
     
     /**
-     * Get all active broadcasts for driver
+     * Get active broadcasts for current transporter control surface.
      * 
      * ENDPOINT: GET /broadcasts/active
      * Headers: Authorization: Bearer {accessToken}
      * Query Params:
-     * - driverId: string (required)
+     * - transporterId: string (preferred for transporter feed)
+     * - driverId: string (legacy compatibility fallback)
      * - vehicleType: string (optional) - filter by vehicle type
      * - maxDistance: number (optional) - filter by max distance
      * 
@@ -89,7 +84,8 @@ interface BroadcastApiService {
     @GET("broadcasts/active")
     suspend fun getActiveBroadcasts(
         @Header("Authorization") token: String,
-        @Query("driverId") driverId: String,
+        @Query("transporterId") transporterId: String? = null,
+        @Query("driverId") driverId: String? = null,
         @Query("vehicleType") vehicleType: String? = null,
         @Query("maxDistance") maxDistance: Double? = null
     ): Response<BroadcastListResponse>
@@ -113,7 +109,7 @@ interface BroadcastApiService {
     ): Response<BroadcastResponse>
     
     /**
-     * Accept a broadcast (driver accepts the trip)
+     * Accept/commit broadcast assignment (legacy compatibility path).
      * 
      * ENDPOINT: POST /broadcasts/{broadcastId}/accept
      * Headers: Authorization: Bearer {accessToken}
@@ -150,7 +146,7 @@ interface BroadcastApiService {
     ): Response<AcceptBroadcastResponse>
     
     /**
-     * Decline a broadcast
+     * Decline a broadcast request from transporter control surface.
      * 
      * ENDPOINT: POST /broadcasts/{broadcastId}/decline
      * Headers: Authorization: Bearer {accessToken}

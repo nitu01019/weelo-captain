@@ -2,8 +2,10 @@ package com.weelo.logistics.ui.driver
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -12,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.R
 import com.weelo.logistics.ui.components.*
@@ -71,6 +74,7 @@ fun DriverEarningsScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
                     .background(White)
                     .padding(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -89,15 +93,13 @@ fun DriverEarningsScreen(
                     SkeletonEarningsLoading(Modifier.fillMaxSize())
                 }
                 is EarningsState.Error -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(stringResource(R.string.error_loading_earnings), color = TextSecondary)
-                            Spacer(Modifier.height(16.dp))
-                            TextButton(onClick = { viewModel.refresh() }) {
-                                Text(stringResource(R.string.retry))
-                            }
-                        }
-                    }
+                    RetryErrorStatePanel(
+                        title = stringResource(R.string.ui_retry_error_title),
+                        message = stringResource(R.string.error_loading_earnings),
+                        onRetry = { viewModel.refresh() },
+                        modifier = Modifier.fillMaxSize(),
+                        illustrationRes = EmptyStateArtwork.EARNINGS_NO_TRIPS.drawableRes
+                    )
                 }
                 is EarningsState.Success -> {
                     val data = state.data
@@ -124,78 +126,114 @@ private fun EarningsContent(
     pendingAmount: Double,
     trips: List<EarningItem>
 ) {
-    LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+    val screenConfig = rememberScreenConfig()
+    val contentMaxWidth = if (screenConfig.isLandscape) 760.dp else 620.dp
+    val localizedPeriod = when (selectedPeriod) {
+        "Today" -> stringResource(R.string.period_today)
+        "Week" -> stringResource(R.string.period_week)
+        "Month" -> stringResource(R.string.period_month)
+        else -> selectedPeriod
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter
     ) {
-        // Total Earnings Card
-        item {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(Success.copy(alpha = 0.1f))
-            ) {
-                Column(Modifier.padding(24.dp)) {
-                    // Use localized period label (not raw API key) in format string
-                    val localizedPeriod = when (selectedPeriod) {
-                        "Today" -> stringResource(R.string.period_today)
-                        "Week" -> stringResource(R.string.period_week)
-                        "Month" -> stringResource(R.string.period_month)
-                        else -> selectedPeriod
-                    }
-                    Text(
-                        stringResource(R.string.total_earnings_format, localizedPeriod),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = TextSecondary
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "₹${String.format("%,.0f", totalEarnings)}",
-                        style = MaterialTheme.typography.displaySmall,
-                        fontWeight = FontWeight.Bold,
-                        color = Success
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        EarningsStat(stringResource(R.string.trips_label), "$tripCount")
-                        EarningsStat(stringResource(R.string.avg_per_trip), "₹${String.format("%,.0f", avgPerTrip)}")
-                    }
-                }
-            }
-        }
-        
-        // Pending Payments
-        item {
-            SectionCard(stringResource(R.string.pending_payments)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = contentMaxWidth),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item {
+                MediaHeaderCard(
+                    title = "₹${String.format("%,.0f", totalEarnings)}",
+                    subtitle = stringResource(R.string.ui_card_subtitle_earnings_overview),
+                    mediaSpec = CardMediaSpec(
+                        artwork = CardArtwork.DRIVER_EARNINGS,
+                        headerHeight = if (screenConfig.isLandscape) 108.dp else 124.dp
+                    ),
+                    trailingHeaderContent = {
+                        Surface(
+                            shape = MaterialTheme.shapes.medium,
+                            color = White.copy(alpha = 0.94f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Payments, contentDescription = null, tint = Success, modifier = Modifier.size(16.dp))
+                                Text(localizedPeriod, style = MaterialTheme.typography.labelMedium, color = TextPrimary)
+                            }
+                        }
+                    },
+                    content = {
                         Text(
-                            stringResource(R.string.pending_amount),
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = stringResource(R.string.total_earnings_format, localizedPeriod),
+                            style = MaterialTheme.typography.bodySmall,
                             color = TextSecondary
                         )
-                        Text(
-                            "₹${String.format("%,.0f", pendingAmount)}",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = Warning
-                        )
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            EarningsStat(
+                                label = stringResource(R.string.trips_label),
+                                value = "$tripCount",
+                                modifier = Modifier.weight(1f)
+                            )
+                            EarningsStat(
+                                label = stringResource(R.string.avg_per_trip),
+                                value = "₹${String.format("%,.0f", avgPerTrip)}",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
-                    TextButton(onClick = { /* TODO */ }) {
-                        Text(stringResource(R.string.request_payment))
+                )
+            }
+
+            item {
+                SectionCard(stringResource(R.string.pending_payments)) {
+                    if (pendingAmount <= 0.0) {
+                        InlineSectionEmptyState(
+                            spec = allCaughtUpEmptyStateSpec(
+                                artwork = EmptyStateArtwork.EARNINGS_PENDING_CAUGHT_UP,
+                                title = stringResource(R.string.empty_title_earnings_pending_caught_up),
+                                subtitle = stringResource(R.string.empty_subtitle_earnings_pending_caught_up)
+                            )
+                        )
+                    } else {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.pending_amount),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextSecondary
+                                )
+                                Text(
+                                    "₹${String.format("%,.0f", pendingAmount)}",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Warning,
+                                    maxLines = 1
+                                )
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            TextButton(onClick = { /* TODO */ }) {
+                                Text(stringResource(R.string.request_payment))
+                            }
+                        }
                     }
                 }
             }
-        }
-        
-        // Trip-wise Breakdown
-        if (trips.isNotEmpty()) {
+
             item {
                 Text(
                     stringResource(R.string.trip_wise_breakdown),
@@ -204,33 +242,73 @@ private fun EarningsContent(
                 )
             }
 
-            items(
-                items = trips,
-                key = { it.tripId },
-                contentType = { "earning_card" }
-            ) { earning ->
-                EarningCard(earning)
+            if (trips.isEmpty()) {
+                item {
+                    InlineSectionEmptyState(
+                        spec = noActivityYetEmptyStateSpec(
+                            artwork = EmptyStateArtwork.EARNINGS_NO_TRIPS,
+                            title = stringResource(R.string.empty_title_earnings_no_trips),
+                            subtitle = stringResource(R.string.empty_subtitle_earnings_no_trips)
+                        )
+                    )
+                }
+            } else {
+                items(
+                    items = trips,
+                    key = { it.tripId },
+                    contentType = { "earning_card" }
+                ) { earning ->
+                    EarningCard(earning)
+                }
             }
         }
     }
 }
 
 @Composable
-fun EarningsStat(label: String, value: String) {
-    Column {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-        Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+fun EarningsStat(label: String, value: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.medium,
+        color = SurfaceVariant
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 
 @Composable
 fun EarningCard(earning: EarningItem) {
-    Card(Modifier.fillMaxWidth()) {
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
@@ -243,23 +321,29 @@ fun EarningCard(earning: EarningItem) {
                 Text(
                     earning.route,
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
+                    color = TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
                     earning.date,
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-            Column(horizontalAlignment = Alignment.End) {
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 Text(
                     "₹${earning.amount}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = Success
                 )
-                Spacer(Modifier.height(4.dp))
                 StatusChip(
                     text = when (earning.status) {
                         "Paid" -> stringResource(R.string.status_paid)

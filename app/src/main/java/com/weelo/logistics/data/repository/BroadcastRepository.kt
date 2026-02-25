@@ -4,15 +4,21 @@ import android.annotation.SuppressLint
 import android.content.Context
 import com.weelo.logistics.data.api.AcceptBroadcastRequest
 import com.weelo.logistics.data.api.AcceptBroadcastResponse
+import com.weelo.logistics.data.api.BroadcastListResponse
 import com.weelo.logistics.data.api.BroadcastResponseData
+import com.weelo.logistics.data.api.OrderWithRequests
 import com.weelo.logistics.data.model.RequestedVehicle
 import com.weelo.logistics.data.api.DeclineBroadcastRequest
 import com.weelo.logistics.data.api.DeclineBroadcastResponse
+import com.weelo.logistics.data.api.TruckRequestInfo
 import com.weelo.logistics.data.model.BroadcastStatus
 import com.weelo.logistics.data.model.BroadcastTrip
 import com.weelo.logistics.data.model.Location
 import com.weelo.logistics.data.model.TruckCategory
 import com.weelo.logistics.data.model.VehicleCatalog
+import com.weelo.logistics.broadcast.BroadcastStage
+import com.weelo.logistics.broadcast.BroadcastStatus as BroadcastTelemetryStatus
+import com.weelo.logistics.broadcast.BroadcastTelemetry
 import com.weelo.logistics.data.remote.RetrofitClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +33,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Locale
+import retrofit2.Response
 import timber.log.Timber
 
 // =============================================================================
@@ -80,6 +87,12 @@ data class CachedBroadcastList(
     val isStale: Boolean = false
 )
 
+enum class BroadcastFetchQueryMode {
+    BOOKINGS_REQUESTS_PRIMARY_WITH_BROADCASTS_FALLBACK,
+    TRANSPORTER_PRIMARY_WITH_FALLBACK,
+    LEGACY_DRIVER_ONLY
+}
+
 // Note: AcceptBroadcastRequest, AcceptBroadcastResponse, 
 // DeclineBroadcastRequest, DeclineBroadcastResponse 
 // are imported from com.weelo.logistics.data.api.BroadcastApiService
@@ -110,6 +123,21 @@ class BroadcastRepository private constructor(
     
     // Track accepted broadcasts locally for immediate UI feedback
     private val acceptedBroadcastIds = mutableSetOf<String>()
+
+    private data class ActiveBroadcastFetchAttempt(
+        val response: Response<BroadcastListResponse>,
+        val path: String,
+        val reason: String? = null
+    )
+
+    private data class ActiveBookingsRequestsFetchAttempt(
+        val broadcasts: List<BroadcastTrip>,
+        val path: String,
+        val code: Int,
+        val success: Boolean,
+        val reason: String? = null,
+        val rawError: String? = null
+    )
     
     @SuppressLint("StaticFieldLeak")
     companion object {
@@ -145,6 +173,119 @@ class BroadcastRepository private constructor(
     // =========================================================================
     // FETCH OPERATIONS
     // =========================================================================
+
+    private suspend fun fetchActiveBroadcastsWithQueryPolicy(
+        token: String,
+        effectiveUserId: String,
+        vehicleType: String?,
+        queryMode: BroadcastFetchQueryMode
+    ): ActiveBroadcastFetchAttempt {
+        val role = RetrofitClient.getUserRole()?.lowercase(Locale.US)
+        if (queryMode == BroadcastFetchQueryMode.LEGACY_DRIVER_ONLY || role != "transporter") {
+            return ActiveBroadcastFetchAttempt(
+                response = broadcastApi.getActiveBroadcasts(
+                    token = token,
+                    driverId = effectiveUserId,
+                    vehicleType = vehicleType
+                ),
+                path = "legacy_driver_query"
+            )
+        }
+
+        val transporterResponse = broadcastApi.getActiveBroadcasts(
+            token = token,
+            transporterId = effectiveUserId,
+            driverId = null,
+            vehicleType = vehicleType
+        )
+        if (transporterResponse.isSuccessful && transporterResponse.body()?.success == true) {
+            return ActiveBroadcastFetchAttempt(
+                response = transporterResponse,
+                path = "transporter_query"
+            )
+        }
+
+        if (!shouldFallbackToLegacyDriverQuery(transporterResponse)) {
+            return ActiveBroadcastFetchAttempt(
+                response = transporterResponse,
+                path = "transporter_query",
+                reason = "transporter_query_failed_no_fallback"
+            )
+        }
+
+        val legacyFallbackResponse = broadcastApi.getActiveBroadcasts(
+            token = token,
+            transporterId = null,
+            driverId = effectiveUserId,
+            vehicleType = vehicleType
+        )
+        return ActiveBroadcastFetchAttempt(
+            response = legacyFallbackResponse,
+            path = "legacy_fallback",
+            reason = "transporter_query_unavailable"
+        )
+    }
+
+    private fun shouldFallbackToLegacyDriverQuery(response: Response<BroadcastListResponse>): Boolean {
+        if (response.code() in setOf(400, 404, 405, 422)) return true
+        val errorCode = response.body()?.error?.code?.lowercase(Locale.US)
+        val errorMessage = response.body()?.error?.message?.lowercase(Locale.US)
+        return (errorCode?.contains("transporter") == true) ||
+            (errorMessage?.contains("transporter") == true)
+    }
+
+    private suspend fun fetchActiveBroadcastsFromBookingsRequests(
+        token: String,
+        vehicleType: String?
+    ): ActiveBookingsRequestsFetchAttempt {
+        val response = broadcastApi.getActiveTruckRequests(token = token)
+        if (response.isSuccessful && response.body()?.success == true) {
+            val mapped = mapActiveRequestsToBroadcastTrips(response.body()?.data?.orders.orEmpty())
+            val filtered = if (vehicleType.isNullOrBlank()) {
+                mapped
+            } else {
+                val normalizedVehicleType = vehicleType.trim().lowercase(Locale.US)
+                mapped.filter { trip ->
+                    val category = trip.vehicleType ?: return@filter false
+                    category.id.lowercase(Locale.US) == normalizedVehicleType ||
+                        category.name.lowercase(Locale.US).contains(normalizedVehicleType)
+                }
+            }
+            return ActiveBookingsRequestsFetchAttempt(
+                broadcasts = filtered,
+                path = "bookings_requests_primary",
+                code = response.code(),
+                success = true
+            )
+        }
+
+        val rawError = try {
+            response.errorBody()?.string()
+        } catch (_: Exception) {
+            null
+        }
+
+        return ActiveBookingsRequestsFetchAttempt(
+            broadcasts = emptyList(),
+            path = "bookings_requests_primary",
+            code = response.code(),
+            success = false,
+            reason = "bookings_requests_unavailable",
+            rawError = rawError
+        )
+    }
+
+    private fun shouldFallbackToBroadcastsActive(attempt: ActiveBookingsRequestsFetchAttempt): Boolean {
+        // Fallback only for explicit compatibility errors, not generic backend failures.
+        if (attempt.code in setOf(404, 405, 501)) return true
+        if (attempt.code !in setOf(400, 422)) return false
+        val error = attempt.rawError?.lowercase(Locale.US) ?: return false
+        return error.contains("bookings/requests/active") ||
+            error.contains("cannot get") ||
+            error.contains("route not found") ||
+            error.contains("unsupported") ||
+            error.contains("not implemented")
+    }
     
     /**
      * Fetch active broadcasts with caching support
@@ -157,7 +298,8 @@ class BroadcastRepository private constructor(
     suspend fun fetchActiveBroadcasts(
         forceRefresh: Boolean = false,
         vehicleType: String? = null,
-        userId: String? = null
+        userId: String? = null,
+        queryMode: BroadcastFetchQueryMode = BroadcastFetchQueryMode.BOOKINGS_REQUESTS_PRIMARY_WITH_BROADCASTS_FALLBACK
     ): BroadcastResult<CachedBroadcastList> = withContext(Dispatchers.IO) {
         cacheMutex.withLock {
             // Check cache validity (30 seconds for real-time data)
@@ -183,30 +325,121 @@ class BroadcastRepository private constructor(
                     return@withContext error
                 }
                 
-                val effectiveUserId = userId ?: RetrofitClient.getUserId() ?: ""
-                
+                val effectiveUserId = userId ?: RetrofitClient.getUserId()
+                if (effectiveUserId.isNullOrBlank()) {
+                    val error = BroadcastResult.Error("Missing authenticated user id", 401)
+                    _broadcastsState.value = error
+                    _isRefreshing.value = false
+                    return@withContext error
+                }
+
                 timber.log.Timber.d("📡 Fetching broadcasts for user: $effectiveUserId")
-                
-                val response = broadcastApi.getActiveBroadcasts(
-                    token = "Bearer $token",
-                    driverId = effectiveUserId,
-                    vehicleType = vehicleType
-                )
-                
-                if (response.isSuccessful && response.body()?.success == true) {
-                    val broadcasts = response.body()?.broadcasts ?: emptyList()
-                    
-                    // Filter out already accepted broadcasts
-                    val filteredBroadcasts = broadcasts.filterNot { 
-                        acceptedBroadcastIds.contains(it.broadcastId) 
+                val normalizedToken = "Bearer $token"
+                var resolvedPath = "broadcasts_active"
+                var resolvedReason: String? = null
+                var resolvedHttpCode = 200
+                var resolvedError: String? = null
+                var mappedBroadcasts: List<BroadcastTrip>? = null
+                var aliasFallbackUsed = false
+
+                if (
+                    queryMode == BroadcastFetchQueryMode.BOOKINGS_REQUESTS_PRIMARY_WITH_BROADCASTS_FALLBACK &&
+                    RetrofitClient.getUserRole()?.equals("transporter", ignoreCase = true) == true
+                ) {
+                    val bookingsAttempt = fetchActiveBroadcastsFromBookingsRequests(
+                        token = normalizedToken,
+                        vehicleType = vehicleType
+                    )
+                    resolvedPath = bookingsAttempt.path
+                    resolvedReason = bookingsAttempt.reason
+                    resolvedHttpCode = bookingsAttempt.code
+
+                    if (bookingsAttempt.success) {
+                        mappedBroadcasts = bookingsAttempt.broadcasts
+                    } else if (shouldFallbackToBroadcastsActive(bookingsAttempt)) {
+                        aliasFallbackUsed = true
+                        val fallbackAttempt = fetchActiveBroadcastsWithQueryPolicy(
+                            token = normalizedToken,
+                            effectiveUserId = effectiveUserId,
+                            vehicleType = vehicleType,
+                            queryMode = BroadcastFetchQueryMode.TRANSPORTER_PRIMARY_WITH_FALLBACK
+                        )
+                        val fallbackResponse = fallbackAttempt.response
+                        resolvedPath = "${bookingsAttempt.path}->${fallbackAttempt.path}"
+                        resolvedReason = fallbackAttempt.reason ?: "bookings_primary_fallback_to_broadcasts"
+                        resolvedHttpCode = fallbackResponse.code()
+                        if (fallbackResponse.isSuccessful && fallbackResponse.body()?.success == true) {
+                            mappedBroadcasts = fallbackResponse.body()
+                                ?.broadcasts
+                                .orEmpty()
+                                .filterNot { acceptedBroadcastIds.contains(it.broadcastId) }
+                                .map { mapToBroadcastTrip(it) }
+                        } else {
+                            resolvedError = fallbackResponse.body()?.error?.message
+                                ?: fallbackResponse.errorBody()?.string()
+                                ?: "Failed to fetch broadcasts"
+                        }
+                    } else {
+                        resolvedError = bookingsAttempt.rawError ?: "Failed to fetch active requests"
                     }
-                    
-                    // Map API response to domain model
-                    val mappedBroadcasts = filteredBroadcasts.map { mapToBroadcastTrip(it) }
+                } else {
+                    val fetchAttempt = fetchActiveBroadcastsWithQueryPolicy(
+                        token = normalizedToken,
+                        effectiveUserId = effectiveUserId,
+                        vehicleType = vehicleType,
+                        queryMode = queryMode
+                    )
+                    val response = fetchAttempt.response
+                    resolvedPath = fetchAttempt.path
+                    resolvedReason = fetchAttempt.reason
+                    resolvedHttpCode = response.code()
+                    if (response.isSuccessful && response.body()?.success == true) {
+                        mappedBroadcasts = response.body()
+                            ?.broadcasts
+                            .orEmpty()
+                            .filterNot { acceptedBroadcastIds.contains(it.broadcastId) }
+                            .map { mapToBroadcastTrip(it) }
+                    } else {
+                        resolvedError = response.body()?.error?.message
+                            ?: response.errorBody()?.string()
+                            ?: "Failed to fetch broadcasts"
+                    }
+                }
+
+                BroadcastTelemetry.record(
+                    stage = BroadcastStage.BROADCAST_ACTIVE_FETCH,
+                    status = if (mappedBroadcasts != null) {
+                        BroadcastTelemetryStatus.SUCCESS
+                    } else {
+                        BroadcastTelemetryStatus.FAILED
+                    },
+                    reason = resolvedReason,
+                    attrs = mapOf(
+                        "path" to resolvedPath,
+                        "primary_path" to "bookings/requests/active",
+                        "httpCode" to resolvedHttpCode.toString(),
+                        "alias_fallback_used" to aliasFallbackUsed.toString(),
+                        "alias_used" to aliasFallbackUsed.toString()
+                    )
+                )
+                timber.log.Timber.d(
+                    "📡 Active broadcast fetch path=%s reason=%s code=%d aliasFallback=%s",
+                    resolvedPath,
+                    resolvedReason ?: "none",
+                    resolvedHttpCode,
+                    aliasFallbackUsed
+                )
+
+                if (mappedBroadcasts != null) {
+                    val sortedBroadcasts = mappedBroadcasts
+                        .sortedWith(
+                            compareByDescending<BroadcastTrip> { it.isUrgent }
+                                .thenByDescending { it.broadcastTime }
+                        )
                     
                     val cachedList = CachedBroadcastList(
-                        broadcasts = mappedBroadcasts,
-                        totalCount = mappedBroadcasts.size,
+                        broadcasts = sortedBroadcasts,
+                        totalCount = sortedBroadcasts.size,
                         lastUpdated = now,
                         isStale = false
                     )
@@ -214,7 +447,7 @@ class BroadcastRepository private constructor(
                     // Update cache
                     cachedBroadcasts = cachedList
                     
-                    timber.log.Timber.i("✅ Fetched ${mappedBroadcasts.size} active broadcasts")
+                    timber.log.Timber.i("✅ Fetched ${sortedBroadcasts.size} active broadcasts")
                     
                     val result = BroadcastResult.Success(cachedList)
                     _broadcastsState.value = result
@@ -222,10 +455,8 @@ class BroadcastRepository private constructor(
                     return@withContext result
                     
                 } else {
-                    val errorMsg = response.body()?.error?.message 
-                        ?: response.errorBody()?.string() 
-                        ?: "Failed to fetch broadcasts"
-                    val errorCode = response.code()
+                    val errorMsg = resolvedError ?: "Failed to fetch broadcasts"
+                    val errorCode = resolvedHttpCode
                     
                     timber.log.Timber.e("❌ Fetch broadcasts failed: $errorMsg (code: $errorCode)")
                     
@@ -539,6 +770,78 @@ class BroadcastRepository private constructor(
     // =========================================================================
     // MAPPING FUNCTIONS
     // =========================================================================
+
+    private fun mapActiveRequestsToBroadcastTrips(orders: List<OrderWithRequests>): List<BroadcastTrip> {
+        return orders.map { group -> mapOrderGroupToBroadcastTrip(group) }
+    }
+
+    private fun mapOrderGroupToBroadcastTrip(group: OrderWithRequests): BroadcastTrip {
+        val order = group.order
+        val requestedVehicles = mapRequestedVehiclesFromTruckRequests(group.requests)
+        val primaryRequest = group.requests.firstOrNull()
+
+        val vehicleType = parseVehicleType(primaryRequest?.vehicleType)
+        val perTruckFare = primaryRequest?.pricePerTruck?.toDouble()
+            ?: requestedVehicles.firstOrNull()?.farePerTruck
+            ?: 0.0
+
+        return BroadcastTrip(
+            broadcastId = order.id,
+            customerId = order.customerId,
+            customerName = order.customerName,
+            customerMobile = order.customerPhone,
+            pickupLocation = Location(
+                latitude = order.pickup.latitude,
+                longitude = order.pickup.longitude,
+                address = order.pickup.address,
+                city = order.pickup.city,
+                state = order.pickup.state,
+                pincode = null
+            ),
+            dropLocation = Location(
+                latitude = order.drop.latitude,
+                longitude = order.drop.longitude,
+                address = order.drop.address,
+                city = order.drop.city,
+                state = order.drop.state,
+                pincode = null
+            ),
+            distance = order.distanceKm.toDouble(),
+            estimatedDuration = 0L,
+            totalTrucksNeeded = order.totalTrucks,
+            trucksFilledSoFar = order.trucksFilled,
+            vehicleType = vehicleType,
+            goodsType = order.goodsType ?: "General",
+            weight = order.weight,
+            farePerTruck = perTruckFare,
+            totalFare = order.totalAmount.toDouble(),
+            status = parseStatus(order.status),
+            broadcastTime = parseTimestamp(order.createdAt),
+            expiryTime = parseTimestamp(order.expiresAt),
+            notes = null,
+            isUrgent = false,
+            requestedVehicles = requestedVehicles
+        )
+    }
+
+    private fun mapRequestedVehiclesFromTruckRequests(requests: List<TruckRequestInfo>): List<RequestedVehicle> {
+        if (requests.isEmpty()) return emptyList()
+
+        val filledStatuses = setOf("assigned", "accepted", "in_progress", "completed")
+        return requests
+            .groupBy { "${it.vehicleType.lowercase(Locale.US)}|${it.vehicleSubtype.lowercase(Locale.US)}" }
+            .map { (_, grouped) ->
+                val first = grouped.first()
+                RequestedVehicle(
+                    vehicleType = first.vehicleType,
+                    vehicleSubtype = first.vehicleSubtype,
+                    count = grouped.size,
+                    filledCount = grouped.count { it.status.lowercase(Locale.US) in filledStatuses },
+                    farePerTruck = first.pricePerTruck.toDouble(),
+                    capacityTons = 0.0
+                )
+            }
+    }
     
     /**
      * Map API response to domain model
@@ -788,7 +1091,11 @@ class BroadcastRepository private constructor(
                 val fullError = if (failedInfo.isNotEmpty()) "$errorMsg\n$failedInfo" else errorMsg
                 
                 timber.log.Timber.e("❌ Confirm failed: $fullError")
-                return@withContext BroadcastResult.Error(fullError, response.code())
+                return@withContext BroadcastResult.Error(
+                    message = fullError,
+                    code = response.code(),
+                    apiCode = error?.code
+                )
             }
             
         } catch (e: Exception) {

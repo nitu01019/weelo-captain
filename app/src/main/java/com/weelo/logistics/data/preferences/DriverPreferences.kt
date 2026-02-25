@@ -5,6 +5,8 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
+import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.utils.RoleScopedLocalePolicy
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -107,10 +109,12 @@ class DriverPreferences(private val context: Context) {
         //
         // SCALABILITY: commit() is ~1-2ms for a single key write. Called at most
         // once per language selection (not in any hot path). Zero impact at scale.
-        context.getSharedPreferences("weelo_prefs", android.content.Context.MODE_PRIVATE)
-            .edit()
-            .putString("preferred_language", languageCode)
-            .commit()
+        val sharedPrefs = context.getSharedPreferences("weelo_prefs", android.content.Context.MODE_PRIVATE)
+        RoleScopedLocalePolicy.markDriverLocale(
+            prefs = sharedPrefs,
+            userId = RetrofitClient.getUserId(),
+            languageCode = languageCode
+        )
     }
     
     /**
@@ -142,11 +146,23 @@ class DriverPreferences(private val context: Context) {
      * on re-login, backend language is restored → skip language screen.
      */
     suspend fun restoreLanguageIfNeeded(backendLanguage: String?) {
+        val current = getLanguageSync()
         if (!backendLanguage.isNullOrEmpty()) {
-            val current = getLanguageSync()
             if (current.isEmpty()) {
                 saveLanguage(backendLanguage)
+            } else {
+                RoleScopedLocalePolicy.markDriverLocale(
+                    prefs = context.getSharedPreferences("weelo_prefs", android.content.Context.MODE_PRIVATE),
+                    userId = RetrofitClient.getUserId(),
+                    languageCode = current
+                )
             }
+        } else if (current.isNotEmpty()) {
+            RoleScopedLocalePolicy.markDriverLocale(
+                prefs = context.getSharedPreferences("weelo_prefs", android.content.Context.MODE_PRIVATE),
+                userId = RetrofitClient.getUserId(),
+                languageCode = current
+            )
         }
     }
     
@@ -218,10 +234,8 @@ class DriverPreferences(private val context: Context) {
             preferences.clear()
         }
         // Also clear SharedPreferences (used by attachBaseContext)
-        context.getSharedPreferences("weelo_prefs", android.content.Context.MODE_PRIVATE)
-            .edit()
-            .remove("preferred_language")
-            .apply()
+        val sharedPrefs = context.getSharedPreferences("weelo_prefs", android.content.Context.MODE_PRIVATE)
+        RoleScopedLocalePolicy.clearActiveLocaleScope(sharedPrefs)
     }
     
     /**
