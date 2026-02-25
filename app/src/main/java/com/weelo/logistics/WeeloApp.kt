@@ -1,10 +1,23 @@
 package com.weelo.logistics
 
 import android.app.Application
+import android.os.StrictMode
+import com.google.firebase.messaging.FirebaseMessaging
+import com.weelo.logistics.broadcast.BroadcastStage
+import com.weelo.logistics.broadcast.BroadcastStatus
+import com.weelo.logistics.broadcast.BroadcastTelemetry
+import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
+import com.weelo.logistics.broadcast.BroadcastFlowCoordinator
+import com.weelo.logistics.data.remote.NotificationTokenSync
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.data.remote.SocketIOService
+import com.weelo.logistics.data.remote.WeeloFirebaseService
+import com.weelo.logistics.offline.AvailabilityManager
+import com.weelo.logistics.offline.AvailabilityState
 import com.weelo.logistics.utils.Constants
 import com.weelo.logistics.utils.HeartbeatManager
+import com.weelo.logistics.utils.RoleScopedLocalePolicy
+import com.weelo.logistics.utils.TransporterOnlineService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -44,6 +57,7 @@ class WeeloApp : Application() {
         // Release builds: no logs (Timber plants no tree)
         if (BuildConfig.DEBUG) {
             timber.log.Timber.plant(timber.log.Timber.DebugTree())
+            enableStrictMode()
         }
         
         // =====================================================================
@@ -64,16 +78,14 @@ class WeeloApp : Application() {
         // is a no-op for transporters (savedLang = null → skip).
         // =====================================================================
         val prefs = getSharedPreferences("weelo_prefs", android.content.Context.MODE_PRIVATE)
-        val savedLang = prefs.getString("preferred_language", null)
-        if (!savedLang.isNullOrEmpty()) {
-            val locale = java.util.Locale(savedLang)
-            java.util.Locale.setDefault(locale)
-            val config = android.content.res.Configuration(resources.configuration)
-            config.setLocale(locale)
-            @Suppress("DEPRECATION")
-            resources.updateConfiguration(config, resources.displayMetrics)
-            timber.log.Timber.i("🌐 Application locale initialized: $savedLang")
-        }
+        val startupLang = RoleScopedLocalePolicy.resolveStartupLocale(prefs)
+        val locale = java.util.Locale(startupLang)
+        java.util.Locale.setDefault(locale)
+        val config = android.content.res.Configuration(resources.configuration)
+        config.setLocale(locale)
+        @Suppress("DEPRECATION")
+        resources.updateConfiguration(config, resources.displayMetrics)
+        timber.log.Timber.i("🌐 Application locale initialized (role-scoped): $startupLang")
         
         // Initialize Coil ImageLoader with disk cache
         coil.Coil.setImageLoader(
@@ -83,6 +95,21 @@ class WeeloApp : Application() {
         // Initialize RetrofitClient with application context
         // This sets up secure token storage and API client
         RetrofitClient.init(this)
+
+        // Broadcast feature flags + coordinator runtime owner (phased rollout; debug/internal enabled by default)
+        BroadcastFeatureFlagsRegistry.initialize(this)
+        val broadcastFlags = BroadcastFeatureFlagsRegistry.current()
+        timber.log.Timber.i(
+            "📡 Broadcast flags coordinator=%s localDelta=%s reconcileRateLimit=%s strictId=%s overlayInvariant=%s disableLegacySocket=%s",
+            broadcastFlags.broadcastCoordinatorEnabled,
+            broadcastFlags.broadcastLocalDeltaApplyEnabled,
+            broadcastFlags.broadcastReconcileRateLimitEnabled,
+            broadcastFlags.broadcastStrictIdValidationEnabled,
+            broadcastFlags.broadcastOverlayInvariantEnforcementEnabled,
+            broadcastFlags.broadcastDisableLegacyWebsocketPath
+        )
+        BroadcastFlowCoordinator.initialize(this)
+        BroadcastFlowCoordinator.start()
         
         // Initialize HeartbeatManager for geolocation tracking
         HeartbeatManager.initialize(this)
@@ -92,6 +119,9 @@ class WeeloApp : Application() {
         
         // Connect to WebSocket if user is logged in
         connectWebSocketIfLoggedIn()
+
+        // Initialize FCM token cache early to improve closed-app push reliability
+        initializeFcmToken()
         
         // Start heartbeat if user is logged in (for geolocation matching)
         startHeartbeatIfLoggedIn()
@@ -182,15 +212,18 @@ class WeeloApp : Application() {
                 val token = RetrofitClient.getAccessToken()
                 val role = RetrofitClient.getUserRole()
                 
-                if (!token.isNullOrEmpty() && (role == "transporter" || role == "driver")) {
-                    if (HeartbeatManager.hasLocationPermission(this@WeeloApp)) {
-                        timber.log.Timber.i("💓 Starting HeartbeatManager (role: $role)")
-                        HeartbeatManager.start()
+                if (!token.isNullOrEmpty() && role == "transporter") {
+                    val availabilityState = AvailabilityManager.getInstance(this@WeeloApp).availabilityState.value
+                    if (availabilityState == AvailabilityState.ONLINE) {
+                        timber.log.Timber.i("💓 Starting transporter online service (availability=ONLINE)")
+                        TransporterOnlineService.start(this@WeeloApp)
                     } else {
-                        timber.log.Timber.w("⚠️ Location permission not granted, heartbeat not started")
+                        timber.log.Timber.i("⏭️ Skipping heartbeat - transporter availability is $availabilityState")
+                        TransporterOnlineService.stop(this@WeeloApp)
                     }
                 } else {
-                    timber.log.Timber.d("⏭️ Skipping heartbeat - not logged in or not transporter/driver")
+                    timber.log.Timber.d("⏭️ Skipping heartbeat - not logged in as transporter")
+                    TransporterOnlineService.stop(this@WeeloApp)
                 }
             } catch (e: Exception) {
                 timber.log.Timber.e("❌ Failed to start heartbeat: ${e.message}")
@@ -203,6 +236,7 @@ class WeeloApp : Application() {
      */
     fun stopHeartbeat() {
         timber.log.Timber.i("💔 Stopping HeartbeatManager")
+        TransporterOnlineService.stop(this)
         HeartbeatManager.stop()
     }
     
@@ -210,9 +244,81 @@ class WeeloApp : Application() {
      * Full logout - disconnects WebSocket and stops heartbeat
      */
     fun logout() {
+        applicationScope.launch {
+            NotificationTokenSync.unregisterCurrentToken(reason = "app_logout")
+        }
         stopHeartbeat()
         disconnectWebSocket()
+        BroadcastFlowCoordinator.stop()
         RetrofitClient.clearAllData()
         timber.log.Timber.i("👋 User logged out, all services stopped")
+    }
+
+    private fun enableStrictMode() {
+        StrictMode.setThreadPolicy(
+            StrictMode.ThreadPolicy.Builder()
+                .detectDiskReads()
+                .detectDiskWrites()
+                .detectNetwork()
+                .penaltyLog()
+                .build()
+        )
+        StrictMode.setVmPolicy(
+            StrictMode.VmPolicy.Builder()
+                .detectLeakedClosableObjects()
+                .detectActivityLeaks()
+                .detectLeakedRegistrationObjects()
+                .penaltyLog()
+                .build()
+        )
+        timber.log.Timber.d("StrictMode enabled (debug)")
+    }
+
+    private fun initializeFcmToken() {
+        WeeloFirebaseService.onTokenRefresh = { token ->
+            WeeloFirebaseService.cacheToken(this, token)
+            timber.log.Timber.i("🔑 FCM token refreshed and cached")
+            applicationScope.launch {
+                val isLoggedIn = RetrofitClient.isLoggedIn()
+                val role = RetrofitClient.getUserRole()
+                if (!isLoggedIn || (role != "transporter" && role != "driver")) {
+                    return@launch
+                }
+
+                NotificationTokenSync.registerCurrentToken(reason = "fcm_token_refresh")
+
+                if (SocketIOService.isConnected()) {
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.SOCKET_AUTH,
+                        status = BroadcastStatus.SUCCESS,
+                        reason = "fcm_refresh_triggered_socket_reconnect",
+                        attrs = mapOf("role" to role)
+                    )
+                    timber.log.Timber.i("🔄 Reconnecting socket to propagate refreshed FCM token")
+                    SocketIOService.reconnect()
+                } else {
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.SOCKET_AUTH,
+                        status = BroadcastStatus.SKIPPED,
+                        reason = "socket_not_connected_on_fcm_refresh",
+                        attrs = mapOf("role" to role)
+                    )
+                }
+            }
+        }
+
+        FirebaseMessaging.getInstance().token
+            .addOnSuccessListener { token ->
+                if (!token.isNullOrBlank()) {
+                    WeeloFirebaseService.cacheToken(this, token)
+                    timber.log.Timber.i("🔑 FCM token initialized")
+                    applicationScope.launch {
+                        NotificationTokenSync.registerCurrentToken(reason = "fcm_token_init")
+                    }
+                }
+            }
+            .addOnFailureListener { error ->
+                timber.log.Timber.w("⚠️ Failed to initialize FCM token: ${error.message}")
+            }
     }
 }

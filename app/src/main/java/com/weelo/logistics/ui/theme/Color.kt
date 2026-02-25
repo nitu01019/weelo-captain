@@ -102,3 +102,20 @@ val PremiumGradientColors = listOf(
     Color(0xFFF9C935),  // Saffron
     Color(0xFFFFB300)   // Amber
 )
+
+// =============================================================================
+// SEMANTIC ALIASES (UI Excellence v2)
+// =============================================================================
+// Use these aliases in screens/components instead of raw brand/status colors.
+// This keeps UI modular and allows safe visual tuning without screen-level edits.
+
+val SurfaceElevated = BackgroundElevated
+val SurfaceMuted = SurfaceVariant
+
+val CriticalAction = Error
+val CriticalActionContainer = ErrorLight
+
+val SuccessContainer = SuccessLight
+val WarningContainer = WarningLight
+
+val FocusRing = Color(0xFF1E88E5)

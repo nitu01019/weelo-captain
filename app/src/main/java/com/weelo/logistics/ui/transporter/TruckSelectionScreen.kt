@@ -14,8 +14,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.weelo.logistics.R
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.repository.BroadcastRepository
 import com.weelo.logistics.data.repository.BroadcastResult
@@ -135,8 +137,17 @@ fun TruckSelectionScreen(
         )
         
         if (isLoading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Primary)
+            ProvideShimmerBrush {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    SectionSkeletonBlock(titleLineWidthFraction = 0.48f, rowCount = 2)
+                    SectionSkeletonBlock(titleLineWidthFraction = 0.40f, rowCount = 2)
+                    SkeletonList(itemCount = 4)
+                }
             }
         } else {
             broadcast?.let { bc ->
@@ -207,33 +218,18 @@ fun TruckSelectionScreen(
                     // Vehicle List
                     if (availableVehicles.isEmpty()) {
                         item {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(WarningLight)
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(24.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Icon(
-                                        Icons.Default.Warning,
-                                        null,
-                                        modifier = Modifier.size(48.dp),
-                                        tint = Warning
-                                    )
-                                    Spacer(Modifier.height(8.dp))
-                                    Text(
-                                        "No available vehicles",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        "All your vehicles are currently on trips",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = TextSecondary
-                                    )
-                                }
-                            }
+                            IllustratedEmptyState(
+                                illustrationRes = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.drawableRes,
+                                title = stringResource(R.string.empty_title_no_available_vehicles),
+                                subtitle = stringResource(R.string.empty_subtitle_no_available_vehicles),
+                                maxIllustrationWidthDp = EmptyStateLayoutStyle.MODAL_COMPACT.maxIllustrationWidthDp,
+                                maxTextWidthDp = EmptyStateLayoutStyle.MODAL_COMPACT.maxTextWidthDp,
+                                showFramedIllustration = EmptyStateLayoutStyle.MODAL_COMPACT.showFramedIllustration,
+                                sectionBackgroundColor = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.blendPalette().sectionBackground,
+                                sectionBlendMode = SectionBlendMode.PANEL,
+                                paletteHaloOverride = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.blendPalette().haloColor,
+                                paletteHaloAlphaOverride = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.blendPalette().haloAlpha
+                            )
                         }
                     } else {
                         items(

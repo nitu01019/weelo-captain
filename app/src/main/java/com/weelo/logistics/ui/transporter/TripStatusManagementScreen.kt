@@ -264,8 +264,17 @@ fun TripStatusManagementScreen(
         )
         
         if (isLoading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Primary)
+            ProvideShimmerBrush {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    SectionSkeletonBlock(titleLineWidthFraction = 0.46f, rowCount = 2)
+                    SectionSkeletonBlock(titleLineWidthFraction = 0.36f, rowCount = 4, showLeadingAvatar = true)
+                    SkeletonList(itemCount = 3)
+                }
             }
         } else {
             LazyColumn(
@@ -573,7 +582,7 @@ fun DriverAssignmentStatusCard(
                 DriverResponseStatus.ACCEPTED -> {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "✅ Driver accepted — trip started",
+                        "Driver accepted - trip started",
                         style = MaterialTheme.typography.bodySmall,
                         color = Success,
                         fontWeight = FontWeight.Medium
@@ -582,7 +591,7 @@ fun DriverAssignmentStatusCard(
                 DriverResponseStatus.DECLINED -> {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "❌ Driver rejected this trip",
+                        "Driver rejected this trip",
                         style = MaterialTheme.typography.bodySmall,
                         color = Error,
                         fontWeight = FontWeight.Medium

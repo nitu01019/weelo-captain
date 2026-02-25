@@ -16,6 +16,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.stringResource
+import com.weelo.logistics.R
 import com.weelo.logistics.ui.theme.*
 
 // =============================================================================
@@ -71,7 +73,7 @@ fun OfflineBanner(
                     )
                     Spacer(Modifier.width(Spacing.small))
                     Text(
-                        text = "You're offline",
+                        text = stringResource(R.string.you_are_offline),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = White
@@ -86,7 +88,7 @@ fun OfflineBanner(
                         )
                     ) {
                         Text(
-                            text = "Retry",
+                            text = stringResource(R.string.retry),
                             fontWeight = FontWeight.SemiBold
                         )
                     }
@@ -169,7 +171,11 @@ fun NetworkStatusBanner(
     ) {
         val backgroundColor = if (isOnline) Success else Warning
         val icon = if (isOnline) Icons.Default.Wifi else Icons.Default.WifiOff
-        val message = if (isOnline) "Back online" else "No internet connection"
+        val message = if (isOnline) {
+            stringResource(R.string.you_are_online)
+        } else {
+            stringResource(R.string.no_internet_connection)
+        }
         
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -207,8 +213,9 @@ fun NetworkStatusBanner(
 fun SyncingIndicator(
     isSyncing: Boolean,
     modifier: Modifier = Modifier,
-    message: String = "Syncing..."
+    message: String? = null
 ) {
+    val resolvedMessage = message ?: stringResource(R.string.loading)
     AnimatedVisibility(
         visible = isSyncing,
         enter = fadeIn() + expandVertically(),
@@ -247,7 +254,7 @@ fun SyncingIndicator(
                 )
                 Spacer(Modifier.width(Spacing.small))
                 Text(
-                    text = message,
+                    text = resolvedMessage,
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Medium,
                     color = TextPrimary

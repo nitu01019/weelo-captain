@@ -2,17 +2,17 @@ package com.weelo.logistics.ui.transporter
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.weelo.logistics.data.api.VehicleListData
-import com.weelo.logistics.data.api.DriverListData
-import com.weelo.logistics.data.api.UserProfile
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.data.remote.SocketConnectionState
@@ -21,20 +21,17 @@ import com.weelo.logistics.ui.components.rememberScreenConfig
 import com.weelo.logistics.ui.components.responsiveHorizontalPadding
 import com.weelo.logistics.ui.components.OfflineBanner
 import com.weelo.logistics.offline.NetworkMonitor
-import com.weelo.logistics.offline.OfflineCache
 import com.weelo.logistics.ui.theme.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.weelo.logistics.R
-import com.weelo.logistics.utils.Constants
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
+import com.weelo.logistics.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * Transporter Dashboard Screen - Connected to Backend
@@ -53,6 +50,7 @@ import kotlinx.coroutines.withContext
 @Composable
 @Suppress("UNUSED_PARAMETER")
 fun TransporterDashboardScreen(
+    mainViewModel: MainViewModel,
     onNavigateToFleet: () -> Unit = {},
     onNavigateToDrivers: () -> Unit = {},
     onNavigateToTrips: () -> Unit = {},
@@ -76,293 +74,96 @@ fun TransporterDashboardScreen(
     // Network monitoring for offline banner
     val context = LocalContext.current
     val networkMonitor = remember { NetworkMonitor.getInstance(context) }
-    val isOnline by networkMonitor.isOnline.collectAsState()
-    
-    // Offline cache for instant loading
-    val offlineCache = remember { OfflineCache.getInstance(context) }
-    
-    // Dashboard state - NO loading spinner, show data immediately
-    var isRefreshing by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var vehicleStats by remember { mutableStateOf<VehicleListData?>(null) }
-    var driverStats by remember { mutableStateOf<DriverListData?>(null) }
-    var isBackendConnected by remember { mutableStateOf(true) }
-    
-    // User profile state
-    var userProfile by remember { mutableStateOf<UserProfile?>(null) }
-    
-    // WebSocket connection state for real-time broadcasts
-    val socketState by SocketIOService.connectionState.collectAsState()
-    var isSocketConnected by remember { mutableStateOf(false) }
-    
-    // ==========================================================================
-    // CACHE-FIRST LOADING: Show cached data INSTANTLY, then refresh in background
-    // OPTIMIZATION: All network calls on IO dispatcher to prevent Main thread blocking
-    // ==========================================================================
-    LaunchedEffect(Unit) {
-        // Step 1: Load cached data IMMEDIATELY (no loading spinner)
-        val cachedData = withContext(Dispatchers.IO) {
-            offlineCache.getDashboardCache()
-        }
-        
-        if (cachedData.profile != null || cachedData.vehicleStats != null || cachedData.driverStats != null) {
-            userProfile = cachedData.profile
-            vehicleStats = cachedData.vehicleStats
-            driverStats = cachedData.driverStats
-            timber.log.Timber.i("📦 Loaded cached data instantly")
-        }
-        
-        // Step 2: Refresh from API in background (only if cache is stale or empty)
-        if (!cachedData.isFresh || cachedData.profile == null) {
-            isRefreshing = true
-            
-            withContext(Dispatchers.IO) {
-                coroutineScope {
-                    val profileDeferred = async {
-                        try {
-                            RetrofitClient.profileApi.getProfile()
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            timber.log.Timber.w(e, "Profile refresh failed")
-                            null
-                        }
-                    }
-                    val vehicleDeferred = async {
-                        try {
-                            RetrofitClient.vehicleApi.getVehicles()
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            timber.log.Timber.w(e, "Vehicle refresh failed")
-                            null
-                        }
-                    }
-                    val driverDeferred = async {
-                        try {
-                            RetrofitClient.driverApi.getDriverList()
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            timber.log.Timber.w(e, "Driver refresh failed")
-                            null
-                        }
-                    }
-                    
-                    // Process responses
-                    val profileResponse = profileDeferred.await()
-                    val newProfile = if (profileResponse?.isSuccessful == true && profileResponse.body()?.success == true) {
-                        profileResponse.body()?.data?.user
-                    } else null
-                    
-                    val vehicleResponse = vehicleDeferred.await()
-                    val newVehicleStats = if (vehicleResponse?.isSuccessful == true && vehicleResponse.body()?.success == true) {
-                        vehicleResponse.body()?.data
-                    } else null
-                    
-                    val driverResponse = driverDeferred.await()
-                    val newDriverStats = if (driverResponse?.isSuccessful == true && driverResponse.body()?.success == true) {
-                        driverResponse.body()?.data
-                    } else null
+    val isOnline by networkMonitor.isOnline.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-                    var cacheProfile = cachedData.profile
-                    var cacheVehicles = cachedData.vehicleStats
-                    var cacheDrivers = cachedData.driverStats
-                    
-                    // Update UI state on Main thread
-                    withContext(Dispatchers.Main) {
-                        newProfile?.let { userProfile = it }
-                        newVehicleStats?.let { vehicleStats = it }
-                        newDriverStats?.let { driverStats = it }
-                        
-                        // Check if backend is reachable
-                        isBackendConnected = profileResponse != null || vehicleResponse != null || driverResponse != null
-                        
-                        if (!isBackendConnected && cachedData.profile == null) {
-                            errorMessage = context.getString(R.string.cannot_connect_backend)
-                        }
+    val dashboardViewModel: TransporterDashboardViewModel = viewModel(
+        factory = remember(context, mainViewModel) {
+            TransporterDashboardViewModelFactory(
+                appContext = context.applicationContext,
+                mainViewModel = mainViewModel
+            )
+        }
+    )
+    val dashboardUiState by dashboardViewModel.uiState.collectAsStateWithLifecycle()
 
-                        // Capture Compose state on main thread for cache persistence.
-                        cacheProfile = newProfile ?: userProfile
-                        cacheVehicles = newVehicleStats ?: vehicleStats
-                        cacheDrivers = newDriverStats ?: driverStats
-                    }
-                    
-                    // Save to cache for next time
-                    offlineCache.saveDashboardData(
-                        profile = cacheProfile,
-                        vehicleStats = cacheVehicles,
-                        driverStats = cacheDrivers
-                    )
-                    
-                    timber.log.Timber.i("🔄 Refreshed data from API")
-                }
-            }
-            
-            isRefreshing = false
-        }
-    }
-    
-    // ==========================================================================
-    // WEBSOCKET CONNECTION - Critical for receiving broadcasts overlay
-    // ==========================================================================
+    // WebSocket connection state for realtime badges/hints (connection lifecycle owned by app/auth)
+    val socketState by SocketIOService.connectionState.collectAsStateWithLifecycle()
+    val isSocketConnected = socketState is SocketConnectionState.Connected
+
     LaunchedEffect(Unit) {
-        val token = RetrofitClient.getAccessToken()
-        if (token != null) {
-            timber.log.Timber.i("🔌 Connecting WebSocket for broadcast overlay...")
-            SocketIOService.connect(Constants.API.WS_URL, token)
-        } else {
-            timber.log.Timber.w("⚠️ No auth token - WebSocket not connected")
-        }
+        dashboardViewModel.bootstrapIfNeeded()
     }
-    
-    // Track socket connection state
+
+    // Track socket connection state (logs only)
     LaunchedEffect(socketState) {
-        isSocketConnected = socketState is SocketConnectionState.Connected
-        
         when (socketState) {
-            is SocketConnectionState.Connected -> {
-                timber.log.Timber.i("✅ WebSocket connected - Ready for broadcasts")
-            }
-            is SocketConnectionState.Disconnected -> {
-                timber.log.Timber.w("🔌 WebSocket disconnected")
-            }
-            is SocketConnectionState.Connecting -> {
-                timber.log.Timber.d("🔄 WebSocket connecting...")
-            }
+            is SocketConnectionState.Connected -> timber.log.Timber.i("✅ WebSocket connected - Ready for broadcasts")
+            is SocketConnectionState.Disconnected -> timber.log.Timber.w("🔌 WebSocket disconnected")
+            is SocketConnectionState.Connecting -> timber.log.Timber.d("🔄 WebSocket connecting...")
             is SocketConnectionState.Error -> {
                 val error = (socketState as SocketConnectionState.Error).message
                 timber.log.Timber.e("❌ WebSocket error: $error")
             }
         }
     }
-    
-    // ==========================================================================
-    // REAL-TIME DRIVER UPDATES - Listen for driver added/updated events
-    // ==========================================================================
-    LaunchedEffect(Unit) {
-        SocketIOService.driverAdded.collect { notification ->
-            timber.log.Timber.i("👤 Driver added: ${notification.driverName}")
-            timber.log.Timber.i("📊 New driver count: ${notification.totalDrivers}")
-            
-            // Update driver stats immediately
-            driverStats = DriverListData(
-                drivers = emptyList(),
-                total = notification.totalDrivers,
-                online = notification.availableCount,
-                offline = notification.onTripCount
-            )
-        }
-    }
-    
-    LaunchedEffect(Unit) {
-        SocketIOService.driversUpdated.collect { notification ->
-            timber.log.Timber.i("👤 Drivers updated: ${notification.action}")
-            timber.log.Timber.i("📊 Updated driver count: ${notification.totalDrivers}")
-            
-            // Update driver stats immediately
-            driverStats = DriverListData(
-                drivers = emptyList(),
-                total = notification.totalDrivers,
-                online = notification.availableCount,
-                offline = notification.onTripCount
-            )
-        }
-    }
-    
-    // =========================================================================
-    // REAL-TIME DRIVER ONLINE/OFFLINE STATUS — Update online/offline counts instantly
-    // =========================================================================
-    LaunchedEffect(Unit) {
-        SocketIOService.driverStatusChanged.collect { event ->
-            timber.log.Timber.i("📡 [TransporterDashboard] Driver status: ${event.driverName} → ${if (event.isOnline) "ONLINE" else "OFFLINE"}")
-            // Update online/offline counts based on status change event
-            val current = driverStats
-            if (current != null) {
-                val delta = if (event.isOnline) 1 else -1
-                driverStats = current.copy(
-                    online = maxOf(0, current.online + delta),
-                    offline = maxOf(0, current.offline - delta)
-                )
-            }
-        }
-    }
 
-    // =========================================================================
-    // ORDER CANCELLATION — Show snackbar with customer info + refresh
-    // =========================================================================
     val cancelSnackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
     var lastCancelCustomerPhone by remember { mutableStateOf("") }
     // Extract snackbar strings outside LaunchedEffect (must be in @Composable scope)
     val strOrderCancelled = stringResource(R.string.order_cancelled)
     val strCallCustomer = stringResource(R.string.call_customer)
 
-    LaunchedEffect(Unit) {
-        SocketIOService.orderCancelled.collect { notification ->
-            timber.log.Timber.w("🚫 Order cancelled on transporter dashboard: ${notification.orderId}")
-            lastCancelCustomerPhone = notification.customerPhone
-            
-            // Build informative message with customer + route info using string resources
-            val parts = mutableListOf<String>()
-            parts.add(strOrderCancelled)
-            if (notification.customerName.isNotBlank()) {
-                parts.add(context.getString(R.string.by_customer_format, notification.customerName))
-            }
-            if (notification.reason.isNotBlank()) {
-                parts.add(context.getString(R.string.cancel_reason_bullet_format, notification.reason))
-            }
-            if (notification.assignmentsCancelled > 0) {
-                parts.add(context.getString(R.string.trucks_released_format, notification.assignmentsCancelled))
-            }
-            
-            val result = cancelSnackbarHostState.showSnackbar(
-                message = parts.joinToString(" "),
-                actionLabel = if (notification.customerPhone.isNotBlank()) strCallCustomer else null,
-                duration = androidx.compose.material3.SnackbarDuration.Long
-            )
-            
-            // If transporter tapped "Call" action
-            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed && 
-                lastCancelCustomerPhone.isNotBlank()) {
-                val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
-                    data = android.net.Uri.parse("tel:$lastCancelCustomerPhone")
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(intent)
-            }
-            
-            // Refresh dashboard to update active orders + released vehicles
-            isRefreshing = true
-            scope.launch {
-                try {
-                    val api = RetrofitClient.vehicleApi
-                    val driverApi = RetrofitClient.driverApi
-                    
-                    // MAJOR FIX: Wrap network calls in withContext(Dispatchers.IO).
-                    // scope.launch{} uses the main dispatcher by default — running Retrofit
-                    // calls on main thread risks ANR and UI jank.
-                    // State mutations (vehicleStats, driverStats) must happen on Main thread —
-                    // so fetch on IO, then assign back on Main (withContext returns to caller's dispatcher).
-                    val (vehicleResponse, driverResponse) = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        val v = try { api.getVehicles() } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            null
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            dashboardViewModel.uiEvents.collect { event ->
+                when (event) {
+                    is TransporterDashboardUiEvent.ShowOrderCancelledSnackbar -> {
+                        val notification = event.notification
+                        timber.log.Timber.w("🚫 Order cancelled on transporter dashboard: ${notification.orderId}")
+                        lastCancelCustomerPhone = notification.customerPhone
+
+                        val parts = mutableListOf<String>()
+                        parts.add(strOrderCancelled)
+                        if (notification.customerName.isNotBlank()) {
+                            parts.add(context.getString(R.string.by_customer_format, notification.customerName))
                         }
-                        val d = try { driverApi.getDriverList() } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            null
+                        if (notification.reason.isNotBlank()) {
+                            parts.add(context.getString(R.string.cancel_reason_bullet_format, notification.reason))
                         }
-                        v to d
+                        if (notification.assignmentsCancelled > 0) {
+                            parts.add(context.getString(R.string.trucks_released_format, notification.assignmentsCancelled))
+                        }
+
+                        val result = cancelSnackbarHostState.showSnackbar(
+                            message = parts.joinToString(" "),
+                            actionLabel = if (notification.customerPhone.isNotBlank()) strCallCustomer else null,
+                            duration = androidx.compose.material3.SnackbarDuration.Long
+                        )
+
+                        if (result == androidx.compose.material3.SnackbarResult.ActionPerformed &&
+                            lastCancelCustomerPhone.isNotBlank()
+                        ) {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
+                                data = android.net.Uri.parse("tel:$lastCancelCustomerPhone")
+                                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(intent)
+                        }
                     }
-                    // Back on Main thread — safe to mutate Compose state
-                    if (vehicleResponse?.isSuccessful == true) vehicleStats = vehicleResponse.body()?.data
-                    if (driverResponse?.isSuccessful == true) driverStats = driverResponse.body()?.data
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    timber.log.Timber.w("Failed to refresh after cancel: ${e.message}")
-                } finally {
-                    isRefreshing = false
                 }
             }
         }
     }
+
+    val contentState = dashboardUiState as? TransporterDashboardUiState.Content
+    val userProfile = contentState?.profile
+    val vehicleStats = contentState?.vehicleStats
+    val driverStats = contentState?.driverStats
+    val isRefreshing = contentState?.isRefreshing ?: false
+    val errorMessage = contentState?.errorMessage
+    val isBackendConnected = contentState?.isBackendConnected ?: true
+    val showFirstRunSetupFromState = contentState?.showFirstRunSetup == true
     
     // OPTIMIZATION: Use derivedStateOf to prevent unnecessary recomposition when userProfile changes
     val drawerProfile by remember {
@@ -387,9 +188,10 @@ fun TransporterDashboardScreen(
     val myFleetStr = stringResource(R.string.my_fleet)
     val myDriversStr = stringResource(R.string.my_drivers)
     val tripsStr = stringResource(R.string.trips_menu)
+    val requestsStr = stringResource(R.string.requests_menu)
     val settingsStr = stringResource(R.string.settings)
     
-    val menuItems = remember(dashboardStr, myFleetStr, myDriversStr, tripsStr, settingsStr) {
+    val menuItems = remember(dashboardStr, myFleetStr, myDriversStr, tripsStr, requestsStr, settingsStr) {
         createTransporterMenuItems(
             onDashboard = { scope.launch { drawerState.close() } },
             onFleet = { 
@@ -417,6 +219,7 @@ fun TransporterDashboardScreen(
                 "my_fleet" to myFleetStr,
                 "my_drivers" to myDriversStr,
                 "trips" to tripsStr,
+                "broadcasts" to requestsStr,
                 "settings" to settingsStr
             )
         )
@@ -477,54 +280,44 @@ fun TransporterDashboardScreen(
             // Offline Banner - Shows when device is offline
             OfflineBanner(
                 isOffline = !isOnline,
-                onRetryClick = { /* Trigger data refresh */ }
+                onRetryClick = { dashboardViewModel.retryRefresh() }
             )
             
-            // Top Bar with Hamburger Menu
-            TopAppBar(
-                title = {
-                    Text(
-                        text = stringResource(R.string.dashboard),
-                        fontWeight = FontWeight.SemiBold
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                        Icon(
-                            imageVector = Icons.Default.Menu,
-                            contentDescription = stringResource(R.string.cd_menu),
-                            tint = TextPrimary
-                        )
-                    }
-                },
+            DashboardTopBar(
+                title = stringResource(R.string.dashboard),
+                subtitle = stringResource(R.string.transporter_dashboard_subtitle),
+                onMenuClick = { scope.launch { drawerState.open() } },
+                onNotificationsClick = { /* TODO: Navigate to notifications */ },
+                onProfileClick = onNavigateToProfile,
                 actions = {
-                    // Availability Toggle (Compact) - Online/Offline Status
                     AvailabilityToggleCompact(
                         modifier = Modifier.padding(end = 4.dp),
-                        onStatusChanged = { isOnline ->
-                            timber.log.Timber.d("Transporter availability: ${if (isOnline) "ONLINE" else "OFFLINE"}")
+                        onStatusChanged = { isTransporterOnline ->
+                            timber.log.Timber.d(
+                                "Transporter availability: ${if (isTransporterOnline) "ONLINE" else "OFFLINE"}"
+                            )
                         }
                     )
-                    
-                    IconButton(onClick = { /* TODO: Navigate to notifications */ }) {
-                        Icon(
-                            imageVector = Icons.Default.Notifications,
-                            contentDescription = stringResource(R.string.cd_notifications),
-                            tint = TextPrimary
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = androidx.compose.ui.graphics.Color.White
-                )
+                }
             )
             
-            // Responsive layout configuration
-            val screenConfig = rememberScreenConfig()
-            val horizontalPadding = responsiveHorizontalPadding()
+    // Responsive layout configuration
+    val screenConfig = rememberScreenConfig()
+    val horizontalPadding = responsiveHorizontalPadding()
+    val isLoadingDashboard = dashboardUiState is TransporterDashboardUiState.Loading
+    val isFirstRunSetup = showFirstRunSetupFromState
+    val showRealtimeReconnectHint = isBackendConnected &&
+        !isSocketConnected &&
+        socketState !is SocketConnectionState.Connecting
             
-            // ALWAYS show content - no loading spinner
-            Column(
+            if (isLoadingDashboard) {
+                ProvideShimmerBrush {
+                    SkeletonList(
+                        itemCount = 5,
+                        modifier = Modifier.padding(horizontal = horizontalPadding, vertical = 16.dp)
+                    )
+                }
+            } else Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
@@ -552,6 +345,34 @@ fun TransporterDashboardScreen(
                             strokeWidth = 2.dp
                         )
                     }
+                }
+
+                if (errorMessage != null) {
+                    DashboardNoticeBanner(
+                        icon = Icons.Default.CloudOff,
+                        title = "Backend connection issue",
+                        message = errorMessage,
+                        containerColor = Error.copy(alpha = 0.08f),
+                        iconTint = Error,
+                        borderColor = Error.copy(alpha = 0.18f)
+                    )
+                } else if (showRealtimeReconnectHint) {
+                    DashboardNoticeBanner(
+                        icon = Icons.Default.SyncProblem,
+                        title = "Realtime updates reconnecting",
+                        message = "Dashboard works normally. Broadcasts and live updates may be delayed briefly.",
+                        containerColor = Warning.copy(alpha = 0.08f),
+                        iconTint = Warning,
+                        borderColor = Warning.copy(alpha = 0.18f)
+                    )
+                }
+
+                if (isFirstRunSetup) {
+                    FirstRunSetupPanel(
+                        onAddVehicle = onNavigateToAddVehicle,
+                        onAddDriver = onNavigateToAddDriver,
+                        onGoToFleet = onNavigateToFleet
+                    )
                 }
                 
                 // Statistics - Responsive layout (4 cards in landscape, 2 in portrait)
@@ -726,6 +547,121 @@ fun QuickActionCard(
                 fontWeight = FontWeight.Medium,
                 color = TextPrimary
             )
+        }
+    }
+}
+
+@Composable
+private fun DashboardNoticeBanner(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    message: String,
+    containerColor: androidx.compose.ui.graphics.Color,
+    iconTint: androidx.compose.ui.graphics.Color,
+    borderColor: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = iconTint,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FirstRunSetupPanel(
+    onAddVehicle: () -> Unit,
+    onAddDriver: () -> Unit,
+    onGoToFleet: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = White),
+        shape = RoundedCornerShape(16.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = Elevation.low)
+    ) {
+        Column(modifier = Modifier.padding(4.dp)) {
+            IllustratedEmptyState(
+                illustrationRes = EmptyStateArtwork.VEHICLES_FIRST_RUN.drawableRes,
+                title = stringResource(R.string.empty_dashboard_setup_title),
+                subtitle = stringResource(R.string.empty_dashboard_setup_subtitle),
+                actionLabel = stringResource(R.string.empty_action_add_vehicle),
+                onAction = onAddVehicle,
+                maxIllustrationWidthDp = 180,
+                maxTextWidthDp = 300,
+                showFramedIllustration = false,
+                sectionBackgroundColor = EmptyStateArtwork.VEHICLES_FIRST_RUN.blendPalette().sectionBackground,
+                sectionBlendMode = SectionBlendMode.PANEL,
+                paletteHaloOverride = EmptyStateArtwork.VEHICLES_FIRST_RUN.blendPalette().haloColor,
+                paletteHaloAlphaOverride = EmptyStateArtwork.VEHICLES_FIRST_RUN.blendPalette().haloAlpha
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onAddDriver,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.empty_action_add_driver))
+                }
+                OutlinedButton(
+                    onClick = onGoToFleet,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.LocalShipping, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.empty_action_open_fleet))
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = stringResource(R.string.empty_dashboard_setup_sequence),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(8.dp))
         }
     }
 }

@@ -2,11 +2,10 @@ package com.weelo.logistics.ui.transporter
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -16,16 +15,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.weelo.logistics.data.api.TransporterProfileRequest
-import com.weelo.logistics.data.api.UserProfile
-import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.R
+import com.weelo.logistics.ui.components.PrimaryTopBar
+import com.weelo.logistics.ui.components.SkeletonTransporterProfileLoading
 import com.weelo.logistics.ui.theme.*
-import com.weelo.logistics.ui.components.rememberScreenConfig
-import com.weelo.logistics.ui.components.responsiveHorizontalPadding
-import kotlinx.coroutines.launch
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.flow.collectLatest
 
 /**
  * Transporter Profile Screen - View and Edit Profile
@@ -42,104 +43,26 @@ fun TransporterProfileScreen(
     onNavigateBack: () -> Unit,
     onProfileUpdated: () -> Unit = {}
 ) {
-    val scope = rememberCoroutineScope()
-    val scrollState = rememberScrollState()
-    
-    // Profile state
-    var isLoading by remember { mutableStateOf(true) }
-    var isSaving by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var successMessage by remember { mutableStateOf<String?>(null) }
-    var profile by remember { mutableStateOf<UserProfile?>(null) }
-    
-    // Form fields
-    var name by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
-    var businessName by remember { mutableStateOf("") }
-    var businessAddress by remember { mutableStateOf("") }
-    var panNumber by remember { mutableStateOf("") }
-    var gstNumber by remember { mutableStateOf("") }
-    
-    // Load profile on screen open
+    val profileViewModel: TransporterProfileViewModel = viewModel()
+    val uiState by profileViewModel.uiState.collectAsStateWithLifecycle()
+
     LaunchedEffect(Unit) {
-        scope.launch {
-            isLoading = true
-            errorMessage = null
-            
-            try {
-                val response = RetrofitClient.profileApi.getProfile()
-                if (response.isSuccessful && response.body()?.success == true) {
-                    profile = response.body()?.data?.user
-                    profile?.let { p ->
-                        name = p.name ?: ""
-                        email = p.email ?: ""
-                        businessName = p.getBusinessDisplayName() ?: ""
-                        businessAddress = p.businessAddress ?: p.address ?: ""
-                        panNumber = p.panNumber ?: ""
-                        gstNumber = p.gstNumber ?: ""
-                    }
-                } else {
-                    errorMessage = response.body()?.error?.message ?: "Failed to load profile"
-                }
-            } catch (e: Exception) {
-                errorMessage = "Network error: ${e.message}"
-            } finally {
-                isLoading = false
-            }
-        }
+        profileViewModel.bootstrapIfNeeded()
     }
-    
-    // Save profile function
-    fun saveProfile() {
-        if (name.isBlank()) {
-            errorMessage = "Name is required"
-            return
-        }
-        
-        scope.launch {
-            isSaving = true
-            errorMessage = null
-            successMessage = null
-            
-            try {
-                val request = TransporterProfileRequest(
-                    name = name.trim(),
-                    email = email.trim().ifEmpty { null },
-                    company = businessName.trim(),
-                    gstNumber = gstNumber.trim().ifEmpty { null },
-                    panNumber = panNumber.trim().ifEmpty { null },
-                    address = businessAddress.trim().ifEmpty { null }
-                )
-                
-                val response = RetrofitClient.profileApi.updateTransporterProfile(request)
-                
-                if (response.isSuccessful && response.body()?.success == true) {
-                    successMessage = "Profile saved successfully!"
-                    profile = response.body()?.data?.user
-                    onProfileUpdated()
-                } else {
-                    errorMessage = response.body()?.error?.message ?: "Failed to save profile"
-                }
-            } catch (e: Exception) {
-                errorMessage = "Network error: ${e.message}"
-            } finally {
-                isSaving = false
+
+    LaunchedEffect(profileViewModel) {
+        profileViewModel.uiEvents.collectLatest { event ->
+            when (event) {
+                TransporterProfileUiEvent.ProfileSaved -> onProfileUpdated()
             }
         }
     }
     
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("My Profile", fontWeight = FontWeight.SemiBold) },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.White
-                )
+            PrimaryTopBar(
+                title = stringResource(R.string.my_profile),
+                onBackClick = onNavigateBack
             )
         }
     ) { padding ->
@@ -149,183 +72,265 @@ fun TransporterProfileScreen(
                 .padding(padding)
                 .background(Surface)
         ) {
-            if (isLoading) {
-                // Loading state
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = Primary)
-                }
-            } else {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(scrollState)
-                        .padding(16.dp)
-                ) {
-                    // Profile Avatar
-                    ProfileAvatarSection(
-                        name = name,
-                        phone = profile?.phone ?: "",
-                        isVerified = profile?.isVerified ?: false
-                    )
-                    
-                    Spacer(modifier = Modifier.height(24.dp))
-                    
-                    // Error/Success Messages
-                    errorMessage?.let { error ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = Error.copy(alpha = 0.1f)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Error, null, tint = Error)
-                                Spacer(Modifier.width(12.dp))
-                                Text(error, color = Error)
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                    }
-                    
-                    successMessage?.let { success ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = Success.copy(alpha = 0.1f)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.CheckCircle, null, tint = Success)
-                                Spacer(Modifier.width(12.dp))
-                                Text(success, color = Success)
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                    }
-                    
-                    // Personal Information Section
-                    SectionHeader(title = "Personal Information", icon = Icons.Default.Person)
-                    
-                    ProfileTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = "Full Name *",
-                        placeholder = "Enter your full name",
-                        leadingIcon = Icons.Default.Person
-                    )
-                    
-                    ProfileTextField(
-                        value = email,
-                        onValueChange = { email = it },
-                        label = "Email Address",
-                        placeholder = "Enter your email",
-                        leadingIcon = Icons.Default.Email,
-                        keyboardType = KeyboardType.Email
-                    )
-                    
-                    Spacer(modifier = Modifier.height(24.dp))
-                    
-                    // Business Information Section
-                    SectionHeader(title = "Business Information", icon = Icons.Default.Business)
-                    
-                    ProfileTextField(
-                        value = businessName,
-                        onValueChange = { businessName = it },
-                        label = "Business/Company Name",
-                        placeholder = "Enter business name",
-                        leadingIcon = Icons.Default.Business
-                    )
-                    
-                    ProfileTextField(
-                        value = businessAddress,
-                        onValueChange = { businessAddress = it },
-                        label = "Business Address",
-                        placeholder = "Enter business address",
-                        leadingIcon = Icons.Default.LocationOn,
-                        singleLine = false,
-                        maxLines = 3
-                    )
-                    
-                    Spacer(modifier = Modifier.height(24.dp))
-                    
-                    // Tax Information Section
-                    SectionHeader(title = "Tax & Legal", icon = Icons.Default.Description)
-                    
-                    ProfileTextField(
-                        value = panNumber,
-                        onValueChange = { panNumber = it.uppercase() },
-                        label = "PAN Number",
-                        placeholder = "ABCDE1234F",
-                        leadingIcon = Icons.Default.CreditCard
-                    )
-                    
-                    ProfileTextField(
-                        value = gstNumber,
-                        onValueChange = { gstNumber = it.uppercase() },
-                        label = "GST Number",
-                        placeholder = "22AAAAA0000A1Z5",
-                        leadingIcon = Icons.Default.Receipt
-                    )
-                    
-                    Spacer(modifier = Modifier.height(32.dp))
-                    
-                    // Save Button
-                    Button(
-                        onClick = { saveProfile() },
+            when (val state = uiState) {
+                TransporterProfileUiState.Loading -> {
+                    SkeletonTransporterProfileLoading(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Primary),
-                        enabled = !isSaving
+                            .fillMaxSize()
+                            .padding(16.dp)
+                    )
+                }
+
+                is TransporterProfileUiState.Content -> {
+                    val form = state.form
+                    val profile = form.profile
+                    val completionChecks = remember(
+                        form.name,
+                        form.email,
+                        form.businessName,
+                        form.businessAddress
                     ) {
-                        if (isSaving) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                        }
-                        Text(
-                            text = if (isSaving) "Saving..." else "Save Profile",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.SemiBold
+                        listOf(
+                            form.name.trim().isNotEmpty(),
+                            form.businessName.trim().isNotEmpty(),
+                            form.businessAddress.trim().isNotEmpty(),
+                            form.email.trim().isNotEmpty()
                         )
                     }
-                    
-                    Spacer(modifier = Modifier.height(24.dp))
-                    
-                    // Account Info (Read-only)
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                text = "Account Information",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = TextSecondary
+                    val completionPercent = (completionChecks.count { it } * 100) / completionChecks.size
+
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(0.dp)
+                        ) {
+                            item {
+                                // Profile Avatar
+                                ProfileAvatarSection(
+                                    name = form.name,
+                                    phone = profile?.phone ?: "",
+                                    isVerified = profile?.isVerified ?: false
+                                )
+                                Spacer(modifier = Modifier.height(24.dp))
+                            }
+
+                            if (completionPercent < 100) {
+                                item {
+                                    ProfileReadinessCard(
+                                        completionPercent = completionPercent,
+                                        missingItems = buildList {
+                                            if (form.name.trim().isEmpty()) add("Add your full name")
+                                            if (form.businessName.trim().isEmpty()) add("Add business/company name")
+                                            if (form.businessAddress.trim().isEmpty()) add("Add business address")
+                                            if (form.email.trim().isEmpty()) add("Add email (recommended)")
+                                        }
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                }
+                            }
+
+                            item {
+                                state.errorMessage?.let { error ->
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = CardDefaults.cardColors(containerColor = Error.copy(alpha = 0.1f)),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(16.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Default.Error, null, tint = Error)
+                                            Spacer(Modifier.width(12.dp))
+                                            Text(error, color = Error)
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                }
+
+                                state.successMessage?.let { success ->
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = CardDefaults.cardColors(containerColor = Success.copy(alpha = 0.1f)),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(16.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Default.CheckCircle, null, tint = Success)
+                                            Spacer(Modifier.width(12.dp))
+                                            Text(success, color = Success)
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                }
+                            }
+
+                            item {
+                                SectionHeader(title = "Personal Information", icon = Icons.Default.Person)
+                            }
+                            item {
+                                ProfileTextField(
+                                    value = form.name,
+                                    onValueChange = {
+                                        profileViewModel.clearMessages()
+                                        profileViewModel.onNameChange(it)
+                                    },
+                                    label = "Full Name *",
+                                    placeholder = "Enter your full name",
+                                    leadingIcon = Icons.Default.Person
+                                )
+                            }
+                            item {
+                                ProfileTextField(
+                                    value = form.email,
+                                    onValueChange = {
+                                        profileViewModel.clearMessages()
+                                        profileViewModel.onEmailChange(it)
+                                    },
+                                    label = "Email Address",
+                                    placeholder = "Enter your email",
+                                    leadingIcon = Icons.Default.Email,
+                                    keyboardType = KeyboardType.Email
+                                )
+                                Spacer(modifier = Modifier.height(24.dp))
+                            }
+
+                            item {
+                                SectionHeader(title = "Business Information", icon = Icons.Default.Business)
+                            }
+                            item {
+                                ProfileTextField(
+                                    value = form.businessName,
+                                    onValueChange = {
+                                        profileViewModel.clearMessages()
+                                        profileViewModel.onBusinessNameChange(it)
+                                    },
+                                    label = "Business/Company Name",
+                                    placeholder = "Enter business name",
+                                    leadingIcon = Icons.Default.Business
+                                )
+                            }
+                            item {
+                                ProfileTextField(
+                                    value = form.businessAddress,
+                                    onValueChange = {
+                                        profileViewModel.clearMessages()
+                                        profileViewModel.onBusinessAddressChange(it)
+                                    },
+                                    label = "Business Address",
+                                    placeholder = "Enter business address",
+                                    leadingIcon = Icons.Default.LocationOn,
+                                    singleLine = false,
+                                    maxLines = 3
+                                )
+                                Spacer(modifier = Modifier.height(24.dp))
+                            }
+
+                            item {
+                                SectionHeader(title = "Tax & Legal", icon = Icons.Default.Description)
+                            }
+                            item {
+                                ProfileTextField(
+                                    value = form.panNumber,
+                                    onValueChange = {
+                                        profileViewModel.clearMessages()
+                                        profileViewModel.onPanNumberChange(it)
+                                    },
+                                    label = "PAN Number",
+                                    placeholder = "ABCDE1234F",
+                                    leadingIcon = Icons.Default.CreditCard
+                                )
+                            }
+                            item {
+                                ProfileTextField(
+                                    value = form.gstNumber,
+                                    onValueChange = {
+                                        profileViewModel.clearMessages()
+                                        profileViewModel.onGstNumberChange(it)
+                                    },
+                                    label = "GST Number",
+                                    placeholder = "22AAAAA0000A1Z5",
+                                    leadingIcon = Icons.Default.Receipt
+                                )
+                                Spacer(modifier = Modifier.height(32.dp))
+                            }
+
+                            item {
+                                Button(
+                                    onClick = { profileViewModel.saveProfile() },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(56.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Primary),
+                                    enabled = !state.isSaving
+                                ) {
+                                    if (state.isSaving) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(24.dp),
+                                            color = Color.White,
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                    }
+                                    Text(
+                                        text = if (state.isSaving) "Saving..." else "Save Profile",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(24.dp))
+                            }
+
+                            item {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(16.dp)) {
+                                        Text(
+                                            text = "Account Information",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = TextSecondary
+                                        )
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        InfoRow(
+                                            label = "Phone",
+                                            value = profile?.phone?.takeIf { it.isNotBlank() }?.let { "+91 $it" }
+                                                ?: "Not available"
+                                        )
+                                        InfoRow(
+                                            label = "User ID",
+                                            value = profile?.id?.takeIf { it.isNotBlank() }?.take(8) ?: "Pending"
+                                        )
+                                        InfoRow(label = "Role", value = "Transporter")
+                                        InfoRow(
+                                            label = "Account Status",
+                                            value = if (profile?.isVerified == true) "Verified" else "Pending verification"
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(32.dp))
+                            }
+                        }
+
+                        if (state.isRefreshing) {
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .align(Alignment.TopCenter),
+                                color = Primary,
+                                trackColor = SurfaceVariant
                             )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            
-                            InfoRow(label = "Phone", value = "+91 ${profile?.phone ?: ""}")
-                            InfoRow(label = "User ID", value = profile?.id?.take(8) ?: "...")
-                            InfoRow(label = "Role", value = "Transporter")
-                            InfoRow(label = "Account Status", value = if (profile?.isVerified == true) "Verified ✓" else "Pending")
                         }
                     }
-                    
-                    Spacer(modifier = Modifier.height(32.dp))
                 }
             }
         }
@@ -415,6 +420,71 @@ private fun ProfileAvatarSection(
 }
 
 @Composable
+private fun ProfileReadinessCard(
+    completionPercent: Int,
+    missingItems: List<String>
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Primary.copy(alpha = 0.06f)),
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Primary.copy(alpha = 0.12f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.TaskAlt,
+                        contentDescription = null,
+                        tint = Primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Profile readiness",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Text(
+                    text = "$completionPercent%",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = Primary
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            LinearProgressIndicator(
+                progress = completionPercent / 100f,
+                modifier = Modifier.fillMaxWidth(),
+                color = Primary,
+                trackColor = Primary.copy(alpha = 0.12f)
+            )
+            if (missingItems.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Complete these to improve account readiness:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                missingItems.take(3).forEach { item ->
+                    Text(
+                        text = "• $item",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextPrimary
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun SectionHeader(title: String, icon: ImageVector) {
     Row(
         modifier = Modifier.padding(vertical = 8.dp),
@@ -478,18 +548,22 @@ private fun InfoRow(label: String, value: String) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top
     ) {
         Text(
             text = label,
+            modifier = Modifier.weight(0.42f),
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary
         )
         Text(
             text = value,
+            modifier = Modifier.weight(0.58f),
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
-            color = TextPrimary
+            color = TextPrimary,
+            textAlign = TextAlign.End
         )
     }
 }

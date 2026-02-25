@@ -15,14 +15,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.weelo.logistics.data.api.ConfirmHoldRequest
 import com.weelo.logistics.data.api.HoldTrucksRequest
 import com.weelo.logistics.data.api.ReleaseHoldRequest
 import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.R
+import com.weelo.logistics.ui.components.PrimaryTopBar
+import com.weelo.logistics.ui.components.ProvideShimmerBrush
+import com.weelo.logistics.ui.components.SectionSkeletonBlock
+import com.weelo.logistics.ui.components.SkeletonBox
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -54,7 +59,12 @@ fun TruckHoldConfirmScreen(
     vehicleType: String,
     vehicleSubtype: String,
     quantity: Int,
-    onConfirmed: (holdId: String, truckIds: List<String>) -> Unit,
+    onConfirmed: (
+        holdId: String,
+        vehicleType: String,
+        vehicleSubtype: String,
+        quantity: Int
+    ) -> Unit,
     onCancelled: () -> Unit
 ) {
     val context = LocalContext.current
@@ -65,6 +75,7 @@ fun TruckHoldConfirmScreen(
     var remainingSeconds by remember { mutableStateOf(HOLD_DURATION_SECONDS) }
     var isLoading by remember { mutableStateOf(true) }
     var isConfirming by remember { mutableStateOf(false) }
+    var isFinalizing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var holdSuccess by remember { mutableStateOf(false) }
     
@@ -114,14 +125,15 @@ fun TruckHoldConfirmScreen(
     // Countdown timer
     LaunchedEffect(holdSuccess) {
         if (holdSuccess && holdId != null) {
-            while (remainingSeconds > 0) {
+            while (remainingSeconds > 0 && !isConfirming && !isFinalizing) {
                 delay(1000)
                 remainingSeconds--
             }
             
             // Timeout - release hold
-            if (remainingSeconds <= 0 && holdId != null) {
+            if (remainingSeconds <= 0 && holdId != null && !isConfirming && !isFinalizing) {
                 timber.log.Timber.d("Hold timeout, releasing")
+                isFinalizing = true
                 try {
                     withContext(Dispatchers.IO) {
                         RetrofitClient.truckHoldApi.releaseHold(
@@ -130,6 +142,8 @@ fun TruckHoldConfirmScreen(
                     }
                 } catch (e: Exception) {
                     timber.log.Timber.e(e, "Release failed")
+                } finally {
+                    isFinalizing = false
                 }
                 Toast.makeText(context, "Time expired. Trucks released.", Toast.LENGTH_SHORT).show()
                 onCancelled()
@@ -139,44 +153,44 @@ fun TruckHoldConfirmScreen(
     
     // Confirm function
     fun confirmHold() {
-        if (holdId == null) return
-        
+        if (holdId == null || isConfirming || isFinalizing || remainingSeconds <= 0) return
+
         scope.launch {
             isConfirming = true
-            
-            try {
-                val response = withContext(Dispatchers.IO) {
-                    RetrofitClient.truckHoldApi.confirmHold(
-                        ConfirmHoldRequest(holdId!!)
-                    )
-                }
-                
-                if (response.isSuccessful && response.body()?.success == true) {
-                    val truckIds = response.body()?.data?.assignedTrucks ?: emptyList()
-                    timber.log.Timber.d("Confirmed! Assigned trucks: $truckIds")
-                    Toast.makeText(context, "Trucks assigned! Now assign drivers.", Toast.LENGTH_SHORT).show()
-                    onConfirmed(holdId!!, truckIds)
-                } else {
-                    val msg = response.body()?.error?.message ?: "Confirmation failed"
-                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                }
-            } catch (e: Exception) {
-                timber.log.Timber.e(e, "Confirm failed")
-                Toast.makeText(context, "Error: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
-            } finally {
+
+            val currentHoldId = holdId ?: run {
                 isConfirming = false
+                return@launch
             }
+
+            timber.log.Timber.d(
+                "Proceeding to driver assignment with hold=%s, type=%s, subtype=%s, quantity=%d",
+                currentHoldId,
+                vehicleType,
+                vehicleSubtype,
+                quantity
+            )
+            Toast.makeText(context, "Hold confirmed. Assign drivers now.", Toast.LENGTH_SHORT).show()
+            onConfirmed(
+                currentHoldId,
+                vehicleType,
+                vehicleSubtype,
+                quantity
+            )
+            isConfirming = false
         }
     }
     
     // Cancel/release function
     fun cancelHold() {
+        if (isFinalizing) return
         if (holdId == null) {
             onCancelled()
             return
         }
         
         scope.launch {
+            isFinalizing = true
             try {
                 withContext(Dispatchers.IO) {
                     RetrofitClient.truckHoldApi.releaseHold(
@@ -186,6 +200,8 @@ fun TruckHoldConfirmScreen(
                 timber.log.Timber.d("Hold released")
             } catch (e: Exception) {
                 timber.log.Timber.e(e, "Release failed")
+            } finally {
+                isFinalizing = false
             }
             onCancelled()
         }
@@ -194,18 +210,9 @@ fun TruckHoldConfirmScreen(
     // UI
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Confirm Selection") },
-                navigationIcon = {
-                    IconButton(onClick = { cancelHold() }, enabled = !isConfirming) {
-                        Icon(Icons.Default.Close, "Cancel")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Primary,
-                    titleContentColor = White,
-                    navigationIconContentColor = White
-                )
+            PrimaryTopBar(
+                title = stringResource(R.string.confirm_selection),
+                onBackClick = { if (!isConfirming && !isFinalizing) cancelHold() }
             )
         }
     ) { padding ->
@@ -218,10 +225,19 @@ fun TruckHoldConfirmScreen(
         ) {
             when {
                 isLoading -> {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = Primary)
-                        Spacer(Modifier.height(16.dp))
-                        Text("Reserving trucks...", color = TextSecondary)
+                    ProvideShimmerBrush {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            SectionSkeletonBlock(titleLineWidthFraction = 0.52f, rowCount = 2)
+                            SkeletonBox(
+                                modifier = Modifier.fillMaxWidth(),
+                                height = 56.dp
+                            )
+                        }
                     }
                 }
                 
@@ -378,7 +394,7 @@ fun TruckHoldConfirmScreen(
                                     onClick = { cancelHold() },
                                     modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(12.dp),
-                                    enabled = !isConfirming
+                                    enabled = !isConfirming && !isFinalizing
                                 ) {
                                     Text("CANCEL")
                                 }
@@ -389,7 +405,7 @@ fun TruckHoldConfirmScreen(
                                     modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(12.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = Success),
-                                    enabled = !isConfirming && remainingSeconds > 0
+                                    enabled = !isConfirming && !isFinalizing && remainingSeconds > 0
                                 ) {
                                     if (isConfirming) {
                                         CircularProgressIndicator(

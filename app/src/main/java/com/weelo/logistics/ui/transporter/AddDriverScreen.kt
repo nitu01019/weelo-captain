@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -34,6 +35,8 @@ import com.weelo.logistics.data.api.InitiateDriverOnboardingRequest
 import com.weelo.logistics.data.api.VerifyDriverOnboardingRequest
 import com.weelo.logistics.data.api.ResendDriverOtpRequest
 import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.R
+import com.weelo.logistics.ui.components.PrimaryTopBar
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -250,14 +253,9 @@ fun AddDriverScreen(
     // ==========================================================================
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Add Driver", fontWeight = FontWeight.SemiBold) },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
+            PrimaryTopBar(
+                title = stringResource(R.string.add_driver),
+                onBackClick = onNavigateBack
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }

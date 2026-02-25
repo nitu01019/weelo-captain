@@ -1,11 +1,17 @@
 package com.weelo.logistics
 
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -13,18 +19,32 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.navigation.compose.rememberNavController
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.weelo.logistics.broadcast.BroadcastAcceptanceScreen
+import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
+import com.weelo.logistics.broadcast.BroadcastFlowCoordinator
 import com.weelo.logistics.broadcast.BroadcastOverlayManager
 import com.weelo.logistics.broadcast.BroadcastOverlayScreen
+import com.weelo.logistics.broadcast.BroadcastRolePolicy
 import com.weelo.logistics.data.model.BroadcastTrip
+import com.weelo.logistics.data.remote.BroadcastNotification
+import com.weelo.logistics.data.remote.NotificationTokenSync
 import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.data.remote.WeeloFirebaseService
+import com.weelo.logistics.data.repository.BroadcastRepository
+import com.weelo.logistics.data.repository.BroadcastResult
 import com.weelo.logistics.ui.navigation.Screen
 import com.weelo.logistics.ui.navigation.WeeloNavigation
 import com.weelo.logistics.ui.theme.WeeloTheme
 import com.weelo.logistics.ui.viewmodel.MainViewModel
 import com.weelo.logistics.utils.LocaleHelper
+import com.weelo.logistics.utils.RoleScopedLocalePolicy
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 /**
  * Main Activity - Hosts the main app navigation
@@ -44,6 +64,7 @@ class MainActivity : ComponentActivity() {
     
     companion object {
         private const val TAG = "MainActivity"
+        private const val REQ_POST_NOTIFICATIONS = 2101
     }
     
     // =========================================================================
@@ -69,6 +90,19 @@ class MainActivity : ComponentActivity() {
     // =========================================================================
     internal var localeCode by mutableStateOf("en")
         private set
+    private var lastHandledNotificationKey: String? = null
+
+    /**
+     * Hard reset task after logout so system back / recents cannot reopen a
+     * protected dashboard that belonged to the previous authenticated task.
+     */
+    fun restartAsLoggedOutTask() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        }
+        startActivity(intent)
+        finish()
+    }
     
     /**
      * Update the app locale INSTANTLY without Activity restart.
@@ -106,9 +140,7 @@ class MainActivity : ComponentActivity() {
      */
     override fun attachBaseContext(newBase: Context) {
         val prefs = newBase.getSharedPreferences("weelo_prefs", Context.MODE_PRIVATE)
-        val savedLanguage = prefs.getString("preferred_language", null)
-        
-        val languageCode = savedLanguage ?: "en"
+        val languageCode = RoleScopedLocalePolicy.resolveStartupLocale(prefs)
         val context = LocaleHelper.setLocale(newBase, languageCode)
         super.attachBaseContext(context)
         
@@ -117,20 +149,22 @@ class MainActivity : ComponentActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestNotificationPermissionIfNeeded()
         
         // =========================================================================
         // RAPIDO-STYLE: Load ALL core data at app start (NOT on screen navigation)
         // =========================================================================
         mainViewModel.initializeAppData()
         
-        // Check login status directly
-        val isLoggedIn = RetrofitClient.isLoggedIn()
-        val userRole = RetrofitClient.getUserRole()
+        // Initial snapshot only — reactive auth state is collected in Compose below.
+        val initialIsLoggedIn = RetrofitClient.isLoggedIn()
+        val initialUserRole = RetrofitClient.getUserRole()
         
-        timber.log.Timber.i("🚀 MainActivity started - isLoggedIn: $isLoggedIn, role: $userRole")
+        timber.log.Timber.i("🚀 MainActivity started - isLoggedIn: $initialIsLoggedIn, role: $initialUserRole")
         
         // Initialize BroadcastOverlayManager with context for availability checks
         BroadcastOverlayManager.initialize(this)
+        handleNotificationIntent(intent)
         
         // =====================================================================
         // Initialize localeCode from SharedPreferences (same source as
@@ -141,10 +175,7 @@ class MainActivity : ComponentActivity() {
         // the correct locale context.
         // =====================================================================
         val langPrefs = getSharedPreferences("weelo_prefs", Context.MODE_PRIVATE)
-        val savedLang = langPrefs.getString("preferred_language", null)
-        if (!savedLang.isNullOrEmpty()) {
-            localeCode = savedLang
-        }
+        localeCode = RoleScopedLocalePolicy.resolveStartupLocale(langPrefs)
         
         setContent {
             WeeloTheme {
@@ -171,8 +202,17 @@ class MainActivity : ComponentActivity() {
                     LocalContext provides localizedContext,
                     LocalActivityResultRegistryOwner provides this@MainActivity
                 ) {
+                val lifecycleOwner = LocalLifecycleOwner.current
                 // Remember navController at root level for overlay navigation
                 val navController = rememberNavController()
+                val isLoggedIn by RetrofitClient.authState.collectAsStateWithLifecycle(initialValue = initialIsLoggedIn)
+                val userRole = if (isLoggedIn) RetrofitClient.getUserRole() else null
+
+                LaunchedEffect(isLoggedIn, userRole) {
+                    if (isLoggedIn && (userRole == "transporter" || userRole == "driver")) {
+                        NotificationTokenSync.registerCurrentToken(reason = "auth_state_logged_in")
+                    }
+                }
                 
                 // ================================================================
                 // STATE FOR ACCEPTANCE FLOW
@@ -181,22 +221,24 @@ class MainActivity : ComponentActivity() {
                 var showAcceptanceScreen by remember { mutableStateOf(false) }
                 
                 // Listen for broadcast events to handle navigation
-                LaunchedEffect(Unit) {
-                    BroadcastOverlayManager.broadcastEvents.collectLatest { event ->
-                        when (event) {
-                            is BroadcastOverlayManager.BroadcastEvent.Accepted -> {
-                                timber.log.Timber.i("✅ Broadcast accepted: ${event.broadcast.broadcastId}")
-                                acceptedBroadcast = event.broadcast
-                                showAcceptanceScreen = true
-                            }
-                            is BroadcastOverlayManager.BroadcastEvent.Rejected -> {
-                                timber.log.Timber.i("❌ Broadcast rejected: ${event.broadcast.broadcastId}")
-                            }
-                            is BroadcastOverlayManager.BroadcastEvent.Expired -> {
-                                timber.log.Timber.w("⏰ Broadcast expired: ${event.broadcast.broadcastId}")
-                            }
-                            is BroadcastOverlayManager.BroadcastEvent.NewBroadcast -> {
-                                timber.log.Timber.i("📢 New broadcast queued: ${event.broadcast.broadcastId} (position: ${event.queuePosition})")
+                LaunchedEffect(lifecycleOwner) {
+                    lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                        BroadcastOverlayManager.broadcastEvents.collectLatest { event ->
+                            when (event) {
+                                is BroadcastOverlayManager.BroadcastEvent.Accepted -> {
+                                    timber.log.Timber.i("✅ Broadcast accepted: ${event.broadcast.broadcastId}")
+                                    acceptedBroadcast = event.broadcast
+                                    showAcceptanceScreen = true
+                                }
+                                is BroadcastOverlayManager.BroadcastEvent.Rejected -> {
+                                    timber.log.Timber.i("❌ Broadcast rejected: ${event.broadcast.broadcastId}")
+                                }
+                                is BroadcastOverlayManager.BroadcastEvent.Expired -> {
+                                    timber.log.Timber.w("⏰ Broadcast expired: ${event.broadcast.broadcastId}")
+                                }
+                                is BroadcastOverlayManager.BroadcastEvent.NewBroadcast -> {
+                                    timber.log.Timber.i("📢 New broadcast queued: ${event.broadcast.broadcastId} (position: ${event.queuePosition})")
+                                }
                             }
                         }
                     }
@@ -213,7 +255,8 @@ class MainActivity : ComponentActivity() {
                         WeeloNavigation(
                             isLoggedIn = isLoggedIn,
                             userRole = userRole,
-                            navController = navController
+                            navController = navController,
+                            mainViewModel = mainViewModel
                         )
                         
                         // ============================================
@@ -255,10 +298,78 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                REQ_POST_NOTIFICATIONS
+            )
+        }
+    }
+
+    private fun handleNotificationIntent(incomingIntent: Intent?) {
+        if (incomingIntent == null) return
+        val rawType = incomingIntent.getStringExtra("notification_type") ?: return
+        val type = when (rawType.trim().lowercase()) {
+            WeeloFirebaseService.TYPE_NEW_TRUCK_REQUEST -> WeeloFirebaseService.TYPE_NEW_BROADCAST
+            else -> rawType.trim().lowercase()
+        }
+        val broadcastId = incomingIntent.getStringExtra("broadcast_id") ?: return
+        if (type != WeeloFirebaseService.TYPE_NEW_BROADCAST || broadcastId.isBlank()) return
+        if (!BroadcastRolePolicy.canHandleBroadcastIngress(RetrofitClient.getUserRole())) return
+
+        val key = "$type|$broadcastId"
+        if (lastHandledNotificationKey == key) return
+        lastHandledNotificationKey = key
+
+        if (BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled) {
+            BroadcastFlowCoordinator.ingestNotificationOpen(broadcastId)
+            return
+        }
+
+        lifecycleScope.launch {
+            when (val result = BroadcastRepository.getInstance(this@MainActivity).getBroadcastById(broadcastId)) {
+                is BroadcastResult.Success -> {
+                    val ingress = BroadcastOverlayManager.showBroadcast(result.data)
+                    timber.log.Timber.i(
+                        "📲 Notification-open broadcast handled: id=%s action=%s reason=%s",
+                        broadcastId,
+                        ingress.action.name,
+                        ingress.reason
+                    )
+                }
+
+                is BroadcastResult.Error -> {
+                    timber.log.Timber.w(
+                        "⚠️ Failed to fetch broadcast from notification: id=%s reason=%s",
+                        broadcastId,
+                        result.message
+                    )
+                }
+
+                is BroadcastResult.Loading -> Unit
+            }
+        }
+    }
     
     override fun onDestroy() {
         super.onDestroy()
-        // Clear broadcasts when activity is destroyed
-        BroadcastOverlayManager.clearAll()
+        // Do not clear on config change/process recreation; only clear when task is finishing.
+        if (isFinishing) {
+            BroadcastOverlayManager.clearAll()
+        }
     }
 }

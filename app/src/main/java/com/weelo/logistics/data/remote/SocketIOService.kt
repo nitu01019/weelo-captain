@@ -1,12 +1,27 @@
 package com.weelo.logistics.data.remote
 
+import com.weelo.logistics.broadcast.BroadcastOverlayManager
+import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
+import com.weelo.logistics.broadcast.BroadcastFlowCoordinator
+import com.weelo.logistics.broadcast.BroadcastIngressEnvelope
+import com.weelo.logistics.broadcast.BroadcastIngressSource
+import com.weelo.logistics.broadcast.BroadcastPayloadNormalizer
+import com.weelo.logistics.broadcast.BroadcastRolePolicy
+import com.weelo.logistics.broadcast.BroadcastStage
+import com.weelo.logistics.broadcast.BroadcastStatus
+import com.weelo.logistics.broadcast.BroadcastTelemetry
+import com.weelo.logistics.broadcast.BroadcastUiTiming
 import io.socket.client.IO
 import io.socket.client.Socket
-import io.socket.emitter.Emitter
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.json.JSONObject
 import java.net.URI
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 
 /**
  * =============================================================================
@@ -45,36 +60,36 @@ object SocketIOService {
     val connectionState: StateFlow<SocketConnectionState> = _connectionState.asStateFlow()
     
     // Event flows for UI consumption
-    private val _newBroadcasts = MutableSharedFlow<BroadcastNotification>(replay = 1, extraBufferCapacity = 50)
+    private val _newBroadcasts = MutableSharedFlow<BroadcastNotification>(replay = 0, extraBufferCapacity = 50)
     val newBroadcasts: SharedFlow<BroadcastNotification> = _newBroadcasts.asSharedFlow()
     
-    private val _truckAssigned = MutableSharedFlow<TruckAssignedNotification>(replay = 1, extraBufferCapacity = 20)
+    private val _truckAssigned = MutableSharedFlow<TruckAssignedNotification>(replay = 0, extraBufferCapacity = 20)
     val truckAssigned: SharedFlow<TruckAssignedNotification> = _truckAssigned.asSharedFlow()
     
-    private val _assignmentStatusChanged = MutableSharedFlow<AssignmentStatusNotification>(replay = 1, extraBufferCapacity = 20)
+    private val _assignmentStatusChanged = MutableSharedFlow<AssignmentStatusNotification>(replay = 0, extraBufferCapacity = 20)
     val assignmentStatusChanged: SharedFlow<AssignmentStatusNotification> = _assignmentStatusChanged.asSharedFlow()
     
-    private val _bookingUpdated = MutableSharedFlow<BookingUpdatedNotification>(replay = 1, extraBufferCapacity = 20)
+    private val _bookingUpdated = MutableSharedFlow<BookingUpdatedNotification>(replay = 0, extraBufferCapacity = 20)
     val bookingUpdated: SharedFlow<BookingUpdatedNotification> = _bookingUpdated.asSharedFlow()
     
-    private val _trucksRemainingUpdates = MutableSharedFlow<TrucksRemainingNotification>(replay = 1, extraBufferCapacity = 20)
+    private val _trucksRemainingUpdates = MutableSharedFlow<TrucksRemainingNotification>(replay = 0, extraBufferCapacity = 20)
     val trucksRemainingUpdates: SharedFlow<TrucksRemainingNotification> = _trucksRemainingUpdates.asSharedFlow()
     
     private val _errors = MutableSharedFlow<SocketError>(replay = 0, extraBufferCapacity = 10)
     val errors: SharedFlow<SocketError> = _errors.asSharedFlow()
     
     // Fleet/Vehicle update events (NEW - for real-time fleet updates)
-    private val _fleetUpdated = MutableSharedFlow<FleetUpdatedNotification>(replay = 1, extraBufferCapacity = 20)
+    private val _fleetUpdated = MutableSharedFlow<FleetUpdatedNotification>(replay = 0, extraBufferCapacity = 20)
     val fleetUpdated: SharedFlow<FleetUpdatedNotification> = _fleetUpdated.asSharedFlow()
     
-    private val _vehicleRegistered = MutableSharedFlow<VehicleRegisteredNotification>(replay = 1, extraBufferCapacity = 10)
+    private val _vehicleRegistered = MutableSharedFlow<VehicleRegisteredNotification>(replay = 0, extraBufferCapacity = 10)
     val vehicleRegistered: SharedFlow<VehicleRegisteredNotification> = _vehicleRegistered.asSharedFlow()
     
     // Driver update events (NEW - for real-time driver updates)
-    private val _driverAdded = MutableSharedFlow<DriverAddedNotification>(replay = 1, extraBufferCapacity = 10)
+    private val _driverAdded = MutableSharedFlow<DriverAddedNotification>(replay = 0, extraBufferCapacity = 10)
     val driverAdded: SharedFlow<DriverAddedNotification> = _driverAdded.asSharedFlow()
     
-    private val _driversUpdated = MutableSharedFlow<DriversUpdatedNotification>(replay = 1, extraBufferCapacity = 20)
+    private val _driversUpdated = MutableSharedFlow<DriversUpdatedNotification>(replay = 0, extraBufferCapacity = 20)
     val driversUpdated: SharedFlow<DriversUpdatedNotification> = _driversUpdated.asSharedFlow()
     
     // ==========================================================================
@@ -82,15 +97,15 @@ object SocketIOService {
     // ==========================================================================
     // Backend emits 'trip_assigned' when transporter confirms hold with assignments.
     // This flow delivers the notification to the UI for showing Accept/Decline screen.
-    // Replay = 1 ensures late collectors (e.g., screen rotation) still get the event.
+    // replay = 0 prevents stale one-shot events from re-triggering UI flows.
     // ==========================================================================
-    private val _tripAssigned = MutableSharedFlow<TripAssignedNotification>(replay = 1, extraBufferCapacity = 10)
+    private val _tripAssigned = MutableSharedFlow<TripAssignedNotification>(replay = 0, extraBufferCapacity = 10)
     val tripAssigned: SharedFlow<TripAssignedNotification> = _tripAssigned.asSharedFlow()
     
-    private val _driverTimeout = MutableSharedFlow<DriverTimeoutNotification>(replay = 1, extraBufferCapacity = 10)
+    private val _driverTimeout = MutableSharedFlow<DriverTimeoutNotification>(replay = 0, extraBufferCapacity = 10)
     val driverTimeout: SharedFlow<DriverTimeoutNotification> = _driverTimeout.asSharedFlow()
     
-    private val _tripCancelled = MutableSharedFlow<TripCancelledNotification>(replay = 1, extraBufferCapacity = 10)
+    private val _tripCancelled = MutableSharedFlow<TripCancelledNotification>(replay = 0, extraBufferCapacity = 10)
     val tripCancelled: SharedFlow<TripCancelledNotification> = _tripCancelled.asSharedFlow()
     
     // ==========================================================================
@@ -100,7 +115,7 @@ object SocketIOService {
     // specifically react to cancellations (e.g., auto-dismiss trip screen,
     // show reason in snackbar, navigate back to dashboard).
     // ==========================================================================
-    private val _orderCancelled = MutableSharedFlow<OrderCancelledNotification>(replay = 1, extraBufferCapacity = 10)
+    private val _orderCancelled = MutableSharedFlow<OrderCancelledNotification>(replay = 0, extraBufferCapacity = 10)
     val orderCancelled: SharedFlow<OrderCancelledNotification> = _orderCancelled.asSharedFlow()
     
     // ==========================================================================
@@ -110,13 +125,13 @@ object SocketIOService {
     // UI observes this to show blur overlay + reason message on the card,
     // then auto-scrolls to next card and removes after a delay.
     // ==========================================================================
-    private val _broadcastDismissed = MutableSharedFlow<BroadcastDismissedNotification>(replay = 1, extraBufferCapacity = 20)
+    private val _broadcastDismissed = MutableSharedFlow<BroadcastDismissedNotification>(replay = 0, extraBufferCapacity = 20)
     val broadcastDismissed: SharedFlow<BroadcastDismissedNotification> = _broadcastDismissed.asSharedFlow()
     
     // ==========================================================================
     // DRIVER STATUS CHANGED — Transporter receives real-time online/offline
     // ==========================================================================
-    private val _driverStatusChanged = MutableSharedFlow<DriverStatusChangedNotification>(replay = 1, extraBufferCapacity = 20)
+    private val _driverStatusChanged = MutableSharedFlow<DriverStatusChangedNotification>(replay = 0, extraBufferCapacity = 20)
     val driverStatusChanged: SharedFlow<DriverStatusChangedNotification> = _driverStatusChanged.asSharedFlow()
     
     // ==========================================================================
@@ -162,7 +177,7 @@ object SocketIOService {
         // Cancel existing heartbeat if any
         heartbeatJob?.cancel()
         
-        heartbeatJob = CoroutineScope(Dispatchers.IO).launch {
+        heartbeatJob = serviceScope.launch {
             timber.log.Timber.i("💓 Heartbeat started (every 12s)")
             while (isActive) {
                 try {
@@ -194,6 +209,15 @@ object SocketIOService {
     // Stored credentials for reconnection
     private var serverUrl: String? = null
     private var authToken: String? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private fun <T> emitHot(flow: MutableSharedFlow<T>, value: T) {
+        if (!flow.tryEmit(value)) {
+            serviceScope.launch {
+                flow.emit(value)
+            }
+        }
+    }
     
     /**
      * ==========================================================================
@@ -269,12 +293,15 @@ object SocketIOService {
         timber.log.Timber.i("╠══════════════════════════════════════════════════════════════╣")
         timber.log.Timber.i("║  URL: $url")
         timber.log.Timber.i("║  Token length: ${token.length}")
-        timber.log.Timber.i("║  Token preview: ${token.take(20)}...")
         timber.log.Timber.i("║  Current state: ${_connectionState.value}")
         timber.log.Timber.i("╚══════════════════════════════════════════════════════════════╝")
         
-        if (_connectionState.value is SocketConnectionState.Connected) {
-            timber.log.Timber.w("⚠️ Already connected, skipping reconnect")
+        val currentState = _connectionState.value
+        val isSameConnectionRequest = serverUrl == url && authToken == token
+        if ((currentState is SocketConnectionState.Connected || currentState is SocketConnectionState.Connecting) &&
+            isSameConnectionRequest
+        ) {
+            timber.log.Timber.w("⚠️ Socket already %s for same credentials, skipping reconnect", currentState::class.simpleName)
             return
         }
         
@@ -298,7 +325,27 @@ object SocketIOService {
         try {
             // Socket.IO options with authentication
             val options = IO.Options().apply {
-                auth = mapOf("token" to token)
+                val authPayload = mutableMapOf<String, String>(
+                    "token" to token
+                )
+                val cachedFcmToken = WeeloFirebaseService.fcmToken?.takeIf { it.isNotBlank() }
+                if (cachedFcmToken != null) {
+                    authPayload["fcmToken"] = cachedFcmToken
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.SOCKET_AUTH,
+                        status = BroadcastStatus.SUCCESS,
+                        attrs = mapOf("hasFcmToken" to "true")
+                    )
+                } else {
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.SOCKET_AUTH,
+                        status = BroadcastStatus.SKIPPED,
+                        reason = "missing_fcm_token",
+                        attrs = mapOf("hasFcmToken" to "false")
+                    )
+                    timber.log.Timber.w("⚠️ Socket auth started without FCM token; push fallback may be delayed")
+                }
+                auth = authPayload
                 reconnection = true
                 reconnectionAttempts = 10
                 reconnectionDelay = 1000
@@ -333,6 +380,7 @@ object SocketIOService {
             on(Socket.EVENT_CONNECT) {
                 timber.log.Timber.i("✅ Socket.IO connected")
                 _connectionState.value = SocketConnectionState.Connected
+                BroadcastOverlayManager.onSocketReconnected()
                 
                 // AUTO-RECONNECT HEARTBEAT:
                 // If driver was ONLINE before disconnect, auto-restart heartbeat.
@@ -369,18 +417,16 @@ object SocketIOService {
             on(Events.ERROR) { args ->
                 val error = args.firstOrNull()?.toString() ?: "unknown"
                 timber.log.Timber.e("❌ Server error: $error")
-                CoroutineScope(Dispatchers.IO).launch {
-                    _errors.emit(SocketError(error))
-                }
+                emitHot(_errors, SocketError(error))
             }
             
             // New broadcast notification (new booking request)
             on(Events.NEW_BROADCAST) { args ->
-                handleNewBroadcast(args)
+                handleNewBroadcast(args, Events.NEW_BROADCAST)
             }
             
             on(Events.NEW_ORDER_ALERT) { args ->
-                handleNewBroadcast(args)
+                handleNewBroadcast(args, Events.NEW_ORDER_ALERT)
             }
             
             // Truck assigned notification
@@ -544,7 +590,7 @@ object SocketIOService {
                 availableCount = fleetStats?.optInt("available", 0) ?: 0
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _vehicleRegistered.emit(notification)
                 // Also emit fleet updated for general refresh
                 _fleetUpdated.emit(FleetUpdatedNotification(
@@ -580,7 +626,7 @@ object SocketIOService {
                 maintenanceCount = fleetStats?.optInt("maintenance", 0) ?: 0
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _fleetUpdated.emit(notification)
             }
         } catch (e: Exception) {
@@ -610,7 +656,7 @@ object SocketIOService {
                 onTripCount = driverStats?.optInt("onTrip", 0) ?: 0
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _driverAdded.emit(notification)
                 // Also emit drivers updated for general refresh
                 _driversUpdated.emit(DriversUpdatedNotification(
@@ -651,7 +697,7 @@ object SocketIOService {
                 timestamp = data.optString("timestamp", "")
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _driverStatusChanged.emit(notification)
             }
         } catch (e: Exception) {
@@ -677,7 +723,7 @@ object SocketIOService {
                 onTripCount = driverStats?.optInt("onTrip", 0) ?: 0
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _driversUpdated.emit(notification)
             }
         } catch (e: Exception) {
@@ -759,7 +805,7 @@ object SocketIOService {
             )
             
             // Emit to flow — UI collects this and navigates to TripAcceptDeclineScreen
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _tripAssigned.emit(notification)
             }
             
@@ -804,7 +850,7 @@ object SocketIOService {
                 message = data.optString("message", "Driver didn't respond in time")
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _driverTimeout.emit(notification)
             }
             
@@ -823,7 +869,7 @@ object SocketIOService {
             val data = args.firstOrNull() as? JSONObject ?: return
 
             val notification = TripCancelledNotification(
-                orderId = data.optString("orderId", data.optString("broadcastId", "")),
+                orderId = resolveEventId(data, "orderId", "broadcastId", "bookingId", "id"),
                 tripId = data.optString("tripId", ""),
                 reason = data.optString("reason", "cancelled"),
                 message = data.optString("message", "Trip cancelled by customer"),
@@ -834,7 +880,7 @@ object SocketIOService {
                 dropAddress = data.optString("dropAddress", "")
             )
 
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _tripCancelled.emit(notification)
             }
         } catch (e: Exception) {
@@ -850,61 +896,155 @@ object SocketIOService {
      * When customer creates a booking, this gets called via WebSocket.
      * Must trigger BroadcastOverlayManager.showBroadcast() for overlay to appear.
      */
-    private fun handleNewBroadcast(args: Array<Any>) {
-        try {
-            timber.log.Timber.i("╔══════════════════════════════════════════════════════════════╗")
-            timber.log.Timber.i("║  📢 NEW BROADCAST RECEIVED VIA WEBSOCKET                     ║")
-            timber.log.Timber.i("╚══════════════════════════════════════════════════════════════╝")
-            
-            val data = args.firstOrNull() as? JSONObject
-            if (data == null) {
-                timber.log.Timber.e("❌ BROADCAST ERROR: No data in args! args.size=${args.size}")
-                args.forEachIndexed { index, arg -> timber.log.Timber.e("   arg[$index]: $arg (${arg.javaClass.simpleName})") }
-                return
+    private fun handleNewBroadcast(args: Array<Any>, rawEventName: String) {
+        val receivedAtMs = System.currentTimeMillis()
+        BroadcastTelemetry.record(
+            stage = BroadcastStage.BROADCAST_WS_RECEIVED,
+            status = BroadcastStatus.SUCCESS,
+            attrs = mapOf("event" to rawEventName)
+        )
+
+        val userRole = RetrofitClient.getUserRole()?.lowercase()
+        if (!BroadcastRolePolicy.canHandleBroadcastIngress(userRole)) {
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.BROADCAST_GATED,
+                status = BroadcastStatus.SKIPPED,
+                reason = "role_not_transporter",
+                attrs = mapOf(
+                    "event" to rawEventName,
+                    "role" to (userRole ?: "unknown")
+                )
+            )
+            timber.log.Timber.w(
+                "⏭️ Ignoring new broadcast event for non-transporter role=%s",
+                userRole ?: "unknown"
+            )
+            return
+        }
+
+        val envelope = parseIncomingBroadcastEnvelope(
+            rawEventName = rawEventName,
+            args = args,
+            receivedAtMs = receivedAtMs
+        )
+        val notification = envelope.broadcast ?: return
+        val broadcastTrip = notification.toBroadcastTrip()
+
+        if (BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled) {
+            BroadcastFlowCoordinator.ingestSocketEnvelope(
+                BroadcastIngressEnvelope(
+                    source = BroadcastIngressSource.SOCKET,
+                    rawEventName = envelope.rawEventName,
+                    normalizedId = envelope.normalizedId,
+                    receivedAtMs = envelope.receivedAtMs,
+                    payloadVersion = envelope.payloadVersion,
+                    parseWarnings = envelope.parseWarnings,
+                    broadcast = broadcastTrip
+                )
+            )
+            emitHot(_newBroadcasts, notification)
+            return
+        }
+
+        serviceScope.launch {
+            val ingestResult = BroadcastOverlayManager.showBroadcast(broadcastTrip)
+            when (ingestResult.action) {
+                BroadcastOverlayManager.BroadcastIngressAction.SHOWN -> {
+                    timber.log.Timber.i("✅ OVERLAY SHOWN for broadcast: ${broadcastTrip.broadcastId}")
+                }
+
+                BroadcastOverlayManager.BroadcastIngressAction.BUFFERED -> {
+                    timber.log.Timber.i("📥 Broadcast buffered: ${broadcastTrip.broadcastId} (${ingestResult.reason})")
+                }
+
+                BroadcastOverlayManager.BroadcastIngressAction.DROPPED -> {
+                    timber.log.Timber.w(
+                        "⚠️ Broadcast dropped: %s reason=%s queue=%s",
+                        broadcastTrip.broadcastId,
+                        ingestResult.reason,
+                        BroadcastOverlayManager.getQueueInfo()
+                    )
+                }
             }
-            
-            timber.log.Timber.i("📦 Raw broadcast data: $data")
-            
-            // Parse requestedVehicles array for multi-truck support
+        }
+
+        emitHot(_newBroadcasts, notification)
+    }
+
+    private fun parseIncomingBroadcastEnvelope(
+        rawEventName: String,
+        args: Array<Any>,
+        receivedAtMs: Long
+    ): IncomingBroadcastEnvelope {
+        val normalizedPayload = BroadcastPayloadNormalizer.normalizeFromArgs(args)
+        val parseWarnings = normalizedPayload.warnings.map { warning ->
+            warning.name.lowercase()
+        }.toMutableList()
+        val data = normalizedPayload.payload
+        if (data == null) {
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.BROADCAST_PARSED,
+                status = BroadcastStatus.FAILED,
+                reason = "payload_invalid",
+                attrs = mapOf("event" to rawEventName)
+            )
+            return IncomingBroadcastEnvelope(
+                rawEventName = rawEventName,
+                normalizedId = "",
+                receivedAtMs = receivedAtMs,
+                payloadVersion = null,
+                parseWarnings = listOf("payload_not_json"),
+                broadcast = null
+            )
+        }
+
+        return try {
+            val normalizedId = normalizedPayload.normalizedId
+
+            if (normalizedId.isEmpty()) {
+                BroadcastTelemetry.record(
+                    stage = BroadcastStage.BROADCAST_PARSED,
+                    status = BroadcastStatus.DROPPED,
+                    reason = "missing_id",
+                    attrs = mapOf("event" to rawEventName)
+                )
+                return IncomingBroadcastEnvelope(
+                    rawEventName = rawEventName,
+                    normalizedId = "",
+                    receivedAtMs = receivedAtMs,
+                    payloadVersion = data.optString("payloadVersion").takeIf { it.isNotBlank() },
+                    parseWarnings = listOf("missing_id"),
+                    broadcast = null
+                )
+            }
+
             val requestedVehiclesList = mutableListOf<RequestedVehicleNotification>()
             val vehiclesArray = data.optJSONArray("requestedVehicles")
             if (vehiclesArray != null) {
                 for (i in 0 until vehiclesArray.length()) {
-                    val v = vehiclesArray.optJSONObject(i) ?: continue
+                    val vehicle = vehiclesArray.optJSONObject(i) ?: continue
                     requestedVehiclesList.add(
                         RequestedVehicleNotification(
-                            vehicleType = v.optString("vehicleType", ""),
-                            vehicleSubtype = v.optString("vehicleSubtype", ""),
-                            count = v.optInt("count", 1),
-                            filledCount = v.optInt("filledCount", 0),
-                            farePerTruck = v.optDouble("farePerTruck", 0.0),
-                            capacityTons = v.optDouble("capacityTons", 0.0)
+                            vehicleType = vehicle.optString("vehicleType", ""),
+                            vehicleSubtype = vehicle.optString("vehicleSubtype", ""),
+                            count = vehicle.optInt("count", 1),
+                            filledCount = vehicle.optInt("filledCount", 0),
+                            farePerTruck = vehicle.optDouble("farePerTruck", 0.0),
+                            capacityTons = vehicle.optDouble("capacityTons", 0.0)
                         )
                     )
                 }
             }
-            
-            timber.log.Timber.i("📢 Parsed ${requestedVehiclesList.size} vehicle types from broadcast")
-            requestedVehiclesList.forEach { rv ->
-                timber.log.Timber.i("   - ${rv.vehicleType}/${rv.vehicleSubtype}: ${rv.count} trucks @ ₹${rv.farePerTruck}")
-            }
-            
-            // Parse personalized fields from backend
+
             val trucksYouCanProvide = data.optInt("trucksYouCanProvide", 0)
             val maxTrucksYouCanProvide = data.optInt("maxTrucksYouCanProvide", trucksYouCanProvide)
             val yourAvailableTrucks = data.optInt("yourAvailableTrucks", 0)
             val yourTotalTrucks = data.optInt("yourTotalTrucks", 0)
             val trucksStillNeeded = data.optInt("trucksStillNeeded", 0)
             val isPersonalized = data.optBoolean("isPersonalized", false)
-            
-            timber.log.Timber.i("📊 PERSONALIZED DATA:")
-            timber.log.Timber.i("   trucksYouCanProvide: $trucksYouCanProvide")
-            timber.log.Timber.i("   yourAvailableTrucks: $yourAvailableTrucks")
-            timber.log.Timber.i("   trucksStillNeeded: $trucksStillNeeded")
-            timber.log.Timber.i("   isPersonalized: $isPersonalized")
-            
+
             val notification = BroadcastNotification(
-                broadcastId = data.optString("broadcastId", data.optString("orderId", "")),
+                broadcastId = normalizedId,
                 customerId = data.optString("customerId", ""),
                 customerName = data.optString("customerName", "Customer"),
                 vehicleType = data.optString("vehicleType", ""),
@@ -912,13 +1052,10 @@ object SocketIOService {
                 trucksNeeded = data.optInt("trucksNeeded", data.optInt("totalTrucksNeeded", 1)),
                 trucksFilled = data.optInt("trucksFilled", data.optInt("trucksFilledSoFar", 0)),
                 farePerTruck = data.optInt("farePerTruck", data.optInt("pricePerTruck", 0)),
-                pickupAddress = data.optJSONObject("pickupLocation")?.optString("address", "") 
+                pickupAddress = data.optJSONObject("pickupLocation")?.optString("address", "")
                     ?: data.optString("pickupAddress", ""),
                 pickupCity = data.optJSONObject("pickupLocation")?.optString("city", "")
                     ?: data.optString("pickupCity", ""),
-                // CRITICAL FIX: Parse lat/lng from pickupLocation/pickup objects
-                // Backend sends coordinates in latitude/longitude keys OR lat/lng keys depending on path.
-                // Fall back through all variants to avoid 0.0 defaults breaking navigation.
                 pickupLatitude = data.optJSONObject("pickupLocation")?.let {
                     it.optDouble("latitude", Double.NaN).takeIf { v -> !v.isNaN() }
                         ?: it.optDouble("lat", Double.NaN).takeIf { v -> !v.isNaN() }
@@ -937,8 +1074,6 @@ object SocketIOService {
                     ?: data.optString("dropAddress", ""),
                 dropCity = data.optJSONObject("dropLocation")?.optString("city", "")
                     ?: data.optString("dropCity", ""),
-                // CRITICAL FIX: Parse lat/lng from dropLocation/drop objects
-                // Fall back through latitude/longitude AND lat/lng keys for full compatibility.
                 dropLatitude = data.optJSONObject("dropLocation")?.let {
                     it.optDouble("latitude", Double.NaN).takeIf { v -> !v.isNaN() }
                         ?: it.optDouble("lat", Double.NaN).takeIf { v -> !v.isNaN() }
@@ -958,7 +1093,6 @@ object SocketIOService {
                 isUrgent = data.optBoolean("isUrgent", false),
                 expiresAt = data.optString("expiresAt", ""),
                 requestedVehicles = requestedVehiclesList,
-                // Personalized fields
                 trucksYouCanProvide = trucksYouCanProvide,
                 maxTrucksYouCanProvide = maxTrucksYouCanProvide,
                 yourAvailableTrucks = yourAvailableTrucks,
@@ -966,49 +1100,72 @@ object SocketIOService {
                 trucksStillNeeded = trucksStillNeeded,
                 isPersonalized = isPersonalized
             )
-            
-            // Convert to BroadcastTrip for overlay manager
-            val broadcastTrip = notification.toBroadcastTrip()
-            
-            timber.log.Timber.i("╔══════════════════════════════════════════════════════════════╗")
-            timber.log.Timber.i("║  🎯 TRIGGERING BROADCAST OVERLAY                             ║")
-            timber.log.Timber.i("╠══════════════════════════════════════════════════════════════╣")
-            timber.log.Timber.i("║  Broadcast ID: ${broadcastTrip.broadcastId}")
-            timber.log.Timber.i("║  Customer: ${broadcastTrip.customerName}")
-            timber.log.Timber.i("║  Trucks Needed: ${broadcastTrip.totalTrucksNeeded}")
-            timber.log.Timber.i("║  Vehicle Types: ${broadcastTrip.requestedVehicles.size}")
-            broadcastTrip.requestedVehicles.forEach { rv ->
-                timber.log.Timber.i("║    - ${rv.vehicleType}/${rv.vehicleSubtype}: ${rv.count} @ ₹${rv.farePerTruck}")
-            }
-            timber.log.Timber.i("║  Pickup: ${broadcastTrip.pickupLocation.address}")
-            timber.log.Timber.i("║  Drop: ${broadcastTrip.dropLocation.address}")
-            timber.log.Timber.i("╚══════════════════════════════════════════════════════════════╝")
-            
-            // =================================================================
-            // SHOW BROADCAST OVERLAY - CRITICAL!
-            // =================================================================
-            // This MUST run on Main thread to update UI
-            // BroadcastOverlayManager.showBroadcast() updates StateFlows
-            // which are observed by BroadcastOverlayScreen in MainActivity
-            // =================================================================
-            
-            // Show full-screen overlay (Rapido style)
-            CoroutineScope(Dispatchers.Main).launch {
-                val shown = com.weelo.logistics.broadcast.BroadcastOverlayManager.showBroadcast(broadcastTrip)
-                if (shown) {
-                    timber.log.Timber.i("✅ OVERLAY SHOWN for broadcast: ${broadcastTrip.broadcastId}")
-                } else {
-                    timber.log.Timber.w("⚠️ OVERLAY NOT SHOWN - user might be offline or broadcast duplicate")
-                    timber.log.Timber.w("   Queue info: ${com.weelo.logistics.broadcast.BroadcastOverlayManager.getQueueInfo()}")
+
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.BROADCAST_PARSED,
+                status = BroadcastStatus.SUCCESS,
+                reason = if (parseWarnings.isEmpty()) null else "parse_warnings",
+                attrs = mutableMapOf(
+                    "event" to rawEventName,
+                    "normalizedId" to normalizedId
+                ).apply {
+                    if (parseWarnings.isNotEmpty()) {
+                        this["warnings"] = parseWarnings.joinToString("|")
+                    }
                 }
-            }
-            
-            // Also emit to flow for BroadcastListScreen history
-            CoroutineScope(Dispatchers.IO).launch {
-                _newBroadcasts.emit(notification)
-            }
+            )
+
+            IncomingBroadcastEnvelope(
+                rawEventName = rawEventName,
+                normalizedId = normalizedId,
+                receivedAtMs = receivedAtMs,
+                payloadVersion = data.optString("payloadVersion").takeIf { it.isNotBlank() },
+                parseWarnings = parseWarnings,
+                broadcast = notification
+            )
         } catch (e: Exception) {
-            timber.log.Timber.e(e, "Error parsing broadcast: ${e.message}")
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.BROADCAST_PARSED,
+                status = BroadcastStatus.FAILED,
+                reason = "payload_invalid",
+                attrs = mapOf(
+                    "event" to rawEventName,
+                    "error" to (e.message ?: "unknown")
+                )
+            )
+            timber.log.Timber.e(e, "Error parsing broadcast payload: ${e.message}")
+            IncomingBroadcastEnvelope(
+                rawEventName = rawEventName,
+                normalizedId = "",
+                receivedAtMs = receivedAtMs,
+                payloadVersion = null,
+                parseWarnings = listOf("exception"),
+                broadcast = null
+            )
+        }
+    }
+
+    private fun resolveEventId(data: JSONObject, vararg keys: String): String {
+        for (key in keys) {
+            val value = data.optString(key, "").trim()
+            if (value.isNotEmpty()) return value
+        }
+        return ""
+    }
+
+    private fun dismissWindowMs(): Long {
+        return BroadcastUiTiming.DISMISS_ENTER_MS.toLong() +
+            BroadcastUiTiming.DISMISS_HOLD_MS +
+            BroadcastUiTiming.DISMISS_EXIT_MS.toLong()
+    }
+
+    private fun scheduleOverlayRemovalAfterDismiss(broadcastId: String) {
+        if (broadcastId.isBlank()) return
+        if (BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled) return
+        serviceScope.launch {
+            delay(dismissWindowMs())
+            BroadcastOverlayManager.removeEverywhere(broadcastId)
+            timber.log.Timber.i("🧹 Removed broadcast %s after dismiss window", broadcastId)
         }
     }
     
@@ -1029,7 +1186,7 @@ object SocketIOService {
                 status = assignment?.optString("status", "") ?: ""
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _truckAssigned.emit(notification)
             }
         } catch (e: Exception) {
@@ -1053,7 +1210,7 @@ object SocketIOService {
                 message = data.optString("message", "")
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _assignmentStatusChanged.emit(notification)
             }
         } catch (e: Exception) {
@@ -1076,7 +1233,7 @@ object SocketIOService {
                 trucksNeeded = data.optInt("trucksNeeded", -1)
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _bookingUpdated.emit(notification)
             }
         } catch (e: Exception) {
@@ -1093,7 +1250,7 @@ object SocketIOService {
             timber.log.Timber.i("📊 Trucks remaining update: $data")
             
             val notification = TrucksRemainingNotification(
-                orderId = data.optString("orderId", ""),
+                orderId = resolveEventId(data, "orderId", "broadcastId", "bookingId", "id"),
                 vehicleType = data.optString("vehicleType", ""),
                 totalTrucks = data.optInt("totalTrucks", 0),
                 trucksFilled = data.optInt("trucksFilled", 0),
@@ -1101,7 +1258,7 @@ object SocketIOService {
                 orderStatus = data.optString("orderStatus", "")
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _trucksRemainingUpdates.emit(notification)
             }
         } catch (e: Exception) {
@@ -1125,7 +1282,7 @@ object SocketIOService {
                 message = data.optString("message", "")
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _assignmentStatusChanged.emit(notification)
             }
         } catch (e: Exception) {
@@ -1146,10 +1303,8 @@ object SocketIOService {
         try {
             val data = args.firstOrNull() as? JSONObject ?: return
             
-            // Get the ID - backend sends both broadcastId and orderId for compatibility
-            val broadcastId = data.optString("broadcastId", 
-                data.optString("orderId", 
-                    data.optString("bookingId", "")))
+            // Normalize ID across backend variants.
+            val broadcastId = resolveEventId(data, "broadcastId", "orderId", "bookingId", "id")
             val reason = data.optString("reason", "timeout")
             val message = data.optString("message", when (reason) {
                 "customer_cancelled" -> "Sorry, this order was cancelled by the customer"
@@ -1168,20 +1323,18 @@ object SocketIOService {
             
             if (broadcastId.isNotEmpty()) {
                 // Emit dismiss notification for graceful fade (instead of instant remove)
-                CoroutineScope(Dispatchers.IO).launch {
-                    _broadcastDismissed.emit(BroadcastDismissedNotification(
+                emitHot(
+                    _broadcastDismissed,
+                    BroadcastDismissedNotification(
                         broadcastId = broadcastId,
                         reason = reason,
                         message = message,
                         customerName = customerName
-                    ))
-                }
-                
-                // ALSO schedule delayed removal from overlay (2s for user to read message)
-                CoroutineScope(Dispatchers.Main).launch {
-                    kotlinx.coroutines.delay(2000) // 2 second graceful delay
-                    com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(broadcastId)
-                    timber.log.Timber.i("   ✓ Removed broadcast $broadcastId from overlay after graceful delay")
+                    )
+                )
+
+                if (!BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled) {
+                    scheduleOverlayRemovalAfterDismiss(broadcastId)
                 }
             }
             
@@ -1193,9 +1346,7 @@ object SocketIOService {
                 trucksNeeded = data.optInt("trucksNeeded", -1)
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
-                _bookingUpdated.emit(notification)
-            }
+            emitHot(_bookingUpdated, notification)
         } catch (e: Exception) {
             timber.log.Timber.e(e, "Error parsing booking expired: ${e.message}")
         }
@@ -1216,7 +1367,7 @@ object SocketIOService {
                 trucksNeeded = data.optInt("trucksNeeded", -1)
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
+            serviceScope.launch {
                 _bookingUpdated.emit(notification)
             }
         } catch (e: Exception) {
@@ -1246,7 +1397,7 @@ object SocketIOService {
     private fun handleOrderCancelled(args: Array<Any>) {
         try {
             val data = args.firstOrNull() as? JSONObject ?: return
-            val orderId = data.optString("orderId", data.optString("broadcastId", ""))
+            val orderId = resolveEventId(data, "orderId", "broadcastId", "bookingId", "id")
             val tripId = data.optString("tripId", "")
             val reason = data.optString("reason", "Cancelled by customer")
             val cancelledAt = data.optString("cancelledAt", "")
@@ -1261,23 +1412,21 @@ object SocketIOService {
             timber.log.Timber.w("║  Assignments Released: $assignmentsCancelled")
             timber.log.Timber.w("╚══════════════════════════════════════════════════════════════╝")
             
-            // 1. INSTANT removal from full-screen overlay (BroadcastOverlayManager).
-            //    removeBroadcast() is thread-safe (mutex-protected) and O(1) for current + O(n) queue.
-            //    Must run on Main thread as BroadcastOverlayManager uses MainScope internally.
-            CoroutineScope(Dispatchers.Main).launch {
-                com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(orderId)
-                timber.log.Timber.i("   ✓ Instantly removed broadcast $orderId from full-screen overlay")
-            }
-
-            // 2. Emit dismiss notification for graceful fade on BroadcastListScreen card.
+            // 1. Emit dismiss notification for graceful fade on BroadcastListScreen/overlay card.
             //    BroadcastListScreen observes this → shows animated "Sorry" overlay → auto-removes after 1s.
-            CoroutineScope(Dispatchers.IO).launch {
-                _broadcastDismissed.emit(BroadcastDismissedNotification(
+            emitHot(
+                _broadcastDismissed,
+                BroadcastDismissedNotification(
                     broadcastId = orderId,
                     reason = "customer_cancelled",
                     message = message,
                     customerName = data.optString("customerName", "")
-                ))
+                )
+            )
+
+            // 2. Remove from overlay queue after shared dismiss window (legacy path only).
+            if (!BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled) {
+                scheduleOverlayRemovalAfterDismiss(orderId)
             }
             
             // 3. Emit to dedicated orderCancelled flow (for driver/transporter screens)
@@ -1294,9 +1443,7 @@ object SocketIOService {
                 dropAddress = data.optString("dropAddress", "")
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
-                _orderCancelled.emit(cancelNotification)
-            }
+            emitHot(_orderCancelled, cancelNotification)
             
             // 4. Also emit to bookingUpdated for backward compatibility (list views)
             val bookingNotification = BookingUpdatedNotification(
@@ -1306,11 +1453,9 @@ object SocketIOService {
                 trucksNeeded = -1
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
-                _bookingUpdated.emit(bookingNotification)
-            }
+            emitHot(_bookingUpdated, bookingNotification)
             
-            timber.log.Timber.i("   ✓ Emitted to broadcastDismissed + orderCancelled + bookingUpdated flows")
+            timber.log.Timber.i("   ✓ Emitted dismiss + orderCancelled + bookingUpdated flows")
         } catch (e: Exception) {
             timber.log.Timber.e(e, "Error handling order cancelled: ${e.message}")
         }
@@ -1325,24 +1470,23 @@ object SocketIOService {
     private fun handleOrderExpired(args: Array<Any>) {
         try {
             val data = args.firstOrNull() as? JSONObject ?: return
-            val orderId = data.optString("orderId", "")
+            val orderId = resolveEventId(data, "orderId", "broadcastId", "bookingId", "id")
             
             timber.log.Timber.w("⏰ ORDER EXPIRED — GRACEFUL DISMISS: $orderId")
             
             // Emit dismiss notification for graceful fade
-            CoroutineScope(Dispatchers.IO).launch {
-                _broadcastDismissed.emit(BroadcastDismissedNotification(
+            emitHot(
+                _broadcastDismissed,
+                BroadcastDismissedNotification(
                     broadcastId = orderId,
                     reason = "timeout",
                     message = "This booking request has expired",
                     customerName = data.optString("customerName", "")
-                ))
-            }
-            
-            // Schedule delayed removal (2s for graceful fade)
-            CoroutineScope(Dispatchers.Main).launch {
-                kotlinx.coroutines.delay(2000)
-                com.weelo.logistics.broadcast.BroadcastOverlayManager.removeBroadcast(orderId)
+                )
+            )
+
+            if (!BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled) {
+                scheduleOverlayRemovalAfterDismiss(orderId)
             }
             
             // Emit update for list views
@@ -1353,9 +1497,7 @@ object SocketIOService {
                 trucksNeeded = data.optInt("totalTrucks", -1)
             )
             
-            CoroutineScope(Dispatchers.IO).launch {
-                _bookingUpdated.emit(notification)
-            }
+            emitHot(_bookingUpdated, notification)
         } catch (e: Exception) {
             timber.log.Timber.e(e, "Error handling order expired: ${e.message}")
         }
@@ -1483,6 +1625,51 @@ sealed class SocketConnectionState {
     data class Error(val message: String) : SocketConnectionState()
 }
 
+data class IncomingBroadcastEnvelope(
+    val rawEventName: String,
+    val normalizedId: String,
+    val receivedAtMs: Long,
+    val payloadVersion: String?,
+    val parseWarnings: List<String>,
+    val broadcast: BroadcastNotification?
+)
+
+private val ISO_EXPIRY_WITH_MILLIS: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+private val ISO_EXPIRY_NO_MILLIS: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
+
+private fun parseBroadcastExpiryEpochMs(rawExpiry: String?): Long {
+    val now = System.currentTimeMillis()
+    val fallback = now + 60_000L
+    val value = rawExpiry?.trim().orEmpty()
+    if (value.isEmpty()) return fallback
+
+    value.toLongOrNull()?.let { numeric ->
+        return when {
+            numeric > 1_000_000_000_000L -> numeric
+            numeric > 1_000_000_000L -> numeric * 1_000L
+            else -> fallback
+        }.coerceAtLeast(now + 1_000L)
+    }
+
+    val instant = try {
+        Instant.parse(value)
+    } catch (_: DateTimeParseException) {
+        try {
+            LocalDateTime.parse(value, ISO_EXPIRY_WITH_MILLIS).atOffset(ZoneOffset.UTC).toInstant()
+        } catch (_: DateTimeParseException) {
+            try {
+                LocalDateTime.parse(value, ISO_EXPIRY_NO_MILLIS).atOffset(ZoneOffset.UTC).toInstant()
+            } catch (_: DateTimeParseException) {
+                null
+            }
+        }
+    }
+
+    return (instant?.toEpochMilli() ?: fallback).coerceAtLeast(now + 1_000L)
+}
+
 data class BroadcastNotification(
     val broadcastId: String,
     val customerId: String,
@@ -1591,13 +1778,7 @@ data class BroadcastNotification(
             },
             status = com.weelo.logistics.data.model.BroadcastStatus.ACTIVE,
             broadcastTime = System.currentTimeMillis(),
-            expiryTime = try {
-                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
-                    timeZone = java.util.TimeZone.getTimeZone("UTC")
-                }.parse(expiresAt)?.time ?: (System.currentTimeMillis() + (60 * 1000))
-            } catch (e: Exception) {
-                System.currentTimeMillis() + (60 * 1000) // Default 1 min expiry
-            },
+            expiryTime = parseBroadcastExpiryEpochMs(expiresAt),
             isUrgent = isUrgent,
             
             // =========================================================================

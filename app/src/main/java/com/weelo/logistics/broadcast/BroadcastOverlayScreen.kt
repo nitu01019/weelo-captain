@@ -61,19 +61,19 @@ import kotlinx.coroutines.launch
 private const val TAG = "BroadcastOverlay"
 
 // =============================================================================
-// RAPIDO STYLE COLORS - Yellow & Bold Black (Professional Dark Theme)
+// MONOCHROME BROADCAST PALETTE — white surfaces + black content
 // =============================================================================
-private val RapidoYellow = Color(0xFFFDD835)      // Bright Yellow - Primary accent
-private val RapidoYellowDark = Color(0xFFF9A825)  // Darker Yellow for hover states
-private val RapidoBlack = Color(0xFF1A1A1A)       // Bold Black - Primary background
-private val RapidoDarkGray = Color(0xFF2D2D2D)    // Slightly lighter for cards
-private val RapidoGray = Color(0xFF424242)        // Dark Gray for secondary text
-private val RapidoMediumGray = Color(0xFF757575)  // Medium gray for borders
-private val RapidoLightGray = Color(0xFFE0E0E0)   // Light text on dark
-private val RapidoWhite = Color(0xFFFFFFFF)       // White - Primary text
-private val RapidoGreen = Color(0xFF4CAF50)       // Success green
-private val RapidoRed = Color(0xFFEF5350)         // Reject red
-private val RapidoBlue = Color(0xFF2196F3)        // Direction/Navigation blue
+private val RapidoYellow = Color.White
+private val RapidoYellowDark = Color.White
+private val RapidoBlack = Color.Black
+private val RapidoDarkGray = Color.White
+private val RapidoGray = Color.Black.copy(alpha = 0.72f)
+private val RapidoMediumGray = Color.Black.copy(alpha = 0.58f)
+private val RapidoLightGray = Color.White
+private val RapidoWhite = Color.Black
+private val RapidoGreen = Color.Black
+private val RapidoRed = Color.Black
+private val RapidoBlue = Color.Black
 
 /**
  * =============================================================================
@@ -150,6 +150,7 @@ fun BroadcastOverlayScreen(
     // Reset when broadcast changes
     LaunchedEffect(currentBroadcast?.broadcastId) {
         truckHoldStates = emptyMap()
+        currentBroadcast?.broadcastId?.let(BroadcastOverlayManager::acknowledgeDisplayed)
     }
     
     // Calculate accepted trucks for Submit button
@@ -180,23 +181,26 @@ fun BroadcastOverlayScreen(
     // successive dismissals each launch independent jobs that all call
     // showNextBroadcast(), causing the carousel to skip broadcasts.
     LaunchedEffect(Unit) {
-        SocketIOService.broadcastDismissed.collectLatest { notification ->
+        val dismissFlow = if (BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled) {
+            BroadcastFlowCoordinator.dismissed
+        } else {
+            SocketIOService.broadcastDismissed
+        }
+        dismissFlow.collectLatest { notification ->
             val current = BroadcastOverlayManager.currentBroadcast.value
-            if (current != null && current.broadcastId == notification.broadcastId) {
-                // Current broadcast is being dismissed — show overlay
-                dismissInfo = notification
-                
-                // After 2s, auto-advance to next or hide overlay.
-                // collectLatest cancels this delay if a new dismissal arrives first.
-                delay(2000L)
-                dismissInfo = null
-                
-                // If more broadcasts, advance to next; otherwise overlay hides naturally
-                if (BroadcastOverlayManager.totalBroadcastCount.value > 1) {
-                    BroadcastOverlayManager.showNextBroadcast()
-                }
-                // Note: removeBroadcast is already scheduled by SocketIOService (2s delay)
-            }
+            if (current == null || current.broadcastId != notification.broadcastId) return@collectLatest
+
+            // Current broadcast is being dismissed — show overlay
+            dismissInfo = notification
+
+            // Keep dismiss overlay visible during the shared timing window.
+            // collectLatest cancels this delay if a new dismissal arrives first.
+            delay(
+                BroadcastUiTiming.DISMISS_ENTER_MS.toLong() +
+                    BroadcastUiTiming.DISMISS_HOLD_MS +
+                    BroadcastUiTiming.DISMISS_EXIT_MS.toLong()
+            )
+            dismissInfo = null
         }
     }
     
@@ -222,6 +226,16 @@ fun BroadcastOverlayScreen(
         ))
         
         timber.log.Timber.i("🔒 Holding $quantity trucks: $vehicleType $vehicleSubtype")
+        BroadcastTelemetry.record(
+            stage = BroadcastStage.BROADCAST_ACCEPT_HOLD_REQUESTED,
+            status = BroadcastStatus.SUCCESS,
+            attrs = mapOf(
+                "broadcastId" to broadcast.broadcastId,
+                "vehicleType" to vehicleType,
+                "vehicleSubtype" to vehicleSubtype,
+                "quantity" to quantity.toString()
+            )
+        )
         
         scope.launch {
             val result = broadcastRepository.holdTrucks(
@@ -234,6 +248,14 @@ fun BroadcastOverlayScreen(
             when (result) {
                 is BroadcastResult.Success -> {
                     timber.log.Timber.i("✅ Hold acquired: ${result.data.holdId}")
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.BROADCAST_HOLD_SUCCESS,
+                        status = BroadcastStatus.SUCCESS,
+                        attrs = mapOf(
+                            "broadcastId" to broadcast.broadcastId,
+                            "holdId" to result.data.holdId
+                        )
+                    )
                     truckHoldStates = truckHoldStates + (key to TruckHoldState(
                         vehicleType = vehicleType,
                         vehicleSubtype = vehicleSubtype,
@@ -246,6 +268,16 @@ fun BroadcastOverlayScreen(
                 }
                 is BroadcastResult.Error -> {
                     timber.log.Timber.e("❌ Hold failed: ${result.message}")
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.BROADCAST_HOLD_FAIL,
+                        status = BroadcastStatus.FAILED,
+                        reason = result.message,
+                        attrs = mapOf(
+                            "broadcastId" to broadcast.broadcastId,
+                            "vehicleType" to vehicleType,
+                            "vehicleSubtype" to vehicleSubtype
+                        )
+                    )
                     truckHoldStates = truckHoldStates + (key to TruckHoldState(
                         vehicleType = vehicleType,
                         vehicleSubtype = vehicleSubtype,
@@ -318,13 +350,13 @@ fun BroadcastOverlayScreen(
     // Animate visibility
     AnimatedVisibility(
         visible = isVisible && currentBroadcast != null,
-        enter = fadeIn(tween(250)) + slideInVertically(
+        enter = fadeIn(tween(BroadcastUiTiming.DISMISS_ENTER_MS)) + slideInVertically(
             initialOffsetY = { it },
             animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
         ),
-        exit = fadeOut(tween(150)) + slideOutVertically(
+        exit = fadeOut(tween(BroadcastUiTiming.DISMISS_EXIT_MS)) + slideOutVertically(
             targetOffsetY = { it / 2 },
-            animationSpec = tween(200)
+            animationSpec = tween(BroadcastUiTiming.DISMISS_EXIT_MS)
         )
     ) {
         currentBroadcast?.let { broadcast ->
@@ -356,58 +388,70 @@ fun BroadcastOverlayScreen(
                     )
                     
                     // ======== DISMISS OVERLAY (blur + message) ========
-                    if (dismissInfo != null) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.7f))
-                                // CRITICAL FIX: Consume all pointer input so taps don't fall
-                                // through to accept/reject buttons behind this overlay.
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) { /* consume taps — intentional no-op */ },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.padding(32.dp)
+                    AnimatedVisibility(
+                        visible = dismissInfo != null,
+                        enter = fadeIn(tween(BroadcastUiTiming.DISMISS_ENTER_MS)),
+                        exit = fadeOut(tween(BroadcastUiTiming.DISMISS_EXIT_MS))
+                    ) {
+                        val activeDismissInfo = dismissInfo
+                        if (activeDismissInfo != null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.White.copy(alpha = 0.94f))
+                                    // CRITICAL FIX: Consume all pointer input so taps don't fall
+                                    // through to accept/reject buttons behind this overlay.
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) { /* consume taps — intentional no-op */ },
+                                contentAlignment = Alignment.Center
                             ) {
-                                // Animated icon
-                                Text(
-                                    text = when (dismissInfo!!.reason) {
-                                        "customer_cancelled" -> "🚫"
-                                        "fully_filled" -> "✅"
-                                        else -> "⏰"
-                                    },
-                                    fontSize = 64.sp
-                                )
-                                Spacer(Modifier.height(16.dp))
-                                // Title
-                                Text(
-                                    text = when (dismissInfo!!.reason) {
-                                        "customer_cancelled" -> "ORDER CANCELLED"
-                                        "fully_filled" -> "FULLY ASSIGNED"
-                                        else -> "ORDER EXPIRED"
-                                    },
-                                    fontSize = 24.sp,
-                                    fontWeight = FontWeight.Black,
-                                    color = when (dismissInfo!!.reason) {
-                                        "customer_cancelled" -> Color(0xFFFF5252)
-                                        "fully_filled" -> Color(0xFF4CAF50)
-                                        else -> RapidoYellow
-                                    },
-                                    letterSpacing = 2.sp
-                                )
-                                Spacer(Modifier.height(12.dp))
-                                // Message
-                                Text(
-                                    text = dismissInfo!!.message,
-                                    fontSize = 16.sp,
-                                    color = Color.White.copy(alpha = 0.9f),
-                                    textAlign = TextAlign.Center,
-                                    fontWeight = FontWeight.Medium
-                                )
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = when (activeDismissInfo.reason) {
+                                            "customer_cancelled" -> Icons.Default.Cancel
+                                            "fully_filled" -> Icons.Default.CheckCircle
+                                            else -> Icons.Default.Schedule
+                                        },
+                                        contentDescription = null,
+                                        tint = when (activeDismissInfo.reason) {
+                                            "customer_cancelled" -> RapidoBlack
+                                            "fully_filled" -> RapidoBlack
+                                            else -> RapidoYellow
+                                        },
+                                        modifier = Modifier.size(64.dp)
+                                    )
+                                    Spacer(Modifier.height(16.dp))
+                                    // Title
+                                    Text(
+                                        text = when (activeDismissInfo.reason) {
+                                            "customer_cancelled" -> "ORDER CANCELLED"
+                                            "fully_filled" -> "FULLY ASSIGNED"
+                                            else -> "ORDER EXPIRED"
+                                        },
+                                        fontSize = 24.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = when (activeDismissInfo.reason) {
+                                            "customer_cancelled" -> RapidoBlack
+                                            "fully_filled" -> RapidoBlack
+                                            else -> RapidoYellow
+                                        },
+                                        letterSpacing = 2.sp
+                                    )
+                                    Spacer(Modifier.height(12.dp))
+                                    // Message
+                                    Text(
+                                        text = activeDismissInfo.message,
+                                        fontSize = 16.sp,
+                                        color = Color.Black,
+                                        textAlign = TextAlign.Center,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
                             }
                         }
                     }
@@ -543,7 +587,7 @@ private fun BroadcastOverlayContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .background(RapidoWhite, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
+                    .background(Color.White, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
                 contentPadding = PaddingValues(20.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
@@ -979,7 +1023,7 @@ private fun BroadcastOverlayContentNew(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(RapidoBlack)
+            .background(Color.White)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             
@@ -987,7 +1031,7 @@ private fun BroadcastOverlayContentNew(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(RapidoBlack)
+                    .background(Color.White)
                     .padding(16.dp)
             ) {
                 // Top row: Close | Timer | Direction
@@ -1210,7 +1254,7 @@ private fun BroadcastOverlayContentNew(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(RapidoBlack, RoundedCornerShape(12.dp))
+                            .background(Color.White, RoundedCornerShape(12.dp))
                             .padding(12.dp)
                     ) {
                         // Pickup
@@ -1327,7 +1371,7 @@ private fun BroadcastOverlayContentNew(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(RapidoBlack)
+                    .background(Color.White)
                     .padding(16.dp)
             ) {
                 Button(
@@ -1777,7 +1821,7 @@ private fun TruckTypeCard(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                    .background(RapidoWhite, RoundedCornerShape(8.dp))
+                    .background(Color.White, RoundedCornerShape(8.dp))
                     .border(1.dp, RapidoBlack.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
                     .padding(4.dp)
             ) {
@@ -1895,10 +1939,10 @@ private fun LegacySingleTruckCard(
                     Box(
                         modifier = Modifier
                             .size(48.dp)
-                            .background(Primary.copy(alpha = 0.1f), RoundedCornerShape(12.dp)),
+                            .background(RapidoBlack.copy(alpha = 0.08f), RoundedCornerShape(12.dp)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Default.LocalShipping, null, tint = Primary, modifier = Modifier.size(28.dp))
+                        Icon(Icons.Default.LocalShipping, null, tint = RapidoBlack, modifier = Modifier.size(28.dp))
                     }
                     Spacer(Modifier.width(12.dp))
                     Column {
@@ -1910,7 +1954,7 @@ private fun LegacySingleTruckCard(
                         Text(
                             "$available trucks needed",
                             style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary
+                            color = RapidoGray
                         )
                     }
                 }
@@ -1920,9 +1964,9 @@ private fun LegacySingleTruckCard(
                         "₹${String.format("%,.0f", broadcast.farePerTruck)}",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = Success
+                        color = RapidoBlack
                     )
-                    Text("/truck", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                    Text("/truck", style = MaterialTheme.typography.labelSmall, color = RapidoGray)
                 }
             }
             
@@ -1967,14 +2011,14 @@ private fun LegacySingleTruckCard(
                     OutlinedButton(
                         onClick = onReject,
                         shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Error)
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = RapidoBlack)
                     ) {
                         Text("REJECT", fontWeight = FontWeight.Bold)
                     }
                     Button(
                         onClick = { onAccept(selectedQuantity) },
                         shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Success)
+                        colors = ButtonDefaults.buttonColors(containerColor = RapidoBlack, contentColor = Color.White)
                     ) {
                         Text("ACCEPT $selectedQuantity", fontWeight = FontWeight.Bold)
                     }
@@ -2110,7 +2154,7 @@ private fun BroadcastRouteMap(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(8.dp)
-                .background(RapidoBlack.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                .background(Color.White.copy(alpha = 0.94f), RoundedCornerShape(4.dp))
                 .padding(horizontal = 8.dp, vertical = 4.dp)
         ) {
             Text(

@@ -12,6 +12,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,7 @@ import timber.log.Timber
 import com.weelo.logistics.ui.auth.*
 import com.weelo.logistics.ui.driver.DriverProfileViewModel
 import com.weelo.logistics.ui.driver.DriverProfileScreenWithPhotos
+import com.weelo.logistics.ui.viewmodel.MainViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 /**
@@ -68,7 +70,8 @@ private fun NavHostController.navigateSmooth(
     route: String,
     popUpToRoute: String? = null,
     inclusive: Boolean = false,
-    restoreState: Boolean = true
+    restoreState: Boolean = true,
+    saveStateOnPopUpTo: Boolean = restoreState && !inclusive
 ) {
     try {
         navigate(route) {
@@ -76,7 +79,7 @@ private fun NavHostController.navigateSmooth(
             this.restoreState = restoreState
             if (popUpToRoute != null) {
                 popUpTo(popUpToRoute) {
-                    saveState = true
+                    saveState = saveStateOnPopUpTo
                     this.inclusive = inclusive
                 }
             }
@@ -86,6 +89,17 @@ private fun NavHostController.navigateSmooth(
         // (e.g., empty route segment like otp_verification//DRIVER/login)
         Timber.e(e, "❌ Navigation failed for route: $route")
     }
+}
+
+private fun isAuthPublicRoute(route: String?): Boolean {
+    if (route.isNullOrBlank()) return false
+    return route == Screen.RoleSelection.route ||
+        route == Screen.Login.route ||
+        route == Screen.Signup.route ||
+        route == Screen.Onboarding.route ||
+        route.startsWith("login") ||
+        route.startsWith("signup") ||
+        route.startsWith("otp_verification")
 }
 
 /**
@@ -98,31 +112,39 @@ private fun NavHostController.navigateSmooth(
  * @param coroutineScope Scoped coroutine for async DataStore clear (prevents MainScope leak)
  */
 private fun performLogout(navController: NavHostController, coroutineScope: CoroutineScope) {
-    // 1. Clear secure tokens (synchronous)
-    com.weelo.logistics.data.remote.RetrofitClient.clearAllData()
-    
-    // 2. Clear driver preferences (async via scoped coroutine — no MainScope leak)
-    val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences
-        .getInstance(navController.context)
+    val context = navController.context
+    val mainActivity = context.findMainActivity()
+    val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences.getInstance(context)
+
     coroutineScope.launch {
-        driverPrefs.clearAll()
-    }
-    
-    // 3. Reset locale to English so auth screens show in default language.
-    //    After re-login, updateLocale() restores the user's saved language.
-    navController.context.findMainActivity()?.updateLocale("en")
-    
-    // 4. Navigate to role selection, clearing entire back stack
-    // CRITICAL FIX: Always pop the entire graph so back button cannot return to
-    // authenticated dashboards after logout. Using graph.id is safe even when
-    // the start destination varies by login state.
-    try {
-        navController.navigate(Screen.RoleSelection.route) {
-            popUpTo(navController.graph.id) { inclusive = true }
-            launchSingleTop = true
+        // 1. Clear secure tokens and user data first (sync, deterministic)
+        com.weelo.logistics.data.remote.RetrofitClient.clearAllData()
+
+        // 2. Clear driver prefs and language/profile flags before redirecting
+        runCatching { driverPrefs.clearAll() }
+            .onFailure { Timber.w(it, "⚠️ DriverPreferences clear failed during logout") }
+
+        withContext(Dispatchers.Main) {
+            // 3. Reset locale for auth screens
+            mainActivity?.updateLocale("en")
+
+            // 4. Clear current nav graph stack immediately (no state restore)
+            try {
+                navController.navigate(Screen.RoleSelection.route) {
+                    popUpTo(navController.graph.id) {
+                        inclusive = true
+                        saveState = false
+                    }
+                    launchSingleTop = true
+                    restoreState = false
+                }
+            } catch (e: IllegalArgumentException) {
+                Timber.e(e, "❌ Logout navigation failed")
+            }
+
+            // 5. Hard-reset task so Android back/recents cannot reopen protected screens
+            mainActivity?.restartAsLoggedOutTask()
         }
-    } catch (e: IllegalArgumentException) {
-        Timber.e(e, "❌ Logout navigation failed")
     }
 }
 
@@ -137,10 +159,13 @@ private fun performLogout(navController: NavHostController, coroutineScope: Coro
 fun WeeloNavigation(
     navController: NavHostController = rememberNavController(),
     isLoggedIn: Boolean = false,
-    userRole: String? = null
+    userRole: String? = null,
+    mainViewModel: MainViewModel
 ) {
     // Scoped coroutine for logout cleanup (prevents MainScope leak)
     val logoutScope = rememberCoroutineScope()
+    val currentBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = currentBackStackEntry?.destination?.route
     
     // Determine start destination based on login status
     // CRITICAL: Drivers ALWAYS go through onboarding check first
@@ -157,15 +182,55 @@ fun WeeloNavigation(
     } else {
         Screen.RoleSelection.route
     }
+
+    // Reactive auth guard: if token is cleared/expired while the app is open,
+    // force redirect to auth and clear protected back stack.
+    LaunchedEffect(isLoggedIn, currentRoute) {
+        if (!isLoggedIn && currentRoute != null && !isAuthPublicRoute(currentRoute)) {
+            Timber.w("🔒 Auth guard redirect from protected route: $currentRoute")
+            try {
+                navController.navigate(Screen.RoleSelection.route) {
+                    popUpTo(navController.graph.id) {
+                        inclusive = true
+                        saveState = false
+                    }
+                    launchSingleTop = true
+                    restoreState = false
+                }
+            } catch (e: IllegalArgumentException) {
+                Timber.e(e, "❌ Auth guard navigation failed")
+            }
+        }
+    }
     
     NavHost(
         navController = navController,
         startDestination = startDestination,
-        // Default smooth animations for all screens
-        enterTransition = { NavAnimations.slideInFromRight },
-        exitTransition = { NavAnimations.slideOutToLeft },
-        popEnterTransition = { NavAnimations.slideInFromLeft },
-        popExitTransition = { NavAnimations.slideOutToRight }
+        // Route-aware transitions reduce jank on heavy realtime/map screens
+        enterTransition = {
+            NavAnimations.enterForRoute(
+                initialRoute = initialState.destination.route,
+                targetRoute = targetState.destination.route
+            )
+        },
+        exitTransition = {
+            NavAnimations.exitForRoute(
+                initialRoute = initialState.destination.route,
+                targetRoute = targetState.destination.route
+            )
+        },
+        popEnterTransition = {
+            NavAnimations.popEnterForRoute(
+                initialRoute = initialState.destination.route,
+                targetRoute = targetState.destination.route
+            )
+        },
+        popExitTransition = {
+            NavAnimations.popExitForRoute(
+                initialRoute = initialState.destination.route,
+                targetRoute = targetState.destination.route
+            )
+        }
     ) {
 
         // Onboarding screen removed - users go directly to role selection after splash
@@ -275,6 +340,7 @@ fun WeeloNavigation(
         // Transporter Dashboard
         composable(Screen.TransporterDashboard.route) {
             com.weelo.logistics.ui.transporter.TransporterDashboardScreen(
+                mainViewModel = mainViewModel,
                 onNavigateToFleet = { navController.navigateSmooth(Screen.FleetList.route) },
                 onNavigateToDrivers = { navController.navigateSmooth(Screen.DriverList.route) },
                 onNavigateToTrips = { navController.navigateSmooth(Screen.TripList.route) },
@@ -282,8 +348,7 @@ fun WeeloNavigation(
                 onNavigateToAddDriver = { navController.navigateSmooth(Screen.AddDriver.route) },
                 onNavigateToCreateTrip = { navController.navigateSmooth(Screen.CreateTrip.route) },
                 onNavigateToProfile = { navController.navigateSmooth("transporter_profile") },
-                // BroadcastList removed - using overlay only
-                onNavigateToBroadcasts = { /* Broadcasts shown via overlay, no separate screen */ },
+                onNavigateToBroadcasts = { navController.navigateSmooth(Screen.BroadcastList.route) },
                 onNavigateToSettings = { navController.navigateSmooth(Screen.Settings.route) },
                 onLogout = {
                     // Back button or logout goes to role selection
@@ -304,9 +369,33 @@ fun WeeloNavigation(
                 onProfileUpdated = { /* Refresh will happen automatically */ }
             )
         }
-        
-        // BroadcastListScreen REMOVED - Broadcasts are shown via overlay only
-        // BroadcastOverlayScreen in MainActivity handles all broadcast display
+
+        composable(Screen.BroadcastList.route) {
+            com.weelo.logistics.ui.transporter.BroadcastListScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToBroadcastDetails = { encoded ->
+                    val parts = encoded.split("|")
+                    val broadcastId = parts.getOrNull(0).orEmpty()
+                    val vehicleType = parts.getOrNull(1).orEmpty()
+                    val vehicleSubtype = parts.getOrNull(2).orEmpty()
+                    val quantity = parts.getOrNull(3)?.toIntOrNull() ?: 1
+
+                    if (broadcastId.isBlank() || vehicleType.isBlank()) {
+                        Timber.w("⚠️ Invalid broadcast navigation payload: %s", encoded)
+                    } else {
+                        navController.navigateSmooth(
+                            route = Screen.TruckHoldConfirm.createRoute(
+                                orderId = broadcastId,
+                                vehicleType = vehicleType,
+                                vehicleSubtype = vehicleSubtype,
+                                quantity = quantity
+                            )
+                        )
+                    }
+                },
+                onNavigateToSoundSettings = { navController.navigateSmooth(Screen.BroadcastSoundSettings.route) }
+            )
+        }
         
         // Broadcast Sound Settings
         composable(Screen.BroadcastSoundSettings.route) {
@@ -327,10 +416,16 @@ fun WeeloNavigation(
                 vehicleType = vehicleType,
                 vehicleSubtype = vehicleSubtype,
                 quantity = quantity,
-                onConfirmed = { _, truckIds ->
+                onConfirmed = { holdId, resolvedVehicleType, resolvedVehicleSubtype, resolvedQuantity ->
                     // Navigate to driver assignment
                     navController.navigateSmooth(
-                        route = Screen.DriverAssignment.createRoute(orderId, truckIds.joinToString(",")),
+                        route = Screen.DriverAssignment.createRoute(
+                            broadcastId = orderId,
+                            holdId = holdId,
+                            vehicleType = resolvedVehicleType,
+                            vehicleSubtype = resolvedVehicleSubtype,
+                            quantity = resolvedQuantity
+                        ),
                         popUpToRoute = Screen.TransporterDashboard.route
                     )
                 },
@@ -349,7 +444,7 @@ fun WeeloNavigation(
                 onNavigateToDriverAssignment = { bId, vehicleIds ->
                     // Encode vehicle IDs as comma-separated string
                     val vehicleIdsParam = vehicleIds.joinToString(",")
-                    navController.navigateSmooth(Screen.DriverAssignment.createRoute(bId, vehicleIdsParam))
+                    navController.navigateSmooth(Screen.DriverAssignment.createLegacyRoute(bId, vehicleIdsParam))
                 }
             )
         }
@@ -357,11 +452,19 @@ fun WeeloNavigation(
         // Driver Assignment Screen - Assign drivers to selected trucks
         composable(Screen.DriverAssignment.route) { backStackEntry ->
             val broadcastId = backStackEntry.arguments?.getString("broadcastId") ?: ""
-            val vehicleIdsParam = backStackEntry.arguments?.getString("vehicleIds") ?: ""
+            val holdId = backStackEntry.arguments?.getString("holdId")?.let { if (it == "_") "" else it } ?: ""
+            val vehicleType = backStackEntry.arguments?.getString("vehicleType")?.let { if (it == "_") "" else it } ?: ""
+            val vehicleSubtype = backStackEntry.arguments?.getString("vehicleSubtype")?.let { if (it == "_") "" else it } ?: ""
+            val quantity = backStackEntry.arguments?.getString("quantity")?.toIntOrNull() ?: 1
+            val vehicleIdsParam = backStackEntry.arguments?.getString("vehicleIds").orEmpty()
             val vehicleIds = vehicleIdsParam.split(",").filter { it.isNotEmpty() }
             com.weelo.logistics.ui.transporter.DriverAssignmentScreen(
                 broadcastId = broadcastId,
-                selectedVehicleIds = vehicleIds,
+                holdId = holdId,
+                requiredVehicleType = vehicleType,
+                requiredVehicleSubtype = vehicleSubtype,
+                requiredQuantity = quantity,
+                preselectedVehicleIds = vehicleIds,
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToTracking = {
                     // Navigate back to dashboard after successful assignment

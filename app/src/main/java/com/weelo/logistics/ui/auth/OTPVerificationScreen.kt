@@ -232,8 +232,15 @@ fun OTPVerificationScreen(
                 AuthUiEffect.OtpVerificationSucceeded -> {
                     val authenticated = latestAuthState as? AuthState.Authenticated
                     val backendLang = authenticated?.preferredLanguage
-                    if (!backendLang.isNullOrEmpty()) {
-                        otpMainActivity?.updateLocale(backendLang)
+                    val authenticatedRole = authenticated?.role.orEmpty()
+                    if (authenticatedRole.equals("DRIVER", ignoreCase = true)) {
+                        if (!backendLang.isNullOrEmpty()) {
+                            otpMainActivity?.updateLocale(backendLang)
+                        }
+                    } else if (authenticatedRole.equals("TRANSPORTER", ignoreCase = true)) {
+                        // Transporter language selection is not implemented yet.
+                        // Force English to avoid leaking driver language on shared devices.
+                        otpMainActivity?.updateLocale("en")
                     }
                     pendingAutoReadOtp = null
                     pendingAutoReadSessionId = null

@@ -17,9 +17,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import com.weelo.logistics.R
 import com.weelo.logistics.data.api.DriverData
 import com.weelo.logistics.data.cache.AppCache
 import com.weelo.logistics.data.remote.RetrofitClient
@@ -233,19 +234,30 @@ fun DriverListScreen(
                 }
             } else if (filteredDrivers.isEmpty()) {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
-                        Icon(Icons.Default.Person, null, Modifier.size(64.dp), tint = TextDisabled)
-                        Spacer(Modifier.height(16.dp))
-                        Text(
-                            if (searchQuery.isEmpty() && drivers.isEmpty()) 
-                                "No drivers yet\nTap + to add your first driver" 
-                            else if (searchQuery.isEmpty()) 
-                                "No drivers match filter"
-                            else 
-                                "No drivers found",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = TextSecondary
-                        )
+                    when {
+                        searchQuery.isEmpty() && drivers.isEmpty() -> {
+                            EmptyDrivers(
+                                onAddDriver = onNavigateToAddDriver
+                            )
+                        }
+                        searchQuery.isEmpty() -> {
+                            EmptyStateHost(
+                                spec = filterEmptyStateSpec(
+                                    artwork = EmptyStateArtwork.FLEET_FILTER,
+                                    title = stringResource(R.string.empty_title_driver_filter),
+                                    subtitle = stringResource(R.string.empty_subtitle_driver_filter)
+                                )
+                            )
+                        }
+                        else -> {
+                            EmptyStateHost(
+                                spec = searchEmptyStateSpec(
+                                    artwork = EmptyStateArtwork.DRIVER_SEARCH,
+                                    title = stringResource(R.string.empty_title_driver_search),
+                                    subtitle = stringResource(R.string.empty_subtitle_driver_search)
+                                )
+                            )
+                        }
                     }
                 }
             } else {
@@ -337,13 +349,15 @@ fun DriverCardFromApi(driver: DriverData, onClick: () -> Unit) {
             ) {
                 if (!driver.profilePhotoUrl.isNullOrBlank()) {
                     // Show profile photo using Coil
-                    AsyncImage(
-                        model = driver.profilePhotoUrl,
+                    OptimizedNetworkImage(
+                        imageUrl = driver.profilePhotoUrl,
                         contentDescription = "Driver profile photo",
                         modifier = Modifier
                             .size(56.dp)
                             .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(Surface)
+                            .background(Surface),
+                        crossfade = false,
+                        targetSizeDp = 56.dp
                     )
                 } else {
                     // Fallback to initials if no photo

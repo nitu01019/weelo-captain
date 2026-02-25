@@ -3,6 +3,7 @@ package com.weelo.logistics.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.weelo.logistics.data.api.DriverData
+import com.weelo.logistics.data.api.DriverListData
 import com.weelo.logistics.data.api.VehicleData
 import com.weelo.logistics.data.cache.AppCache
 import com.weelo.logistics.data.cache.VehicleStats
@@ -73,6 +74,9 @@ class MainViewModel : ViewModel() {
     
     private val _drivers = MutableStateFlow<List<DriverData>>(emptyList())
     val drivers: StateFlow<List<DriverData>> = _drivers.asStateFlow()
+
+    private val _driverStats = MutableStateFlow(DriverListData())
+    val driverStats: StateFlow<DriverListData> = _driverStats.asStateFlow()
     
     private val _driversLoading = MutableStateFlow(false)
     val driversLoading: StateFlow<Boolean> = _driversLoading.asStateFlow()
@@ -129,6 +133,10 @@ class MainViewModel : ViewModel() {
      * Screens call this but it's a no-op if data is fresh
      */
     fun loadVehiclesIfNeeded() {
+        if (vehiclesFetchJob?.isActive == true) {
+            timber.log.Timber.d("⏳ Vehicles fetch already in progress, skipping duplicate request")
+            return
+        }
         if (!shouldRefreshVehicles()) {
             timber.log.Timber.d("📦 Vehicles fresh, skipping fetch")
             return
@@ -209,6 +217,10 @@ class MainViewModel : ViewModel() {
      * Load drivers only if needed
      */
     fun loadDriversIfNeeded() {
+        if (driversFetchJob?.isActive == true) {
+            timber.log.Timber.d("⏳ Drivers fetch already in progress, skipping duplicate request")
+            return
+        }
         if (!shouldRefreshDrivers()) {
             timber.log.Timber.d("📦 Drivers fresh, skipping fetch")
             return
@@ -236,6 +248,7 @@ class MainViewModel : ViewModel() {
                 if (response.isSuccessful && response.body()?.success == true) {
                     val data = response.body()?.data
                     _drivers.value = data?.drivers ?: emptyList()
+                    _driverStats.value = data ?: DriverListData(drivers = _drivers.value, total = _drivers.value.size)
                     lastDriverFetch = System.currentTimeMillis()
                     
                     // Also update AppCache

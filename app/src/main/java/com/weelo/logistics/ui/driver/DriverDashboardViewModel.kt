@@ -12,11 +12,15 @@ import com.weelo.logistics.data.model.PerformanceMetrics
 import com.weelo.logistics.data.model.TripProgressStatus
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * DriverDashboardViewModel - Manages driver dashboard state and operations
@@ -113,6 +117,8 @@ class DriverDashboardViewModel : ViewModel() {
     // MODULARITY: Pure ViewModel logic — UI just observes state.
     // =========================================================================
     private var loadingGraceJob: Job? = null
+    private var loadDashboardJob: Job? = null
+    private val loadDashboardMutex = Mutex()
     
     // companion object is defined at bottom of class
     
@@ -124,43 +130,47 @@ class DriverDashboardViewModel : ViewModel() {
      * - No cache → 150ms grace → skeleton if still loading
      */
     fun loadDashboardData(driverId: String = ""): Job {
-        // Cancel any pending grace timer
-        loadingGraceJob?.cancel()
-        
-        return viewModelScope.launch {
-            // =========================================================================
-            // STEP 1: Check cache first (INSTANT - 0ms)
-            // =========================================================================
-            cachedDashboardData?.let { cached ->
-                timber.log.Timber.d("📦 Showing cached dashboard data (instant)")
-                _dashboardState.value = DriverDashboardState.Success(cached)
-                
-                // Skip fetch if data is fresh
-                if (System.currentTimeMillis() - lastFetchTime < STALE_TIME_MS) {
-                    timber.log.Timber.d("📦 Cache is fresh, skipping API call")
-                    return@launch
-                }
-            }
-            
-            // =========================================================================
-            // STEP 2: Smart Loading — only show skeleton after 150ms grace period
-            // =========================================================================
-            // If no cache, start a grace timer. If data arrives within 150ms,
-            // the user never sees a skeleton — it goes straight to content.
-            // =========================================================================
-            if (cachedDashboardData == null && _dashboardState.value !is DriverDashboardState.Loading) {
-                loadingGraceJob = viewModelScope.launch {
-                    delay(LOADING_GRACE_MS)
-                    // Grace period expired, data still not here → show skeleton
-                    val current = _dashboardState.value
-                    if (current !is DriverDashboardState.Success) {
-                        _dashboardState.value = DriverDashboardState.Loading
-                        timber.log.Timber.d("⏳ Grace period expired → showing skeleton")
+        loadDashboardJob?.takeIf { it.isActive }?.let { existing ->
+            timber.log.Timber.d("⏳ Dashboard load already in progress — reusing active job")
+            return existing
+        }
+
+        val job = viewModelScope.launch {
+            loadDashboardMutex.withLock {
+                // Cancel any pending grace timer from a previous attempt
+                loadingGraceJob?.cancel()
+
+                // =========================================================================
+                // STEP 1: Check cache first (INSTANT - 0ms)
+                // =========================================================================
+                cachedDashboardData?.let { cached ->
+                    timber.log.Timber.d("📦 Showing cached dashboard data (instant)")
+                    _dashboardState.value = DriverDashboardState.Success(cached)
+
+                    // Skip fetch if data is fresh
+                    if (System.currentTimeMillis() - lastFetchTime < STALE_TIME_MS) {
+                        timber.log.Timber.d("📦 Cache is fresh, skipping API call")
+                        return@withLock
                     }
                 }
-            }
-            
-            try {
+
+                // =========================================================================
+                // STEP 2: Smart Loading — only show skeleton after 150ms grace period
+                // =========================================================================
+                if (cachedDashboardData == null && _dashboardState.value !is DriverDashboardState.Loading) {
+                    loadingGraceJob = viewModelScope.launch {
+                        delay(LOADING_GRACE_MS)
+                        // Grace period expired, data still not here → show skeleton
+                        val current = _dashboardState.value
+                        if (current !is DriverDashboardState.Success) {
+                            _dashboardState.value = DriverDashboardState.Loading
+                            timber.log.Timber.d("⏳ Grace period expired → showing skeleton")
+                        }
+                    }
+                }
+
+                try {
+                    coroutineScope {
                 // =============================================================
                 // REAL API CALL — GET /api/v1/driver/dashboard
                 // =============================================================
@@ -178,19 +188,19 @@ class DriverDashboardViewModel : ViewModel() {
                 // MAJOR FIX: runCatching captures ALL exceptions including CancellationException.
                 // Must rethrow CancellationException so structured concurrency works correctly —
                 // if viewModelScope is cancelled (Activity destroyed), these async tasks stop immediately.
-                val dashboardDeferred = viewModelScope.async {
+                val dashboardDeferred = async(Dispatchers.IO) {
                     runCatching { driverApi.getDriverDashboard() }
                         .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                 }
-                val activeDeferred = viewModelScope.async {
+                val activeDeferred = async(Dispatchers.IO) {
                     runCatching { driverApi.getActiveTrip() }
                         .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                 }
-                val earningsMonthDeferred = viewModelScope.async {
+                val earningsMonthDeferred = async(Dispatchers.IO) {
                     runCatching { driverApi.getDriverEarnings("month") }
                         .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                 }
-                val earningsWeekDeferred = viewModelScope.async {
+                val earningsWeekDeferred = async(Dispatchers.IO) {
                     runCatching { driverApi.getDriverEarnings("week") }
                         .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                 }
@@ -392,21 +402,31 @@ class DriverDashboardViewModel : ViewModel() {
                 _isInitialLoad.value = false
                 
                 timber.log.Timber.d("✅ Dashboard data loaded (skeleton skipped: ${loadingGraceJob?.isCancelled})")
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                // Cancel grace timer on error too
-                loadingGraceJob?.cancel()
-                
-                // RAPIDO-STYLE: If we have cached data, keep showing it on error
-                if (cachedDashboardData != null) {
-                    timber.log.Timber.w("⚠️ API failed, showing cached data")
-                } else {
-                    _dashboardState.value = DriverDashboardState.Error(
-                        e.message ?: "Failed to load dashboard. Check your connection."
-                    )
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    // Cancel grace timer on error too
+                    loadingGraceJob?.cancel()
+
+                    // RAPIDO-STYLE: If we have cached data, keep showing it on error
+                    if (cachedDashboardData != null) {
+                        timber.log.Timber.w("⚠️ API failed, showing cached data")
+                    } else {
+                        _dashboardState.value = DriverDashboardState.Error(
+                            e.message ?: "Failed to load dashboard. Check your connection."
+                        )
+                    }
                 }
             }
         }
+
+        loadDashboardJob = job
+        job.invokeOnCompletion {
+            if (loadDashboardJob === job) {
+                loadDashboardJob = null
+            }
+        }
+        return job
     }
 
     /**

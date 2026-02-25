@@ -12,13 +12,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.weelo.logistics.R
 import com.weelo.logistics.data.api.RegisterVehicleRequest
 import com.weelo.logistics.data.model.TruckCategory
 import com.weelo.logistics.data.model.TruckSubtype
 import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.ui.components.PrimaryTopBar
 import com.weelo.logistics.ui.components.PrimaryButton
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.Dispatchers
@@ -144,18 +147,14 @@ fun VehicleDataEntryScreen(
     
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { 
-                    Text(
-                        if (isSubmitting) "Saving ${currentSavingIndex}/$totalVehicles..." 
-                        else "Add Vehicle Details"
-                    ) 
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack, enabled = !isSubmitting) {
-                        Icon(Icons.Default.ArrowBack, "Back")
-                    }
-                }
+            val title = if (isSubmitting) {
+                stringResource(R.string.saving_vehicle_progress, currentSavingIndex, totalVehicles)
+            } else {
+                stringResource(R.string.add_vehicle_details)
+            }
+            PrimaryTopBar(
+                title = title,
+                onBackClick = { if (!isSubmitting) onBack() }
             )
         }
     ) { padding ->

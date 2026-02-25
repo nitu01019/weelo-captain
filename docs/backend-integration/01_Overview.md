@@ -112,28 +112,26 @@ User enters phone number → POST /auth/send-otp
                             App stores token securely → Navigate to dashboard
 ```
 
-### 2. Transporter Flow: Creating a Trip Broadcast
+### 2. Transporter Flow: Receiving Customer Broadcast and Assigning Drivers
 
 ```
-Transporter Dashboard → Create Trip
+Customer creates request (separate app)
                               │
                               ▼
-                    Fill trip details (pickup, drop, etc.)
+              Backend emits request to eligible transporters
                               │
                               ▼
-                    POST /broadcasts/create
+      Transporter sees active requests (primary: /bookings/requests/active,
+                     compatibility fallback: /broadcasts/active)
                               │
                               ▼
-            Backend broadcasts to eligible drivers via FCM
+        Transporter selects trucks + assigns drivers (hold/confirm flow)
                               │
                               ▼
-        Transporter views broadcast list (GET /broadcasts/active)
-                              │
-                              ▼
-            Drivers respond (accept/decline) → Transporter notified
+              Backend emits trip assignment to selected drivers only
 ```
 
-### 3. Driver Flow: Accepting a Trip
+### 3. Driver Flow: Accepting Assigned Trip
 
 ```
 Driver Dashboard (idle) → Driver toggles availability ON
@@ -142,16 +140,16 @@ Driver Dashboard (idle) → Driver toggles availability ON
                     PUT /driver/availability {isAvailable: true}
                                       │
                                       ▼
-            Backend sends push notification when trip broadcast arrives
+            Backend sends push notification when trip assignment arrives
                                       │
                                       ▼
-                    Driver sees notification → Opens trip details
+                    Driver sees assignment notification → Opens trip details
                                                         │
                                                         ▼
                                         Driver reviews trip (pickup, drop, fare)
                                                         │
                                                         ▼
-                                        Driver accepts → POST /broadcasts/{id}/accept
+                                        Driver accepts assigned trip
                                                                       │
                                                                       ▼
                                         Backend assigns trip to driver → Transporter notified

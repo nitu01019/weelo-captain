@@ -58,6 +58,14 @@
             android:exported="false"
             android:foregroundServiceType="location"
             android:permission="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
+        <!-- Transporter Online Service - keeps heartbeat active when app is closed -->
+        <service
+            android:name=".utils.TransporterOnlineService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="location"
+            android:permission="android.permission.FOREGROUND_SERVICE_LOCATION" />
         
         <!-- Firebase Cloud Messaging Service -->
         <service

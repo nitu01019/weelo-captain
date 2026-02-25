@@ -216,6 +216,7 @@
     <string name="quick_actions">Quick Actions</string>
     <string name="add_vehicle">Add Vehicle</string>
     <string name="add_driver">Add Driver</string>
+    <string name="requests_menu">Requests</string>
     <string name="add_vehicle_details">Add Vehicle Details</string>
     <string name="saving_vehicle_progress">Saving %1$d/%2$d…</string>
     <string name="cannot_connect_backend">Cannot connect to backend</string>

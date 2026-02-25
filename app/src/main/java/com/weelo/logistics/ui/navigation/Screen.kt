@@ -36,7 +36,8 @@ sealed class Screen(val route: String) {
         fun createRoute(tripId: String) = "trip_details/$tripId"
     }
     
-    // Broadcast System - Overlay only (no list screen)
+    // Broadcast System
+    object BroadcastList : Screen("broadcast_list")
     object BroadcastSoundSettings : Screen("broadcast_sound_settings")
     object TruckHoldConfirm : Screen("truck_hold_confirm/{orderId}/{vehicleType}/{vehicleSubtype}/{quantity}") {
         fun createRoute(orderId: String, vehicleType: String, vehicleSubtype: String, quantity: Int) = 
@@ -45,8 +46,40 @@ sealed class Screen(val route: String) {
     object TruckSelection : Screen("truck_selection/{broadcastId}") {
         fun createRoute(broadcastId: String) = "truck_selection/$broadcastId"
     }
-    object DriverAssignment : Screen("driver_assignment/{broadcastId}/{vehicleIds}") {
-        fun createRoute(broadcastId: String, vehicleIds: String) = "driver_assignment/$broadcastId/$vehicleIds"
+    object DriverAssignment : Screen("driver_assignment/{broadcastId}/{holdId}/{vehicleType}/{vehicleSubtype}/{quantity}?vehicleIds={vehicleIds}") {
+        fun createRoute(
+            broadcastId: String,
+            holdId: String,
+            vehicleType: String,
+            vehicleSubtype: String,
+            quantity: Int,
+            vehicleIds: String? = null
+        ): String {
+            val safeHoldId = holdId.ifBlank { "_" }
+            val safeVehicleType = vehicleType.ifBlank { "_" }
+            val safeSubtype = vehicleSubtype.ifBlank { "_" }
+            val safeQuantity = quantity.coerceAtLeast(1)
+            val safeVehicleIds = vehicleIds.orEmpty()
+            return "driver_assignment/$broadcastId/$safeHoldId/$safeVehicleType/$safeSubtype/$safeQuantity?vehicleIds=$safeVehicleIds"
+        }
+
+        fun createLegacyRoute(
+            broadcastId: String,
+            vehicleIds: String
+        ): String {
+            val legacyCount = vehicleIds
+                .split(",")
+                .count { it.isNotBlank() }
+                .coerceAtLeast(1)
+            return createRoute(
+                broadcastId = broadcastId,
+                holdId = "_",
+                vehicleType = "_",
+                vehicleSubtype = "_",
+                quantity = legacyCount,
+                vehicleIds = vehicleIds
+            )
+        }
     }
     object TripStatusManagement : Screen("trip_status/{assignmentId}") {
         fun createRoute(assignmentId: String) = "trip_status/$assignmentId"

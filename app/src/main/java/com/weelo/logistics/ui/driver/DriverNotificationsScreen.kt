@@ -15,9 +15,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.weelo.logistics.R
+import com.weelo.logistics.ui.components.EmptyStateArtwork
+import com.weelo.logistics.ui.components.EmptyStateHost
 import com.weelo.logistics.ui.components.PrimaryTopBar
 import com.weelo.logistics.ui.components.ProvideShimmerBrush
 import com.weelo.logistics.ui.components.SkeletonList
+import com.weelo.logistics.ui.components.allCaughtUpEmptyStateSpec
 import com.weelo.logistics.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.*
@@ -105,23 +108,13 @@ fun DriverNotificationsScreen(
             is NotificationsState.Success -> {
                 val notifications = state.notifications
                 if (notifications.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), Alignment.Center) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.padding(32.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Notifications, null,
-                                Modifier.size(64.dp), tint = TextDisabled
-                            )
-                            Spacer(Modifier.height(16.dp))
-                            Text(
-                                stringResource(R.string.no_notifications_label),
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = TextSecondary
-                            )
-                        }
-                    }
+                    EmptyStateHost(
+                        spec = allCaughtUpEmptyStateSpec(
+                            artwork = EmptyStateArtwork.NOTIFICATIONS_ALL_CAUGHT_UP,
+                            title = stringResource(R.string.empty_title_driver_notifications_caught_up),
+                            subtitle = stringResource(R.string.empty_subtitle_driver_notifications_caught_up)
+                        )
+                    )
                 } else {
                     LazyColumn(
                         Modifier.fillMaxSize(),

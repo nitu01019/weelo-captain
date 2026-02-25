@@ -1,6 +1,7 @@
 package com.weelo.logistics.ui.components
 
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -36,9 +37,11 @@ fun PrimaryTextField(
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        label = { Text(label) },
-        placeholder = { Text(placeholder) },
-        modifier = modifier.fillMaxWidth(),
+        label = { Text(label, style = MaterialTheme.typography.bodyMedium) },
+        placeholder = { Text(placeholder, style = MaterialTheme.typography.bodyMedium) },
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = ComponentSize.touchTarget),
         leadingIcon = if (leadingIcon != null) {
             { Icon(leadingIcon, contentDescription = null) }
         } else null,
@@ -58,8 +61,12 @@ fun PrimaryTextField(
             focusedBorderColor = Primary,
             focusedLabelColor = Primary,
             cursorColor = Primary,
+            focusedContainerColor = SurfaceElevated,
+            unfocusedContainerColor = Surface,
             errorBorderColor = Error,
-            errorLabelColor = Error
+            errorLabelColor = Error,
+            focusedLeadingIconColor = TextPrimary,
+            unfocusedLeadingIconColor = TextSecondary
         )
     )
 }
@@ -81,7 +88,9 @@ fun SearchTextField(
         value = value,
         onValueChange = onValueChange,
         placeholder = { Text(placeholder) },
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = ComponentSize.touchTarget),
         leadingIcon = if (leadingIcon != null) {
             { Icon(leadingIcon, contentDescription = null, tint = TextSecondary) }
         } else null,
@@ -89,7 +98,7 @@ fun SearchTextField(
         singleLine = true,
         shape = RoundedCornerShape(BorderRadius.medium),
         colors = TextFieldDefaults.colors(
-            focusedContainerColor = Surface,
+            focusedContainerColor = SurfaceElevated,
             unfocusedContainerColor = Surface,
             disabledContainerColor = Surface,
             focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,

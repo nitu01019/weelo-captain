@@ -8,9 +8,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.Dp
 import coil.compose.AsyncImage
-import coil.compose.rememberAsyncImagePainter
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 
@@ -59,20 +60,32 @@ fun OptimizedNetworkImage(
     contentDescription: String?,
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
-    placeholder: @Composable (() -> Unit)? = null
+    placeholder: @Composable (() -> Unit)? = null,
+    crossfade: Boolean = false,
+    targetSizeDp: Dp? = null
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
+    val targetSizePx = remember(targetSizeDp, density) {
+        targetSizeDp?.let { with(density) { it.roundToPx() } }
+    }
     
     // Normalize URL for cache key — strip S3 query params
     val cacheKey = remember(imageUrl) { normalizeImageUrl(imageUrl) }
     
     // OPTIMIZATION: Remember the image request to avoid recreation
-    val imageRequest = remember(imageUrl) {
+    val imageRequest = remember(imageUrl, cacheKey, crossfade, targetSizePx) {
         ImageRequest.Builder(context)
             .data(imageUrl)
-            .crossfade(true)
+            .crossfade(crossfade)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
+            .apply {
+                targetSizePx?.let {
+                    size(it)
+                    precision(coil.size.Precision.INEXACT)
+                }
+            }
             // Instagram-style: use normalized URL as cache key
             // Same image = same key even when S3 signature changes
             .apply {
@@ -100,17 +113,29 @@ fun OptimizedUriImage(
     uri: Any?,
     contentDescription: String?,
     modifier: Modifier = Modifier,
-    contentScale: ContentScale = ContentScale.Crop
+    contentScale: ContentScale = ContentScale.Crop,
+    crossfade: Boolean = false,
+    targetSizeDp: Dp? = null
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
+    val targetSizePx = remember(targetSizeDp, density) {
+        targetSizeDp?.let { with(density) { it.roundToPx() } }
+    }
     
     // OPTIMIZATION: Remember the image request to avoid recreation
-    val imageRequest = remember(uri) {
+    val imageRequest = remember(uri, crossfade, targetSizePx) {
         ImageRequest.Builder(context)
             .data(uri)
-            .crossfade(true)
+            .crossfade(crossfade)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
+            .apply {
+                targetSizePx?.let {
+                    size(it)
+                    precision(coil.size.Precision.INEXACT)
+                }
+            }
             .build()
     }
     

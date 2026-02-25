@@ -19,10 +19,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.data.repository.AssignmentRepository
 import com.weelo.logistics.data.repository.BroadcastResult
+import com.weelo.logistics.R
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.utils.ClickDebouncer
@@ -121,7 +123,7 @@ fun TripAcceptDeclineScreen(
         cancellationActionTaken = false
         cancellationAutoDismissToken += 1
         pendingCancellation = null
-        timber.log.Timber.w("🚫 Order cancelled while on accept/decline screen: ${notification.reason}")
+        timber.log.Timber.w("Order cancelled while on accept/decline screen: ${notification.reason}")
     }
 
     LaunchedEffect(Unit) {
@@ -220,7 +222,7 @@ fun TripAcceptDeclineScreen(
         androidx.compose.animation.AnimatedVisibility(visible = showCancelledBanner) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                color = androidx.compose.ui.graphics.Color(0xFFFFEBEE)
+                color = CriticalActionContainer
             ) {
                 Column(
                     modifier = Modifier
@@ -229,35 +231,35 @@ fun TripAcceptDeclineScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        "Order cancelled by customer",
-                        color = androidx.compose.ui.graphics.Color(0xFFD32F2F),
+                        text = stringResource(R.string.order_cancelled_by_customer),
+                        color = CriticalAction,
                         fontWeight = FontWeight.Bold
                     )
                     if (cancelReason.isNotBlank()) {
                         Text(
                             "Reason: $cancelReason",
-                            color = androidx.compose.ui.graphics.Color(0xFF424242),
+                            color = TextPrimary,
                             fontSize = 13.sp
                         )
                     }
                     if (cancelCustomerName.isNotBlank()) {
                         Text(
                             "Customer: $cancelCustomerName",
-                            color = androidx.compose.ui.graphics.Color(0xFF424242),
+                            color = TextPrimary,
                             fontSize = 13.sp
                         )
                     }
                     if (cancelPickupAddress.isNotBlank()) {
                         Text(
                             "Pickup: $cancelPickupAddress",
-                            color = androidx.compose.ui.graphics.Color(0xFF616161),
+                            color = TextSecondary,
                             fontSize = 12.sp
                         )
                     }
                     if (cancelDropAddress.isNotBlank()) {
                         Text(
                             "Drop: $cancelDropAddress",
-                            color = androidx.compose.ui.graphics.Color(0xFF616161),
+                            color = TextSecondary,
                             fontSize = 12.sp
                         )
                     }
@@ -270,7 +272,7 @@ fun TripAcceptDeclineScreen(
                                 onNavigateBack()
                             }
                         ) {
-                            Text("Go to Dashboard")
+                            Text(stringResource(R.string.go_to_dashboard))
                         }
 
                         if (cancelCustomerPhone.isNotBlank()) {
@@ -283,7 +285,7 @@ fun TripAcceptDeclineScreen(
                                     context.startActivity(intent)
                                 }
                             ) {
-                                Text("Call Customer", color = androidx.compose.ui.graphics.Color(0xFF1976D2))
+                                Text(stringResource(R.string.call_customer), color = InfoDark)
                             }
                         }
                     }

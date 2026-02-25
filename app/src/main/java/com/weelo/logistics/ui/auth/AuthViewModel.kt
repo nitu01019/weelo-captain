@@ -8,12 +8,14 @@ import com.weelo.logistics.data.api.SendOTPRequest
 import com.weelo.logistics.data.api.VerifyOTPRequest
 import com.weelo.logistics.data.api.DriverSendOtpRequest
 import com.weelo.logistics.data.api.DriverVerifyOtpRequest
+import com.weelo.logistics.data.remote.NotificationTokenSync
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.utils.AppSignatureHelper
 import com.weelo.logistics.utils.AuthOtpAutofillCoordinator
 import com.weelo.logistics.utils.AuthOtpAutofillCoordinator.OtpAutofillClearReason
 import com.weelo.logistics.utils.GlobalRateLimiters
 import com.weelo.logistics.utils.InputValidator
+import com.weelo.logistics.utils.RoleScopedLocalePolicy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -402,10 +404,19 @@ class AuthViewModel : ViewModel() {
                             RetrofitClient.saveUserInfo(user.id, user.role)
                         }
                         
-                        // SCALABILITY: Restore language from backend on login
+                        // ROLE-ISOLATED LOCALE: Driver language restore must never
+                        // leak into transporter sessions.
                         WeeloApp.getInstance()?.applicationContext?.let { ctx ->
-                            val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences.getInstance(ctx)
-                            driverPrefs.restoreLanguageIfNeeded(data?.preferredLanguage)
+                            val sharedPrefs = ctx.getSharedPreferences("weelo_prefs", Context.MODE_PRIVATE)
+                            if (role.equals("driver", ignoreCase = true)) {
+                                val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences.getInstance(ctx)
+                                driverPrefs.restoreLanguageIfNeeded(data?.preferredLanguage)
+                            } else if (role.equals("transporter", ignoreCase = true)) {
+                                RoleScopedLocalePolicy.markTransporterNoLocale(
+                                    prefs = sharedPrefs,
+                                    userId = data?.user?.id
+                                )
+                            }
                         }
                         
                         // Connect WebSocket for real-time broadcasts
@@ -486,7 +497,9 @@ class AuthViewModel : ViewModel() {
             } catch (_: Exception) {
                 timber.log.Timber.w("⚠️ goOffline failed during logout (TTL will handle cleanup)")
             }
-            
+
+            NotificationTokenSync.unregisterCurrentToken(reason = "auth_logout")
+
             // Step 2: Call logout API
             try {
                 RetrofitClient.authApi.logout(RetrofitClient.getAuthHeader())

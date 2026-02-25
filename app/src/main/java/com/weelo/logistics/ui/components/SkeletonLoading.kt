@@ -1008,6 +1008,64 @@ fun SkeletonProfileLoading(
 }
 
 /**
+ * Skeleton for transporter profile screen.
+ * Mirrors the longer editable form layout to avoid first-render jump.
+ */
+@Composable
+fun SkeletonTransporterProfileLoading(
+    modifier: Modifier = Modifier
+) {
+    ProvideShimmerBrush {
+        Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SkeletonCircle(size = 56.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        SkeletonBox(height = 16.dp, width = 160.dp)
+                        Spacer(Modifier.height(8.dp))
+                        SkeletonBox(height = 12.dp, width = 120.dp)
+                    }
+                    SkeletonBox(height = 24.dp, width = 72.dp)
+                }
+            }
+
+            SkeletonListCard()
+            SkeletonListCard()
+
+            repeat(6) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SkeletonBox(height = 12.dp, width = 120.dp)
+                    SkeletonBox(
+                        modifier = Modifier.fillMaxWidth(),
+                        height = if (it == 3) 72.dp else 52.dp
+                    )
+                }
+            }
+
+            SkeletonBox(
+                modifier = Modifier.fillMaxWidth(),
+                height = 56.dp
+            )
+
+            SkeletonListCard()
+        }
+    }
+}
+
+/**
  * Skeleton for the Vehicle Details loading screen — mirrors VehicleDetailsScreen layout.
  */
 @Composable

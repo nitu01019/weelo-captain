@@ -523,18 +523,16 @@ private fun DrawerLogoutButton(onLogout: () -> Unit) {
 
 /**
  * Helper function to create transporter menu items
- * NOTE: Broadcasts menu removed - broadcasts shown via overlay only
  * 
  * @param strings Map of localized strings. Required keys:
- *   - "dashboard", "my_fleet", "my_drivers", "trips", "settings"
+ *   - "dashboard", "my_fleet", "my_drivers", "trips", "broadcasts", "settings"
  */
-@Suppress("UNUSED_PARAMETER")
 fun createTransporterMenuItems(
     onDashboard: () -> Unit,
     onFleet: () -> Unit,
     onDrivers: () -> Unit,
     onTrips: () -> Unit,
-    onBroadcasts: () -> Unit,  // Kept for compatibility, but not used
+    onBroadcasts: () -> Unit,
     onSettings: () -> Unit,
     notificationCount: Int = 0,
     strings: Map<String, String> = emptyMap()
@@ -567,7 +565,14 @@ fun createTransporterMenuItems(
         selectedIcon = Icons.Filled.Route,
         onClick = onTrips
     ),
-    // Broadcasts menu item REMOVED - broadcasts shown via overlay
+    DrawerMenuItem(
+        id = "broadcasts",
+        title = strings["broadcasts"] ?: "Requests",
+        icon = Icons.Outlined.Notifications,
+        selectedIcon = Icons.Filled.Notifications,
+        badgeCount = notificationCount,
+        onClick = onBroadcasts
+    ),
     DrawerMenuItem(
         id = "settings",
         title = strings["settings"] ?: "Settings",

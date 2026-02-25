@@ -13,6 +13,23 @@
 
 ---
 
+## Canonical Route Matrix (Current)
+
+1. Customer create order:
+   - Primary: `POST /api/v1/bookings/orders`
+   - Compatibility alias: `POST /api/v1/orders`
+2. Transporter active request feed:
+   - Primary: `GET /api/v1/bookings/requests/active`
+   - Compatibility alias: `GET /api/v1/broadcasts/active`
+3. Customer cancel/status:
+   - Primary: `POST /api/v1/bookings/orders/{orderId}/cancel`
+   - Primary: `GET /api/v1/bookings/orders/{orderId}/status`
+   - Compatibility aliases remain under `/api/v1/orders/*` during rollout.
+4. Assignment finalization:
+   - Canonical: `POST /api/v1/truck-hold/confirm-with-assignments`
+
+---
+
 ## Authentication APIs
 
 ### 1. Send OTP (Transporter/Customer Login)
@@ -817,8 +834,8 @@
 ### 19. Accept Broadcast
 
 **Endpoint**: `POST /broadcasts/{broadcastId}/accept`  
-**Purpose**: Accept broadcast and select trucks  
-**Triggering UI**: Truck Selection Screen - When transporter assigns drivers  
+**Purpose**: Legacy compatibility endpoint for transporter accept flows  
+**Triggering UI**: Legacy path only (canonical path uses hold + confirm-with-assignments)  
 **Authentication Required**: Yes
 
 **Request Payload**:

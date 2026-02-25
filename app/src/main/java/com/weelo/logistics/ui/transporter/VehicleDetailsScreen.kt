@@ -3,6 +3,7 @@ package com.weelo.logistics.ui.transporter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -15,7 +16,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.api.VehicleData
 import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.ui.components.CardArtwork
+import com.weelo.logistics.ui.components.CardMediaSpec
+import com.weelo.logistics.ui.components.EmptyStateArtwork
+import com.weelo.logistics.ui.components.HeroEntityCard
 import com.weelo.logistics.ui.components.PrimaryTopBar
+import com.weelo.logistics.ui.components.RetryErrorStatePanel
 import com.weelo.logistics.ui.components.SkeletonVehicleDetailsLoading
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.Dispatchers
@@ -155,28 +161,13 @@ fun VehicleDetailsScreen(
             }
             
             errorMessage != null -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(32.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Error,
-                            null,
-                            modifier = Modifier.size(64.dp),
-                            tint = Error
-                        )
-                        Spacer(Modifier.height(16.dp))
-                        Text(errorMessage ?: "Error", color = TextSecondary)
-                        Spacer(Modifier.height(16.dp))
-                        OutlinedButton(onClick = { loadVehicle() }) {
-                            Text("Retry")
-                        }
-                    }
-                }
+                RetryErrorStatePanel(
+                    title = "Could not load vehicle",
+                    message = errorMessage ?: "Failed to load vehicle details",
+                    onRetry = { loadVehicle() },
+                    illustrationRes = EmptyStateArtwork.VEHICLE_DETAILS_NOT_FOUND.drawableRes,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
             
             vehicle != null -> {
@@ -186,79 +177,99 @@ fun VehicleDetailsScreen(
                         .verticalScroll(rememberScrollState())
                         .padding(16.dp)
                 ) {
-                    // Vehicle Header Card
-                    Card(
+                    val currentVehicle = vehicle!!
+                    val (statusText, statusColor) = when (currentVehicle.status) {
+                        "available" -> "Available" to Success
+                        "in_transit" -> "In Transit" to Primary
+                        "maintenance" -> "Maintenance" to Warning
+                        else -> "Inactive" to TextDisabled
+                    }
+
+                    HeroEntityCard(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(White)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            // Icon
+                        title = currentVehicle.vehicleNumber,
+                        subtitle = "${currentVehicle.vehicleType.replaceFirstChar { it.uppercase() }} • ${currentVehicle.vehicleSubtype}",
+                        mediaSpec = CardMediaSpec(artwork = CardArtwork.DETAIL_VEHICLE),
+                        leadingAvatar = {
                             Box(
                                 modifier = Modifier
-                                    .size(80.dp)
-                                    .background(Primary.copy(alpha = 0.1f), RoundedCornerShape(40.dp)),
+                                    .size(56.dp)
+                                    .background(Primary.copy(alpha = 0.12f), CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     Icons.Default.LocalShipping,
-                                    null,
-                                    modifier = Modifier.size(48.dp),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(28.dp),
                                     tint = Primary
                                 )
                             }
-                            
-                            Spacer(Modifier.height(16.dp))
-                            
-                            // Vehicle Number
-                            Text(
-                                text = vehicle!!.vehicleNumber,
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = TextPrimary
-                            )
-                            
-                            Spacer(Modifier.height(8.dp))
-                            
-                            // Type & Subtype
-                            Text(
-                                text = "${vehicle!!.vehicleType.replaceFirstChar { it.uppercase() }} • ${vehicle!!.vehicleSubtype}",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = TextSecondary
-                            )
-                            
-                            Spacer(Modifier.height(12.dp))
-                            
-                            // Status Badge
-                            val (statusText, statusColor) = when (vehicle!!.status) {
-                                "available" -> "Available" to Success
-                                "in_transit" -> "In Transit" to Primary
-                                "maintenance" -> "Maintenance" to Warning
-                                else -> "Inactive" to TextDisabled
-                            }
-                            
+                        },
+                        statusContent = {
                             Surface(
                                 shape = RoundedCornerShape(20.dp),
                                 color = statusColor.copy(alpha = 0.1f)
                             ) {
                                 Text(
                                     text = statusText,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.Medium,
                                     color = statusColor
                                 )
                             }
+                        },
+                        metaContent = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = SurfaceVariant
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(
+                                            text = "Capacity",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextSecondary
+                                        )
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            text = currentVehicle.capacity,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = TextPrimary
+                                        )
+                                    }
+                                }
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = SurfaceVariant
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(
+                                            text = "Verified",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextSecondary
+                                        )
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            text = if (currentVehicle.isVerified) "Yes" else "Pending",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (currentVehicle.isVerified) Success else Warning
+                                        )
+                                    }
+                                }
+                            }
                         }
-                    }
-                    
+                    )
+
                     Spacer(Modifier.height(16.dp))
-                    
+
                     // Details Card
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -268,7 +279,7 @@ fun VehicleDetailsScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(20.dp)
+                                .padding(20.dp),
                         ) {
                             Text(
                                 "Vehicle Details",
@@ -279,20 +290,20 @@ fun VehicleDetailsScreen(
                             
                             Spacer(Modifier.height(16.dp))
                             
-                            DetailRow("Capacity", vehicle!!.capacity)
-                            DetailRow("Model", vehicle!!.model ?: "Not specified")
-                            DetailRow("Year", vehicle!!.year?.toString() ?: "Not specified")
+                            DetailRow("Capacity", currentVehicle.capacity)
+                            DetailRow("Model", currentVehicle.model ?: "Not specified")
+                            DetailRow("Year", currentVehicle.year?.toString() ?: "Not specified")
                             
-                            if (vehicle!!.rcNumber != null) {
-                                DetailRow("RC Number", vehicle!!.rcNumber!!)
+                            if (currentVehicle.rcNumber != null) {
+                                DetailRow("RC Number", currentVehicle.rcNumber)
                             }
-                            if (vehicle!!.insuranceNumber != null) {
-                                DetailRow("Insurance", vehicle!!.insuranceNumber!!)
+                            if (currentVehicle.insuranceNumber != null) {
+                                DetailRow("Insurance", currentVehicle.insuranceNumber)
                             }
                             
                             DetailRow(
                                 "Verified",
-                                if (vehicle!!.isVerified) "Yes" else "Pending"
+                                if (currentVehicle.isVerified) "Yes" else "Pending"
                             )
                         }
                     }
@@ -325,18 +336,21 @@ fun DetailRow(label: String, value: String) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
-            color = TextSecondary
+            color = TextSecondary,
+            modifier = Modifier.weight(0.38f)
         )
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
-            color = TextPrimary
+            color = TextPrimary,
+            modifier = Modifier.weight(0.62f)
         )
     }
 }
