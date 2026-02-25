@@ -1,6 +1,7 @@
 package com.weelo.logistics.ui.auth
 
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.weelo.logistics.WeeloApp
@@ -117,7 +118,17 @@ class AuthViewModel : ViewModel() {
 
     fun resendOtp(context: Context, phone: String, role: String) {
         viewModelScope.launch {
-            restartOtpAutofill(context, phone, role)
+            try {
+                restartOtpAutofill(context, phone, role)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(
+                    "AuthViewModel",
+                    "restartOtpAutofill failed before resend; proceeding with manual fallback: ${e::class.java.simpleName}: ${e.message}"
+                )
+                timber.log.Timber.w(e, "OTP autofill restart failed before resend; proceeding with manual OTP fallback")
+            }
             if (role.equals("driver", ignoreCase = true)) {
                 sendDriverOTP(phone, skipLocalRateLimit = true)
             } else {
@@ -190,6 +201,10 @@ class AuthViewModel : ViewModel() {
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
+                    Log.e(
+                        "AuthViewModel",
+                        "sendDriverOTP failed: ${e::class.java.simpleName}: ${e.message}"
+                    )
                     _authState.value = AuthState.Error(
                         when {
                             e.message?.contains("timeout", true) == true -> "Connection timed out. Please check your internet and try again."
@@ -265,6 +280,10 @@ class AuthViewModel : ViewModel() {
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
+                    Log.e(
+                        "AuthViewModel",
+                        "sendOTP failed: ${e::class.java.simpleName}: ${e.message}"
+                    )
                     _authState.value = AuthState.Error(
                         when {
                             e.message?.contains("timeout", true) == true -> "Connection timed out. Please check your internet and try again."
@@ -349,6 +368,10 @@ class AuthViewModel : ViewModel() {
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
+                    Log.e(
+                        "AuthViewModel",
+                        "verifyDriverOTP failed: ${e::class.java.simpleName}: ${e.message}"
+                    )
                     _authState.value = AuthState.Error(
                         when {
                             e.message?.contains("timeout", true) == true -> "Connection timed out. Please check your internet and try again."
@@ -440,6 +463,10 @@ class AuthViewModel : ViewModel() {
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
+                    Log.e(
+                        "AuthViewModel",
+                        "verifyOTP failed: ${e::class.java.simpleName}: ${e.message}"
+                    )
                     _authState.value = AuthState.Error(
                         when {
                             e.message?.contains("timeout", true) == true -> "Connection timed out. Please check your internet and try again."

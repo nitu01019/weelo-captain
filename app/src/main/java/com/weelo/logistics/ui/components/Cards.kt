@@ -965,9 +965,7 @@ fun InlineInfoBannerCard(
                 }
             }
 
-            if (action != null) {
-                action()
-            }
+            action?.invoke()
         }
     }
 }
