@@ -14,6 +14,7 @@ interface BroadcastFeatureFlags {
     val broadcastStrictIdValidationEnabled: Boolean
     val broadcastOverlayInvariantEnforcementEnabled: Boolean
     val broadcastDisableLegacyWebsocketPath: Boolean
+    val captainCancelEventStrictDedupeEnabled: Boolean
 }
 
 interface BroadcastFeatureFlagProvider {
@@ -26,7 +27,8 @@ data class DefaultBroadcastFeatureFlags(
     override val broadcastReconcileRateLimitEnabled: Boolean = true,
     override val broadcastStrictIdValidationEnabled: Boolean = true,
     override val broadcastOverlayInvariantEnforcementEnabled: Boolean = true,
-    override val broadcastDisableLegacyWebsocketPath: Boolean = BuildConfig.DEBUG
+    override val broadcastDisableLegacyWebsocketPath: Boolean = BuildConfig.DEBUG,
+    override val captainCancelEventStrictDedupeEnabled: Boolean = true
 ) : BroadcastFeatureFlags
 
 private class SharedPrefsBroadcastFeatureFlagProvider(
@@ -39,7 +41,8 @@ private class SharedPrefsBroadcastFeatureFlagProvider(
             broadcastReconcileRateLimitEnabled = prefs.getBoolean(KEY_RECONCILE_RATE_LIMIT_ENABLED, true),
             broadcastStrictIdValidationEnabled = prefs.getBoolean(KEY_STRICT_ID_VALIDATION_ENABLED, true),
             broadcastOverlayInvariantEnforcementEnabled = prefs.getBoolean(KEY_OVERLAY_INVARIANT_ENFORCEMENT_ENABLED, true),
-            broadcastDisableLegacyWebsocketPath = prefs.getBoolean(KEY_DISABLE_LEGACY_WEBSOCKET_PATH, BuildConfig.DEBUG)
+            broadcastDisableLegacyWebsocketPath = prefs.getBoolean(KEY_DISABLE_LEGACY_WEBSOCKET_PATH, BuildConfig.DEBUG),
+            captainCancelEventStrictDedupeEnabled = prefs.getBoolean(KEY_CAPTAIN_CANCEL_EVENT_STRICT_DEDUPE_ENABLED, true)
         )
     }
 
@@ -50,6 +53,7 @@ private class SharedPrefsBroadcastFeatureFlagProvider(
         const val KEY_STRICT_ID_VALIDATION_ENABLED = "broadcast_strict_id_validation_enabled"
         const val KEY_OVERLAY_INVARIANT_ENFORCEMENT_ENABLED = "broadcast_overlay_invariant_enforcement_enabled"
         const val KEY_DISABLE_LEGACY_WEBSOCKET_PATH = "broadcast_disable_legacy_websocket_path"
+        const val KEY_CAPTAIN_CANCEL_EVENT_STRICT_DEDUPE_ENABLED = "captain_cancel_event_strict_dedupe_enabled"
     }
 }
 

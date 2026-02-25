@@ -1098,7 +1098,10 @@ object SocketIOService {
                 yourAvailableTrucks = yourAvailableTrucks,
                 yourTotalTrucks = yourTotalTrucks,
                 trucksStillNeeded = trucksStillNeeded,
-                isPersonalized = isPersonalized
+                isPersonalized = isPersonalized,
+                eventId = resolveOptionalString(data, "eventId"),
+                eventVersion = resolveOptionalInt(data, "eventVersion"),
+                serverTimeMs = resolveOptionalLong(data, "serverTimeMs")
             )
 
             BroadcastTelemetry.record(
@@ -1151,6 +1154,30 @@ object SocketIOService {
             if (value.isNotEmpty()) return value
         }
         return ""
+    }
+
+    private fun resolveOptionalString(data: JSONObject, key: String): String? {
+        if (!data.has(key)) return null
+        val value = data.optString(key, "").trim()
+        return value.takeIf { it.isNotEmpty() }
+    }
+
+    private fun resolveOptionalInt(data: JSONObject, key: String): Int? {
+        if (!data.has(key)) return null
+        return when (val raw = data.opt(key)) {
+            is Number -> raw.toInt()
+            is String -> raw.toIntOrNull()
+            else -> null
+        }
+    }
+
+    private fun resolveOptionalLong(data: JSONObject, key: String): Long? {
+        if (!data.has(key)) return null
+        return when (val raw = data.opt(key)) {
+            is Number -> raw.toLong()
+            is String -> raw.toLongOrNull()
+            else -> null
+        }
     }
 
     private fun dismissWindowMs(): Long {
@@ -1255,7 +1282,10 @@ object SocketIOService {
                 totalTrucks = data.optInt("totalTrucks", 0),
                 trucksFilled = data.optInt("trucksFilled", 0),
                 trucksRemaining = data.optInt("trucksRemaining", 0),
-                orderStatus = data.optString("orderStatus", "")
+                orderStatus = data.optString("orderStatus", ""),
+                eventId = resolveOptionalString(data, "eventId"),
+                eventVersion = resolveOptionalInt(data, "eventVersion"),
+                serverTimeMs = resolveOptionalLong(data, "serverTimeMs")
             )
             
             serviceScope.launch {
@@ -1329,7 +1359,10 @@ object SocketIOService {
                         broadcastId = broadcastId,
                         reason = reason,
                         message = message,
-                        customerName = customerName
+                        customerName = customerName,
+                        eventId = resolveOptionalString(data, "eventId"),
+                        eventVersion = resolveOptionalInt(data, "eventVersion"),
+                        serverTimeMs = resolveOptionalLong(data, "serverTimeMs")
                     )
                 )
 
@@ -1420,7 +1453,10 @@ object SocketIOService {
                     broadcastId = orderId,
                     reason = "customer_cancelled",
                     message = message,
-                    customerName = data.optString("customerName", "")
+                    customerName = data.optString("customerName", ""),
+                    eventId = resolveOptionalString(data, "eventId"),
+                    eventVersion = resolveOptionalInt(data, "eventVersion"),
+                    serverTimeMs = resolveOptionalLong(data, "serverTimeMs")
                 )
             )
 
@@ -1437,6 +1473,9 @@ object SocketIOService {
                 message = message,
                 cancelledAt = cancelledAt,
                 assignmentsCancelled = assignmentsCancelled,
+                eventId = resolveOptionalString(data, "eventId"),
+                eventVersion = resolveOptionalInt(data, "eventVersion"),
+                serverTimeMs = resolveOptionalLong(data, "serverTimeMs"),
                 customerName = data.optString("customerName", ""),
                 customerPhone = data.optString("customerPhone", ""),
                 pickupAddress = data.optString("pickupAddress", ""),
@@ -1481,7 +1520,10 @@ object SocketIOService {
                     broadcastId = orderId,
                     reason = "timeout",
                     message = "This booking request has expired",
-                    customerName = data.optString("customerName", "")
+                    customerName = data.optString("customerName", ""),
+                    eventId = resolveOptionalString(data, "eventId"),
+                    eventVersion = resolveOptionalInt(data, "eventVersion"),
+                    serverTimeMs = resolveOptionalLong(data, "serverTimeMs")
                 )
             )
 
@@ -1705,7 +1747,10 @@ data class BroadcastNotification(
     val yourAvailableTrucks: Int = 0,          // How many they have available
     val yourTotalTrucks: Int = 0,              // How many they own total
     val trucksStillNeeded: Int = 0,            // How many order still needs
-    val isPersonalized: Boolean = false         // Is this a personalized broadcast?
+    val isPersonalized: Boolean = false,         // Is this a personalized broadcast?
+    val eventId: String? = null,
+    val eventVersion: Int? = null,
+    val serverTimeMs: Long? = null
 ) {
     /**
      * Convert BroadcastNotification to BroadcastTrip for UI display
@@ -1777,7 +1822,7 @@ data class BroadcastNotification(
                 (farePerTruck * trucksNeeded).toDouble()
             },
             status = com.weelo.logistics.data.model.BroadcastStatus.ACTIVE,
-            broadcastTime = System.currentTimeMillis(),
+            broadcastTime = serverTimeMs?.takeIf { it > 0 } ?: System.currentTimeMillis(),
             expiryTime = parseBroadcastExpiryEpochMs(expiresAt),
             isUrgent = isUrgent,
             
@@ -1837,7 +1882,10 @@ data class TrucksRemainingNotification(
     val totalTrucks: Int,
     val trucksFilled: Int,
     val trucksRemaining: Int,
-    val orderStatus: String
+    val orderStatus: String,
+    val eventId: String? = null,
+    val eventVersion: Int? = null,
+    val serverTimeMs: Long? = null
 )
 
 data class SocketError(val message: String)
@@ -2024,6 +2072,9 @@ data class OrderCancelledNotification(
     val message: String,                  // Human-readable message
     val cancelledAt: String,              // ISO timestamp
     val assignmentsCancelled: Int = 0,    // How many assignments were released
+    val eventId: String? = null,
+    val eventVersion: Int? = null,
+    val serverTimeMs: Long? = null,
     // CUSTOMER CONTACT — Driver/transporter can call even after cancel
     val customerName: String = "",        // Customer name for display
     val customerPhone: String = "",       // Customer phone for calling
@@ -2053,5 +2104,8 @@ data class BroadcastDismissedNotification(
     val broadcastId: String,         // Which broadcast to dismiss
     val reason: String,              // "customer_cancelled" | "timeout" | "fully_filled"
     val message: String,             // Human-readable message for overlay
-    val customerName: String = ""    // Customer name (if cancelled)
+    val customerName: String = "",   // Customer name (if cancelled)
+    val eventId: String? = null,
+    val eventVersion: Int? = null,
+    val serverTimeMs: Long? = null
 )

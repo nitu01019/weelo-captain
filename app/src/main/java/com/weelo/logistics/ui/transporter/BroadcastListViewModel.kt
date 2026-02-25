@@ -87,9 +87,14 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
     private var lastFetchStartedAtMs = 0L
     private var lastToastAtMs = 0L
     private var lastSoundAtMs = 0L
+    private var latestSocketState: SocketConnectionState = SocketConnectionState.Disconnected
+    private var consecutiveFetchErrors = 0
+    private val periodicRefreshJitterMs = (((System.identityHashCode(this) and Int.MAX_VALUE) % 3000) + 500).toLong()
 
     companion object {
-        private const val PERIODIC_REFRESH_MS = 30_000L
+        private const val PERIODIC_REFRESH_CONNECTED_MS = 60_000L
+        private const val PERIODIC_REFRESH_RECONNECTING_MS = 20_000L
+        private const val PERIODIC_REFRESH_ERROR_MAX_MS = 120_000L
         private const val SOCKET_REFRESH_DEBOUNCE_MS = 350L
         private const val MIN_FETCH_INTERVAL_MS = 1_200L
         private const val EVENT_TOAST_COOLDOWN_MS = 2_500L
@@ -343,6 +348,7 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
             var wasConnected = false
             var isFirstEmission = true
             SocketIOService.connectionState.collect { state ->
+                latestSocketState = state
                 val connected = state is SocketConnectionState.Connected
                 _uiState.update { it.copy(isSocketConnected = connected) }
                 if (!isFirstEmission && connected && !wasConnected) {
@@ -358,7 +364,7 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
         newBroadcastEventsJob?.cancel()
         newBroadcastEventsJob = viewModelScope.launch {
             SocketIOService.newBroadcasts.collect { notification ->
-                val dedupeKey = "new_broadcast|${notification.broadcastId}|${notification.expiresAt}"
+                val dedupeKey = buildNewBroadcastDedupeKey(notification)
                 if (!socketEventDeduper.shouldHandle(dedupeKey)) return@collect
 
                 applyIncomingBroadcast(notification)
@@ -370,7 +376,7 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
         trucksRemainingEventsJob?.cancel()
         trucksRemainingEventsJob = viewModelScope.launch {
             SocketIOService.trucksRemainingUpdates.collect { notification ->
-                val dedupeKey = "trucks_remaining|${notification.orderId}|${notification.vehicleType}|${notification.trucksRemaining}|${notification.orderStatus}"
+                val dedupeKey = buildTrucksRemainingDedupeKey(notification)
                 if (!socketEventDeduper.shouldHandle(dedupeKey)) return@collect
                 applyTrucksRemainingUpdate(notification)
                 requestRefresh(forceRefresh = false, debounceMs = SOCKET_REFRESH_DEBOUNCE_MS)
@@ -382,10 +388,64 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
         dismissedEventsJob?.cancel()
         dismissedEventsJob = viewModelScope.launch {
             SocketIOService.broadcastDismissed.collect { notification ->
-                val dedupeKey = "dismissed|${notification.broadcastId}|${notification.reason}|${notification.message}"
+                val dedupeKey = buildDismissedDedupeKey(notification)
                 if (!socketEventDeduper.shouldHandle(dedupeKey)) return@collect
                 handleDismissedCard(notification)
             }
+        }
+    }
+
+    private fun resolveSocketMetaDedupeKey(
+        eventId: String?,
+        eventVersion: Int?,
+        serverTimeMs: Long?
+    ): String? {
+        val normalizedEventId = eventId?.trim().orEmpty()
+        if (normalizedEventId.isNotEmpty()) {
+            return "id:$normalizedEventId"
+        }
+        if (eventVersion != null && serverTimeMs != null && serverTimeMs > 0L) {
+            return "v$eventVersion@$serverTimeMs"
+        }
+        return null
+    }
+
+    private fun buildNewBroadcastDedupeKey(notification: BroadcastNotification): String {
+        val socketMetaKey = resolveSocketMetaDedupeKey(
+            eventId = notification.eventId,
+            eventVersion = notification.eventVersion,
+            serverTimeMs = notification.serverTimeMs
+        )
+        return if (socketMetaKey != null) {
+            "new_broadcast|${notification.broadcastId}|$socketMetaKey"
+        } else {
+            "new_broadcast|${notification.broadcastId}|${notification.expiresAt}"
+        }
+    }
+
+    private fun buildTrucksRemainingDedupeKey(notification: TrucksRemainingNotification): String {
+        val socketMetaKey = resolveSocketMetaDedupeKey(
+            eventId = notification.eventId,
+            eventVersion = notification.eventVersion,
+            serverTimeMs = notification.serverTimeMs
+        )
+        return if (socketMetaKey != null) {
+            "trucks_remaining|${notification.orderId}|${notification.vehicleType}|$socketMetaKey"
+        } else {
+            "trucks_remaining|${notification.orderId}|${notification.vehicleType}|${notification.trucksRemaining}|${notification.orderStatus}"
+        }
+    }
+
+    private fun buildDismissedDedupeKey(notification: BroadcastDismissedNotification): String {
+        val socketMetaKey = resolveSocketMetaDedupeKey(
+            eventId = notification.eventId,
+            eventVersion = notification.eventVersion,
+            serverTimeMs = notification.serverTimeMs
+        )
+        return if (socketMetaKey != null) {
+            "dismissed|${notification.broadcastId}|$socketMetaKey"
+        } else {
+            "dismissed|${notification.broadcastId}|${notification.reason}|${notification.message}"
         }
     }
 
@@ -417,10 +477,26 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
         periodicRefreshJob?.cancel()
         periodicRefreshJob = viewModelScope.launch {
             while (isScreenActive) {
-                delay(PERIODIC_REFRESH_MS)
+                delay(resolvePeriodicRefreshIntervalMs())
                 requestRefresh(forceRefresh = true, debounceMs = 0L)
             }
         }
+    }
+
+    private fun resolvePeriodicRefreshIntervalMs(): Long {
+        val baseInterval = when (latestSocketState) {
+            is SocketConnectionState.Connected -> PERIODIC_REFRESH_CONNECTED_MS
+            is SocketConnectionState.Connecting -> PERIODIC_REFRESH_RECONNECTING_MS
+            is SocketConnectionState.Disconnected -> PERIODIC_REFRESH_RECONNECTING_MS
+            is SocketConnectionState.Error -> PERIODIC_REFRESH_RECONNECTING_MS
+        }
+        val adjustedBase = if (consecutiveFetchErrors <= 0) {
+            baseInterval
+        } else {
+            val multiplier = 1L shl consecutiveFetchErrors.coerceAtMost(3)
+            (baseInterval * multiplier).coerceAtMost(PERIODIC_REFRESH_ERROR_MAX_MS)
+        }
+        return (adjustedBase + periodicRefreshJitterMs).coerceAtMost(PERIODIC_REFRESH_ERROR_MAX_MS)
     }
 
     private fun requestRefresh(
@@ -479,6 +555,7 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
 
                 when (result) {
                     is BroadcastResult.Success -> {
+                        consecutiveFetchErrors = 0
                         val sorted = applyIgnoredRecentlyFilter(sortBroadcasts(result.data.broadcasts))
                         _uiState.update { current ->
                             current.copy(
@@ -492,6 +569,7 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
                     }
 
                     is BroadcastResult.Error -> {
+                        consecutiveFetchErrors = (consecutiveFetchErrors + 1).coerceAtMost(6)
                         _uiState.update {
                             it.copy(
                                 isLoading = false,

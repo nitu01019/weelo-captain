@@ -14,6 +14,7 @@ import com.weelo.logistics.data.remote.OrderCancelledNotification
 import com.weelo.logistics.data.remote.DriverAddedNotification
 import com.weelo.logistics.data.remote.DriverStatusChangedNotification
 import com.weelo.logistics.data.remote.DriversUpdatedNotification
+import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
 import com.weelo.logistics.offline.OfflineCache
 import com.weelo.logistics.ui.utils.SocketUiEventDeduper
 import com.weelo.logistics.ui.viewmodel.MainViewModel
@@ -166,7 +167,7 @@ class TransporterDashboardViewModel(
         }
         viewModelScope.launch {
             SocketIOService.orderCancelled.collect { notification ->
-                val key = "order_cancelled|${notification.orderId}|${notification.cancelledAt}"
+                val key = buildOrderCancelledDedupeKey(notification)
                 if (!socketEventDeduper.shouldHandle(key)) return@collect
                 _uiEvents.tryEmit(TransporterDashboardUiEvent.ShowOrderCancelledSnackbar(notification))
                 // Refresh counts from shared app cache/network source without touching backend contracts.
@@ -174,6 +175,22 @@ class TransporterDashboardViewModel(
                 mainViewModel.forceRefreshDrivers()
             }
         }
+    }
+
+    private fun buildOrderCancelledDedupeKey(notification: OrderCancelledNotification): String {
+        val flags = BroadcastFeatureFlagsRegistry.current()
+        if (!flags.captainCancelEventStrictDedupeEnabled) {
+            return "order_cancelled|${notification.orderId}|${notification.cancelledAt}"
+        }
+        notification.eventId?.takeIf { it.isNotBlank() }?.let { eventId ->
+            return "order_cancelled|eventId|$eventId"
+        }
+        val eventVersion = notification.eventVersion
+        val serverTimeMs = notification.serverTimeMs
+        if (eventVersion != null && serverTimeMs != null && serverTimeMs > 0L) {
+            return "order_cancelled|v$eventVersion@$serverTimeMs|${notification.orderId}"
+        }
+        return "order_cancelled|${notification.orderId}|${notification.cancelledAt}"
     }
 
     private fun applyDriverAdded(notification: DriverAddedNotification) {
