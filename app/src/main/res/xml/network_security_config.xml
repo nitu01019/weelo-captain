@@ -76,10 +76,8 @@
     <!-- AWS ALB Configuration — Cleartext allowed, ALB does not have HTTPS listener yet -->
     <!-- TODO: CRITICAL — Set cleartextTrafficPermitted="false" when SSL cert + HTTPS listener is on ALB -->
     <domain-config cleartextTrafficPermitted="true">
-        <!-- AWS Application Load Balancer -->
+        <!-- AWS Application Load Balancer (only this specific ALB, not all amazonaws.com) -->
         <domain includeSubdomains="true">weelo-alb-380596483.ap-south-1.elb.amazonaws.com</domain>
-        <!-- Add any other AWS domains here -->
-        <domain includeSubdomains="true">amazonaws.com</domain>
     </domain-config>
     
     <!-- Debug overrides: Allow user-installed CAs in debug builds -->
