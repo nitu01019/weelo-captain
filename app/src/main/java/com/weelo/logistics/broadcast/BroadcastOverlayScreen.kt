@@ -167,7 +167,7 @@ fun BroadcastOverlayScreen(
             val stillExists = feedState.broadcasts.any { it.broadcastId == bid }
             if (!stillExists) {
                 android.widget.Toast.makeText(context, "This request was cancelled", android.widget.Toast.LENGTH_SHORT).show()
-                BroadcastOverlayManager.dismissCurrentBroadcast()
+                BroadcastOverlayManager.dismissOverlay()
             }
         }
     }
@@ -304,7 +304,7 @@ fun BroadcastOverlayScreen(
                     if (isCancelled) {
                         Toast.makeText(context, "This request was cancelled", Toast.LENGTH_SHORT).show()
                         BroadcastOverlayManager.removeEverywhere(broadcast.broadcastId)
-                        BroadcastOverlayManager.dismissCurrentBroadcast()
+                        BroadcastOverlayManager.dismissOverlay()
                     } else {
                         truckHoldStates = truckHoldStates + (key to TruckHoldState(
                             vehicleType = vehicleType,
