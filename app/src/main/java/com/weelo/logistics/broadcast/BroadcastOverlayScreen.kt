@@ -153,6 +153,18 @@ fun BroadcastOverlayScreen(
         truckHoldStates = emptyMap()
         currentBroadcast?.broadcastId?.let(BroadcastOverlayManager::acknowledgeDisplayed)
     }
+
+    // Auto-dismiss overlay when broadcast is removed (cancelled/expired via socket event)
+    val feedState by BroadcastFlowCoordinator.feedState.collectAsState()
+    LaunchedEffect(feedState.activeBroadcasts.size, currentBroadcast?.broadcastId) {
+        val bid = currentBroadcast?.broadcastId ?: return@LaunchedEffect
+        val stillExists = feedState.activeBroadcasts.any { it.broadcastId == bid }
+        if (!stillExists && feedState.activeBroadcasts.isNotEmpty()) {
+            // Broadcast was removed by cancellation/expiry event — dismiss smoothly
+            android.widget.Toast.makeText(context, "This request was cancelled", android.widget.Toast.LENGTH_SHORT).show()
+            BroadcastOverlayManager.dismissCurrentBroadcast()
+        }
+    }
     
     // Calculate accepted trucks for Submit button
     val acceptedTrucks = truckHoldStates.values.filter { it.status == TruckHoldStatus.ACCEPTED }
@@ -279,14 +291,24 @@ fun BroadcastOverlayScreen(
                             "vehicleSubtype" to vehicleSubtype
                         )
                     )
-                    truckHoldStates = truckHoldStates + (key to TruckHoldState(
-                        vehicleType = vehicleType,
-                        vehicleSubtype = vehicleSubtype,
-                        quantity = quantity,
-                        status = TruckHoldStatus.FAILED,
-                        isHolding = false
-                    ))
-                    Toast.makeText(context, "Failed: ${result.message}", Toast.LENGTH_LONG).show()
+                    // Detect cancelled/expired order — dismiss overlay instead of retry
+                    val isCancelled = result.message.contains("cancelled", ignoreCase = true)
+                        || result.message.contains("no longer exists", ignoreCase = true)
+                        || result.message.contains("expired", ignoreCase = true)
+                    if (isCancelled) {
+                        Toast.makeText(context, "This request was cancelled", Toast.LENGTH_SHORT).show()
+                        BroadcastFlowCoordinator.removeEverywhere(broadcast.broadcastId, "order_cancelled")
+                        BroadcastOverlayManager.dismissCurrentBroadcast()
+                    } else {
+                        truckHoldStates = truckHoldStates + (key to TruckHoldState(
+                            vehicleType = vehicleType,
+                            vehicleSubtype = vehicleSubtype,
+                            quantity = quantity,
+                            status = TruckHoldStatus.FAILED,
+                            isHolding = false
+                        ))
+                        Toast.makeText(context, "Failed: ${result.message}", Toast.LENGTH_LONG).show()
+                    }
                 }
                 is BroadcastResult.Loading -> {
                     // Loading state - already handled by isHolding flag
@@ -1566,7 +1588,7 @@ private fun TruckTypeCardNew(
                         .padding(12.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("HOLD FAILED - TRY AGAIN", color = RapidoRed, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("Not available \u2013 try another request", color = RapidoRed, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
                 Spacer(Modifier.height(8.dp))
                 // Show controls again for retry
