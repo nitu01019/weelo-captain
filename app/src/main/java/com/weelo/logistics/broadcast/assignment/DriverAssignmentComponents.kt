@@ -2,6 +2,7 @@ package com.weelo.logistics.broadcast.assignment
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -587,14 +588,24 @@ private fun BroadcastDriverSelectRow(
             Box(
                 modifier = Modifier
                     .size(36.dp)
-                    .background(MediumGray, CircleShape),
+                    .background(MediumGray, CircleShape)
+                    .then(Modifier.clip(CircleShape)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.Person,
-                    contentDescription = null,
-                    tint = PureWhite
-                )
+                if (!driver.profileImageUrl.isNullOrBlank()) {
+                    coil.compose.AsyncImage(
+                        model = driver.profileImageUrl,
+                        contentDescription = driver.name,
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        tint = PureWhite
+                    )
+                }
             }
             Column {
                 Text(

@@ -156,13 +156,19 @@ fun BroadcastOverlayScreen(
 
     // Auto-dismiss overlay when broadcast is removed (cancelled/expired via socket event)
     val feedState by BroadcastFlowCoordinator.feedState.collectAsState()
-    LaunchedEffect(feedState.activeBroadcasts.size, currentBroadcast?.broadcastId) {
+    val previousBroadcastCount = remember { androidx.compose.runtime.mutableIntStateOf(-1) }
+    LaunchedEffect(feedState.broadcasts.size, currentBroadcast?.broadcastId) {
         val bid = currentBroadcast?.broadcastId ?: return@LaunchedEffect
-        val stillExists = feedState.activeBroadcasts.any { it.broadcastId == bid }
-        if (!stillExists && feedState.activeBroadcasts.isNotEmpty()) {
-            // Broadcast was removed by cancellation/expiry event — dismiss smoothly
-            android.widget.Toast.makeText(context, "This request was cancelled", android.widget.Toast.LENGTH_SHORT).show()
-            BroadcastOverlayManager.dismissCurrentBroadcast()
+        val currentCount = feedState.broadcasts.size
+        val prevCount = previousBroadcastCount.intValue
+        previousBroadcastCount.intValue = currentCount
+        // Only dismiss if we previously had broadcasts and ours was removed
+        if (prevCount > 0) {
+            val stillExists = feedState.broadcasts.any { it.broadcastId == bid }
+            if (!stillExists) {
+                android.widget.Toast.makeText(context, "This request was cancelled", android.widget.Toast.LENGTH_SHORT).show()
+                BroadcastOverlayManager.dismissCurrentBroadcast()
+            }
         }
     }
     
