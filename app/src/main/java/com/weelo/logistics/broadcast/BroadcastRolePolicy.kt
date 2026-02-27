@@ -13,8 +13,11 @@ object BroadcastRolePolicy {
         "new_broadcast",
         "new_truck_request",
         "new_order_alert",
+        "order_cancelled",
+        "order_expired",
         "booking_cancelled",
         "booking_expired",
+        "broadcast_dismissed",
         "broadcast_expired"
     )
 

@@ -81,18 +81,25 @@ object NotificationTokenSync {
         }
     }
 
-    suspend fun unregisterCurrentToken(reason: String): Boolean {
-        val accessToken = RetrofitClient.getAccessToken()?.takeIf { it.isNotBlank() }
+    suspend fun unregisterCurrentToken(
+        reason: String,
+        accessTokenOverride: String? = null,
+        roleOverride: String? = null,
+        fcmTokenOverride: String? = null
+    ): Boolean {
+        val accessToken = accessTokenOverride?.takeIf { it.isNotBlank() }
+            ?: RetrofitClient.getAccessToken()?.takeIf { it.isNotBlank() }
             ?: run {
                 recordSkipped(reason, "missing_access_token")
                 return false
             }
-        val role = RetrofitClient.getUserRole()?.lowercase(Locale.US)
+        val role = roleOverride?.lowercase(Locale.US) ?: RetrofitClient.getUserRole()?.lowercase(Locale.US)
         if (role != "transporter" && role != "driver") {
             recordSkipped(reason, "unsupported_role_${role ?: "unknown"}")
             return false
         }
-        val fcmToken = WeeloFirebaseService.fcmToken?.takeIf { it.isNotBlank() }
+        val fcmToken = fcmTokenOverride?.takeIf { it.isNotBlank() }
+            ?: WeeloFirebaseService.fcmToken?.takeIf { it.isNotBlank() }
             ?: run {
                 recordSkipped(reason, "missing_fcm_token")
                 return false

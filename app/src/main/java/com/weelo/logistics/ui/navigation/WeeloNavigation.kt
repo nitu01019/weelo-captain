@@ -26,6 +26,8 @@ import com.weelo.logistics.ui.driver.DriverProfileScreenWithPhotos
 import com.weelo.logistics.ui.viewmodel.MainViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 
+private const val FF_STRICT_LOGOUT_OFFLINE_ENFORCEMENT = true
+
 /**
  * Find MainActivity from any Context by walking up the ContextWrapper chain.
  *
@@ -115,10 +117,24 @@ private fun performLogout(navController: NavHostController, coroutineScope: Coro
     val context = navController.context
     val mainActivity = context.findMainActivity()
     val driverPrefs = com.weelo.logistics.data.preferences.DriverPreferences.getInstance(context)
+    val appInstance = com.weelo.logistics.WeeloApp.getInstance()
 
     coroutineScope.launch {
-        // 1. Clear secure tokens and user data first (sync, deterministic)
-        com.weelo.logistics.data.remote.RetrofitClient.clearAllData()
+        // 1. Unified strict logout contract: unregister token -> stop heartbeat/offline -> socket disconnect -> clear auth data.
+        var strictLogoutFailed = false
+        if (FF_STRICT_LOGOUT_OFFLINE_ENFORCEMENT) {
+            runCatching { appInstance?.logout() }
+                .onFailure {
+                    strictLogoutFailed = true
+                    Timber.w(it, "⚠️ App logout pipeline failed, falling back to local clear")
+                }
+        } else {
+            com.weelo.logistics.data.remote.RetrofitClient.clearAllData()
+        }
+
+        if (appInstance == null || strictLogoutFailed) {
+            com.weelo.logistics.data.remote.RetrofitClient.clearAllData()
+        }
 
         // 2. Clear driver prefs and language/profile flags before redirecting
         runCatching { driverPrefs.clearAll() }
@@ -351,13 +367,7 @@ fun WeeloNavigation(
                 onNavigateToBroadcasts = { navController.navigateSmooth(Screen.BroadcastList.route) },
                 onNavigateToSettings = { navController.navigateSmooth(Screen.Settings.route) },
                 onLogout = {
-                    // Back button or logout goes to role selection
-                    navController.navigateSmooth(
-                        route = Screen.RoleSelection.route,
-                        popUpToRoute = null,
-                        inclusive = true,
-                        restoreState = false
-                    )
+                    performLogout(navController, logoutScope)
                 }
             )
         }
@@ -367,6 +377,15 @@ fun WeeloNavigation(
             com.weelo.logistics.ui.transporter.TransporterProfileScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onProfileUpdated = { /* Refresh will happen automatically */ }
+            )
+        }
+
+        composable(Screen.Settings.route) {
+            com.weelo.logistics.ui.transporter.TransporterSettingsScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onLogout = {
+                    performLogout(navController, logoutScope)
+                }
             )
         }
 

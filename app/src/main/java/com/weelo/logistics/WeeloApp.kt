@@ -8,10 +8,13 @@ import com.weelo.logistics.broadcast.BroadcastStatus
 import com.weelo.logistics.broadcast.BroadcastTelemetry
 import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
 import com.weelo.logistics.broadcast.BroadcastFlowCoordinator
+import com.weelo.logistics.broadcast.BroadcastOverlayManager
+import com.weelo.logistics.data.remote.LogoutContractActions
 import com.weelo.logistics.data.remote.NotificationTokenSync
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.data.remote.WeeloFirebaseService
+import com.weelo.logistics.data.remote.executeLogoutContract
 import com.weelo.logistics.offline.AvailabilityManager
 import com.weelo.logistics.offline.AvailabilityState
 import com.weelo.logistics.utils.Constants
@@ -23,6 +26,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 // import dagger.hilt.android.HiltAndroidApp
 
 /**
@@ -41,6 +45,7 @@ class WeeloApp : Application() {
     
     companion object {
         private const val TAG = "WeeloApp"
+        private const val FF_STRICT_LOGOUT_OFFLINE_ENFORCEMENT = true
         
         @Volatile
         private var instance: WeeloApp? = null
@@ -100,14 +105,18 @@ class WeeloApp : Application() {
         BroadcastFeatureFlagsRegistry.initialize(this)
         val broadcastFlags = BroadcastFeatureFlagsRegistry.current()
         timber.log.Timber.i(
-            "📡 Broadcast flags coordinator=%s localDelta=%s reconcileRateLimit=%s strictId=%s overlayInvariant=%s disableLegacySocket=%s",
+            "📡 Broadcast flags coordinator=%s localDelta=%s reconcileRateLimit=%s strictId=%s overlayInvariant=%s disableLegacySocket=%s overlayWatchdog=%s",
             broadcastFlags.broadcastCoordinatorEnabled,
             broadcastFlags.broadcastLocalDeltaApplyEnabled,
             broadcastFlags.broadcastReconcileRateLimitEnabled,
             broadcastFlags.broadcastStrictIdValidationEnabled,
             broadcastFlags.broadcastOverlayInvariantEnforcementEnabled,
-            broadcastFlags.broadcastDisableLegacyWebsocketPath
+            broadcastFlags.broadcastDisableLegacyWebsocketPath,
+            broadcastFlags.broadcastOverlayWatchdogEnabled
         )
+        // Ensure overlay + availability gate are initialized before socket ingress.
+        BroadcastOverlayManager.initialize(this)
+        AvailabilityManager.getInstance(this)
         BroadcastFlowCoordinator.initialize(this)
         BroadcastFlowCoordinator.start()
         
@@ -212,11 +221,19 @@ class WeeloApp : Application() {
                 val token = RetrofitClient.getAccessToken()
                 val role = RetrofitClient.getUserRole()
                 
-                if (!token.isNullOrEmpty() && role == "transporter") {
-                    val availabilityState = AvailabilityManager.getInstance(this@WeeloApp).availabilityState.value
+                if (!token.isNullOrEmpty() && role.equals("transporter", ignoreCase = true)) {
+                    val availabilityManager = AvailabilityManager.getInstance(this@WeeloApp)
+                    val availabilityState = availabilityManager.availabilityState.value
                     if (availabilityState == AvailabilityState.ONLINE) {
                         timber.log.Timber.i("💓 Starting transporter online service (availability=ONLINE)")
-                        TransporterOnlineService.start(this@WeeloApp)
+                        val startResult = TransporterOnlineService.start(
+                            context = this@WeeloApp,
+                            expectedAvailability = availabilityState
+                        )
+                        timber.log.Timber.i("🚦 Startup heartbeat service start result: %s", startResult)
+                        if (startResult == TransporterOnlineService.StartResult.SKIPPED_MISSING_PERMISSION) {
+                            availabilityManager.notifyLocationPermissionRequired()
+                        }
                     } else {
                         timber.log.Timber.i("⏭️ Skipping heartbeat - transporter availability is $availabilityState")
                         TransporterOnlineService.stop(this@WeeloApp)
@@ -243,15 +260,56 @@ class WeeloApp : Application() {
     /**
      * Full logout - disconnects WebSocket and stops heartbeat
      */
-    fun logout() {
-        applicationScope.launch {
-            NotificationTokenSync.unregisterCurrentToken(reason = "app_logout")
+    suspend fun logout() {
+        val accessToken = RetrofitClient.getAccessToken()?.takeIf { it.isNotBlank() }
+        val role = RetrofitClient.getUserRole()?.lowercase()
+        val authHeader = RetrofitClient.getAuthHeader()
+        val fcmToken = WeeloFirebaseService.fcmToken?.takeIf { it.isNotBlank() }
+
+        withContext(Dispatchers.IO) {
+            executeLogoutContract(
+                strictEnforcement = FF_STRICT_LOGOUT_OFFLINE_ENFORCEMENT,
+                actions = LogoutContractActions(
+                    unregisterToken = {
+                        NotificationTokenSync.unregisterCurrentToken(
+                            reason = "app_logout",
+                            accessTokenOverride = accessToken,
+                            roleOverride = role,
+                            fcmTokenOverride = fcmToken
+                        )
+                    },
+                    markOffline = {
+                        runCatching {
+                            when (role) {
+                                "driver" -> RetrofitClient.driverApi.updateAvailability(
+                                    com.weelo.logistics.data.api.UpdateAvailabilityRequest(isOnline = false)
+                                )
+                                "transporter" -> RetrofitClient.transporterApi.markOffline(authHeader)
+                                else -> Unit
+                            }
+                        }.onFailure {
+                            timber.log.Timber.w(it, "⚠️ Logout offline sync failed (role=%s)", role ?: "unknown")
+                        }
+                    },
+                    backendLogout = {
+                        runCatching {
+                            if (!authHeader.isNullOrBlank()) {
+                                RetrofitClient.authApi.logout(authHeader)
+                            }
+                        }.onFailure {
+                            timber.log.Timber.w(it, "⚠️ Logout API call failed")
+                        }
+                    },
+                    stopDisconnectAndClear = {
+                        stopHeartbeat()
+                        disconnectWebSocket()
+                        BroadcastFlowCoordinator.stop()
+                        RetrofitClient.clearAllData()
+                        timber.log.Timber.i("👋 User logged out, all services stopped")
+                    }
+                )
+            )
         }
-        stopHeartbeat()
-        disconnectWebSocket()
-        BroadcastFlowCoordinator.stop()
-        RetrofitClient.clearAllData()
-        timber.log.Timber.i("👋 User logged out, all services stopped")
     }
 
     private fun enableStrictMode() {

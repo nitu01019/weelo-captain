@@ -22,23 +22,67 @@ import com.weelo.logistics.offline.AvailabilityState
  */
 class TransporterOnlineService : Service() {
 
+    enum class StartResult {
+        STARTED,
+        SKIPPED_MISSING_PERMISSION,
+        SKIPPED_NOT_TRANSPORTER,
+        SKIPPED_NOT_LOGGED_IN,
+        SKIPPED_OFFLINE_STATE
+    }
+
     companion object {
         private const val CHANNEL_ID = "transporter_online_channel"
         private const val CHANNEL_NAME = "Transporter Online"
         private const val NOTIFICATION_ID = 3201
 
-        fun start(context: Context) {
-            val intent = Intent(context, TransporterOnlineService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+        fun start(
+            context: Context,
+            expectedAvailability: AvailabilityState? = null
+        ): StartResult {
+            val appContext = context.applicationContext
+            val startResult = evaluateStartPreconditions(appContext, expectedAvailability)
+            if (startResult != StartResult.STARTED) {
+                timber.log.Timber.w("⏭️ TransporterOnlineService start skipped: %s", startResult)
+                return startResult
             }
+
+            val intent = Intent(appContext, TransporterOnlineService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                appContext.startForegroundService(intent)
+            } else {
+                appContext.startService(intent)
+            }
+            return StartResult.STARTED
         }
 
         fun stop(context: Context) {
             HeartbeatManager.stop()
-            context.stopService(Intent(context, TransporterOnlineService::class.java))
+            val appContext = context.applicationContext
+            appContext.stopService(Intent(appContext, TransporterOnlineService::class.java))
+        }
+
+        private fun evaluateStartPreconditions(
+            context: Context,
+            expectedAvailability: AvailabilityState? = null
+        ): StartResult {
+            val isLoggedIn = RetrofitClient.isLoggedIn()
+            if (!isLoggedIn) return StartResult.SKIPPED_NOT_LOGGED_IN
+
+            val role = RetrofitClient.getUserRole()
+            val isTransporter = role.equals("transporter", ignoreCase = true)
+            if (!isTransporter) return StartResult.SKIPPED_NOT_TRANSPORTER
+
+            val availabilityState = expectedAvailability
+                ?: AvailabilityManager.getInstance(context).availabilityState.value
+            if (availabilityState != AvailabilityState.ONLINE) {
+                return StartResult.SKIPPED_OFFLINE_STATE
+            }
+
+            if (!HeartbeatManager.hasLocationPermission(context)) {
+                return StartResult.SKIPPED_MISSING_PERMISSION
+            }
+
+            return StartResult.STARTED
         }
     }
 
@@ -48,30 +92,18 @@ class TransporterOnlineService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val role = RetrofitClient.getUserRole()
-        val isTransporter = role.equals("transporter", ignoreCase = true)
-        val isLoggedIn = RetrofitClient.isLoggedIn()
-        val availabilityState = AvailabilityManager.getInstance(this).availabilityState.value
+        // Android requires startForeground() shortly after startForegroundService().
+        // Call it before any early-return path to avoid process-killing timeout crashes.
+        startForeground(NOTIFICATION_ID, createNotification())
 
-        if (!isLoggedIn || !isTransporter || availabilityState != AvailabilityState.ONLINE) {
-            timber.log.Timber.i(
-                "⏭️ TransporterOnlineService skipped (loggedIn=%s, role=%s, availability=%s)",
-                isLoggedIn,
-                role,
-                availabilityState
-            )
+        val startResult = evaluateStartPreconditions(this)
+        if (startResult != StartResult.STARTED) {
+            timber.log.Timber.w("⏭️ TransporterOnlineService no-op after foreground start: %s", startResult)
             HeartbeatManager.stop()
             stopSelf()
             return START_NOT_STICKY
         }
 
-        if (!HeartbeatManager.hasLocationPermission(this)) {
-            timber.log.Timber.w("⚠️ TransporterOnlineService cannot start: location permission missing")
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
-        startForeground(NOTIFICATION_ID, createNotification())
         HeartbeatManager.start()
         timber.log.Timber.i("💓 TransporterOnlineService started (heartbeat active)")
 

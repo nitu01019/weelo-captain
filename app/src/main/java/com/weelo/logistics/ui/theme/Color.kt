@@ -119,3 +119,27 @@ val SuccessContainer = SuccessLight
 val WarningContainer = WarningLight
 
 val FocusRing = Color(0xFF1E88E5)
+
+// =============================================================================
+// BROADCAST UI TOKENS
+// =============================================================================
+// Shared visual tokens for transporter broadcast surfaces so overlay, acceptance,
+// and assignment flows keep the same hierarchy and contrast.
+object BroadcastUiTokens {
+    val ScreenBackground = Color(0xFFF6F7FB)
+    val CardBackground = Color(0xFFFFFFFF)
+    val CardMutedBackground = Color(0xFFF0F3F9)
+    val Border = Color(0xFFDCE2EC)
+    val PrimaryCta = Primary
+    val PrimaryCtaPressed = PrimaryDark
+    val OnPrimaryCta = Black
+    val SecondaryCtaText = TextPrimary
+    val SecondaryCtaBorder = Color(0xFFD3DAE6)
+    val PrimaryText = com.weelo.logistics.ui.theme.TextPrimary
+    val SecondaryText = com.weelo.logistics.ui.theme.TextSecondary
+    val TertiaryText = com.weelo.logistics.ui.theme.TextTertiary
+    val Success = com.weelo.logistics.ui.theme.Success
+    val Error = com.weelo.logistics.ui.theme.Error
+    val Warning = com.weelo.logistics.ui.theme.Warning
+    val AccentInfo = com.weelo.logistics.ui.theme.Info
+}

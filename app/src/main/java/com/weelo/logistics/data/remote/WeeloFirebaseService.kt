@@ -75,6 +75,10 @@ class WeeloFirebaseService : FirebaseMessagingService() {
         const val TYPE_DRIVER_TIMEOUT = "driver_timeout"
         const val TYPE_BOOKING_CANCELLED = "booking_cancelled"
         const val TYPE_BOOKING_EXPIRED = "booking_expired"
+        const val TYPE_ORDER_CANCELLED = "order_cancelled"
+        const val TYPE_ORDER_EXPIRED = "order_expired"
+        const val TYPE_BROADCAST_DISMISSED = "broadcast_dismissed"
+        const val TYPE_BROADCAST_EXPIRED = "broadcast_expired"
         const val TYPE_TRIP_STATUS_UPDATE = "trip_status_update"
         const val TYPE_DRIVER_ACCEPTED = "driver_accepted"
         const val TYPE_TRUCKS_CONFIRMED = "trucks_confirmed"
@@ -229,11 +233,15 @@ class WeeloFirebaseService : FirebaseMessagingService() {
         // When booking is cancelled/expired, remove from overlay immediately
         // This covers the case where socket was disconnected but FCM arrived
         // ================================================================
-        if ((type == TYPE_BOOKING_CANCELLED || type == TYPE_BOOKING_EXPIRED) && canHandleBroadcastIngress) {
+        val flags = BroadcastFeatureFlagsRegistry.current()
+        val isLegacyCancelOrExpiry = type == TYPE_BOOKING_CANCELLED || type == TYPE_BOOKING_EXPIRED
+        val canHandleCanonicalCancelAliases = flags.captainCanonicalCancelAliasesEnabled || isLegacyCancelOrExpiry
+
+        if (isBroadcastCancelOrExpiryType(type) && canHandleBroadcastIngress && canHandleCanonicalCancelAliases) {
             val broadcastIdToRemove = fcmNotification.broadcastId
             if (!broadcastIdToRemove.isNullOrEmpty()) {
                 timber.log.Timber.i("🚫 FCM: Removing broadcast $broadcastIdToRemove (type=$type)")
-                if (BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled) {
+                if (flags.broadcastCoordinatorEnabled) {
                     BroadcastFlowCoordinator.ingestFcmEnvelope(
                         BroadcastIngressEnvelope(
                             source = BroadcastIngressSource.FCM,
@@ -261,7 +269,7 @@ class WeeloFirebaseService : FirebaseMessagingService() {
             else -> normalized
         }
     }
-    
+
     /**
      * Create notification channels (required for Android 8.0+)
      */
@@ -333,6 +341,10 @@ class WeeloFirebaseService : FirebaseMessagingService() {
             TYPE_DRIVER_OFFLINE -> CHANNEL_TRIPS       // Phase 5: Driver may be offline
             TYPE_BOOKING_CANCELLED -> CHANNEL_BROADCASTS
             TYPE_BOOKING_EXPIRED -> CHANNEL_BROADCASTS
+            TYPE_ORDER_CANCELLED -> CHANNEL_BROADCASTS
+            TYPE_ORDER_EXPIRED -> CHANNEL_BROADCASTS
+            TYPE_BROADCAST_DISMISSED -> CHANNEL_BROADCASTS
+            TYPE_BROADCAST_EXPIRED -> CHANNEL_BROADCASTS
             TYPE_PAYMENT -> CHANNEL_PAYMENTS
             else -> CHANNEL_GENERAL
         }

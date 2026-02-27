@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import com.weelo.logistics.R
 import com.weelo.logistics.broadcast.BroadcastAssignmentCoordinator
 import com.weelo.logistics.broadcast.BroadcastAssignmentResult
+import com.weelo.logistics.broadcast.BroadcastMiniRouteMapCard
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.data.repository.BroadcastRepository
 import com.weelo.logistics.data.repository.BroadcastResult
@@ -304,6 +305,18 @@ fun DriverAssignmentScreen(
                                 )
                             }
                         }
+                    }
+                }
+
+                broadcast?.let { currentBroadcast ->
+                    item {
+                        BroadcastMiniRouteMapCard(
+                            broadcast = currentBroadcast,
+                            title = "Route map",
+                            subtitle = "${currentBroadcast.distance.toInt()} km",
+                            mapHeight = 128.dp,
+                            renderMode = BroadcastCardMapRenderMode.SNAPSHOT
+                        )
                     }
                 }
                 

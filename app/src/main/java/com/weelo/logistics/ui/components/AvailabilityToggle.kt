@@ -1,5 +1,8 @@
 package com.weelo.logistics.ui.components
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -27,6 +30,7 @@ import androidx.compose.ui.unit.sp
 import com.weelo.logistics.R
 import com.weelo.logistics.offline.AvailabilityManager
 import com.weelo.logistics.offline.NetworkMonitor
+import com.weelo.logistics.utils.HeartbeatManager
 import com.weelo.logistics.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -64,6 +68,24 @@ fun AvailabilityToggle(
     val isAvailable by availabilityManager.isAvailable.collectAsState()
     val isToggling by availabilityManager.isToggling.collectAsState()
     val isOnline by networkMonitor.isOnline.collectAsState()
+    val executeToggle: () -> Unit = {
+        scope.launch {
+            availabilityManager.toggleAvailability()
+            // Use committed state AFTER toggle completes — not pre-toggle value
+            onStatusChanged?.invoke(availabilityManager.isAvailable.value)
+        }
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        timber.log.Timber.i("📍 Availability permission result (toggle card): granted=%s", granted)
+        if (granted) {
+            executeToggle()
+        } else {
+            availabilityManager.notifyLocationPermissionRequired()
+            onStatusChanged?.invoke(false)
+        }
+    }
 
     // Colors
     val backgroundColor by animateColorAsState(
@@ -83,10 +105,13 @@ fun AvailabilityToggle(
             .scale(toggleScale)
             .clip(RoundedCornerShape(16.dp))
             .clickable(enabled = !isToggling) {
-                scope.launch {
-                    availabilityManager.toggleAvailability()
-                    // Use committed state AFTER toggle completes — not pre-toggle value
-                    onStatusChanged?.invoke(availabilityManager.isAvailable.value)
+                val targetOnline = !isAvailable
+                timber.log.Timber.d("🔄 Availability toggle tapped (targetOnline=%s)", targetOnline)
+                if (targetOnline && !HeartbeatManager.hasLocationPermission(context)) {
+                    timber.log.Timber.w("📍 Requesting location permission before ONLINE toggle")
+                    permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                } else {
+                    executeToggle()
                 }
             },
         colors = CardDefaults.cardColors(containerColor = backgroundColor),
@@ -206,6 +231,24 @@ fun AvailabilityToggleCompact(
     val isAvailable by availabilityManager.isAvailable.collectAsState()
     val isToggling by availabilityManager.isToggling.collectAsState()
     val isOnline by networkMonitor.isOnline.collectAsState()
+    val executeToggle: () -> Unit = {
+        scope.launch {
+            availabilityManager.toggleAvailability()
+            // Use committed state AFTER toggle completes — not pre-toggle value
+            onStatusChanged?.invoke(availabilityManager.isAvailable.value)
+        }
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        timber.log.Timber.i("📍 Availability permission result (compact toggle): granted=%s", granted)
+        if (granted) {
+            executeToggle()
+        } else {
+            availabilityManager.notifyLocationPermissionRequired()
+            onStatusChanged?.invoke(false)
+        }
+    }
 
     // Track colors — Green when online, Gray when offline
     val trackColor by animateColorAsState(
@@ -235,10 +278,13 @@ fun AvailabilityToggleCompact(
             .clip(RoundedCornerShape(16.dp))
             .background(trackColor)
             .clickable(enabled = !isToggling) {
-                scope.launch {
-                    availabilityManager.toggleAvailability()
-                    // Use committed state AFTER toggle completes — not pre-toggle value
-                    onStatusChanged?.invoke(availabilityManager.isAvailable.value)
+                val targetOnline = !isAvailable
+                timber.log.Timber.d("🔄 Compact availability toggle tapped (targetOnline=%s)", targetOnline)
+                if (targetOnline && !HeartbeatManager.hasLocationPermission(context)) {
+                    timber.log.Timber.w("📍 Requesting location permission before ONLINE compact toggle")
+                    permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                } else {
+                    executeToggle()
                 }
             },
         contentAlignment = Alignment.CenterStart

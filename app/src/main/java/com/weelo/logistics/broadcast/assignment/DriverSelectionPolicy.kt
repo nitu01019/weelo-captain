@@ -46,13 +46,13 @@ object DriverSelectionPolicy {
             )
         }
 
-        // Offline drivers are intentionally hidden from picker by product decision.
-        val visibleDrivers = activeDrivers + onTripDrivers
+        // Active-only visible policy: on-trip and offline are non-assignable and hidden from picker.
+        val visibleDrivers = activeDrivers
         if (visibleDrivers.isEmpty()) {
             return DriverAssignmentUiState.Empty(
                 allDrivers = drivers,
                 summary = summary,
-                message = "No assignable drivers right now."
+                message = "No active drivers available right now."
             )
         }
 

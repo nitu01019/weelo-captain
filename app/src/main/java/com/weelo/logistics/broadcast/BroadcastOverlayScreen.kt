@@ -54,6 +54,7 @@ import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.data.repository.BroadcastRepository
 import com.weelo.logistics.data.repository.BroadcastResult
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.ui.transporter.BroadcastCardMapRenderMode
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -61,19 +62,19 @@ import kotlinx.coroutines.launch
 private const val TAG = "BroadcastOverlay"
 
 // =============================================================================
-// MONOCHROME BROADCAST PALETTE — white surfaces + black content
+// Shared broadcast palette aligned with reference yellow theme.
 // =============================================================================
-private val RapidoYellow = Color.White
-private val RapidoYellowDark = Color.White
-private val RapidoBlack = Color.Black
-private val RapidoDarkGray = Color.White
-private val RapidoGray = Color.Black.copy(alpha = 0.72f)
-private val RapidoMediumGray = Color.Black.copy(alpha = 0.58f)
-private val RapidoLightGray = Color.White
-private val RapidoWhite = Color.Black
-private val RapidoGreen = Color.Black
-private val RapidoRed = Color.Black
-private val RapidoBlue = Color.Black
+private val RapidoYellow = BroadcastUiTokens.PrimaryCta
+private val RapidoYellowDark = BroadcastUiTokens.PrimaryCtaPressed
+private val RapidoBlack = BroadcastUiTokens.OnPrimaryCta
+private val RapidoDarkGray = BroadcastUiTokens.ScreenBackground
+private val RapidoGray = BroadcastUiTokens.SecondaryText
+private val RapidoMediumGray = BroadcastUiTokens.TertiaryText
+private val RapidoLightGray = BroadcastUiTokens.SecondaryText
+private val RapidoWhite = BroadcastUiTokens.PrimaryText
+private val RapidoGreen = BroadcastUiTokens.Success
+private val RapidoRed = BroadcastUiTokens.Error
+private val RapidoBlue = BroadcastUiTokens.AccentInfo
 
 /**
  * =============================================================================
@@ -110,7 +111,7 @@ enum class TruckHoldStatus {
  *    - [+] / [-] quantity selector
  *    - [ACCEPT] button → Calls holdTrucks() API (Redis 60-sec lock)
  *    - [REJECT] button → Blurs that truck (won't give it)
- * 3. Direction button opens Google Maps (no in-app map)
+ * 3. Compact in-app route map + direction actions for context
  * 4. [SUBMIT] button at bottom:
  *    - DISABLED (gray) when no trucks accepted
  *    - ENABLED (yellow/bold) when at least 1 truck accepted
@@ -1023,7 +1024,7 @@ private fun BroadcastOverlayContentNew(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.White)
+            .background(RapidoDarkGray)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             
@@ -1031,7 +1032,7 @@ private fun BroadcastOverlayContentNew(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.White)
+                    .background(RapidoDarkGray)
                     .padding(16.dp)
             ) {
                 // Top row: Close | Timer | Direction
@@ -1248,6 +1249,16 @@ private fun BroadcastOverlayContentNew(
                         }
                     }
                 }
+
+                item {
+                    BroadcastMiniRouteMapCard(
+                        broadcast = broadcast,
+                        title = "Route map",
+                        subtitle = "${broadcast.distance.toInt()} km",
+                        mapHeight = 136.dp,
+                        renderMode = BroadcastCardMapRenderMode.LIVE
+                    )
+                }
                 
                 // ========== ROUTE (Compact) ==========
                 item {
@@ -1371,7 +1382,7 @@ private fun BroadcastOverlayContentNew(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.White)
+                    .background(BroadcastUiTokens.CardBackground)
                     .padding(16.dp)
             ) {
                 Button(

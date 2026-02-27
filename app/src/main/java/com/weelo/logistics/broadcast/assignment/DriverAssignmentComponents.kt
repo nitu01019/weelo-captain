@@ -61,15 +61,17 @@ import com.weelo.logistics.ui.components.DriverAssignmentSkeleton
 import com.weelo.logistics.ui.components.EmptyStateArtwork
 import com.weelo.logistics.ui.components.EmptyStateLayoutStyle
 import com.weelo.logistics.ui.components.IllustratedEmptyState
+import com.weelo.logistics.ui.theme.BroadcastUiTokens
 
-private val AccentYellow = Color.Black
-private val BoldBlack = Color.White
-private val DarkGray = Color.White
-private val MediumGray = Color.Black.copy(alpha = 0.7f)
-private val LightGray = Color.Black.copy(alpha = 0.55f)
-private val PureWhite = Color.Black
-private val SuccessGreen = Color.Black
-private val ErrorRed = Color.Black
+private val AccentYellow = BroadcastUiTokens.PrimaryCta
+private val BoldBlack = BroadcastUiTokens.ScreenBackground
+private val DarkGray = BroadcastUiTokens.CardBackground
+private val MediumGray = BroadcastUiTokens.SecondaryText
+private val LightGray = BroadcastUiTokens.TertiaryText
+private val PureWhite = BroadcastUiTokens.PrimaryText
+private val SuccessGreen = BroadcastUiTokens.Success
+private val ErrorRed = BroadcastUiTokens.Error
+private val OnSuccess = Color.White
 
 @Composable
 fun BroadcastDriverAssignmentContent(
@@ -144,7 +146,7 @@ fun BroadcastDriverAssignmentContent(
                 ) {
                     Text(
                         text = "${assignments.size}/${vehicles.size}",
-                        color = if (canSubmit) PureWhite else BoldBlack,
+                        color = if (canSubmit) OnSuccess else BroadcastUiTokens.OnPrimaryCta,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Black
                     )
@@ -210,6 +212,13 @@ fun BroadcastDriverAssignmentContent(
                                 maxIllustrationWidthDp = EmptyStateLayoutStyle.CARD_COMPACT.maxIllustrationWidthDp,
                                 maxTextWidthDp = EmptyStateLayoutStyle.CARD_COMPACT.maxTextWidthDp,
                                 showFramedIllustration = EmptyStateLayoutStyle.CARD_COMPACT.showFramedIllustration
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Only active drivers are assignable. Offline drivers are hidden.",
+                                color = LightGray,
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             OutlinedButton(
@@ -301,7 +310,7 @@ fun BroadcastDriverAssignmentContent(
                         modifier = Modifier
                             .weight(1f)
                             .height(52.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = PureWhite),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = BroadcastUiTokens.SecondaryCtaText),
                         border = androidx.compose.foundation.BorderStroke(1.5.dp, MediumGray),
                         shape = RoundedCornerShape(12.dp)
                     ) {
@@ -316,7 +325,7 @@ fun BroadcastDriverAssignmentContent(
                             .height(52.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = SuccessGreen,
-                            contentColor = PureWhite,
+                            contentColor = OnSuccess,
                             disabledContainerColor = DarkGray,
                             disabledContentColor = MediumGray
                         ),

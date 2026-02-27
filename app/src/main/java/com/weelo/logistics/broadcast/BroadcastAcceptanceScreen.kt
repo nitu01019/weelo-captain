@@ -51,6 +51,7 @@ import com.weelo.logistics.ui.components.DarkSkeletonCircle
 import com.weelo.logistics.ui.components.EmptyStateArtwork
 import com.weelo.logistics.ui.components.EmptyStateLayoutStyle
 import com.weelo.logistics.ui.components.IllustratedEmptyState
+import com.weelo.logistics.ui.theme.BroadcastUiTokens
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -60,17 +61,18 @@ import com.weelo.logistics.data.remote.SocketIOService
 private const val TAG = "BroadcastAcceptance"
 
 // =============================================================================
-// MONOCHROME BROADCAST PALETTE — white surfaces + black content
+// Broadcast palette mapped to shared tokens (reference yellow + clean surfaces).
 // =============================================================================
-private val AccentYellow = Color.Black
-private val AccentYellowDark = Color.Black
-private val BoldBlack = Color.White
-private val DarkGray = Color.White
-private val MediumGray = Color.Black.copy(alpha = 0.7f)
-private val LightGray = Color.Black.copy(alpha = 0.55f)
-private val PureWhite = Color.Black
-private val SuccessGreen = Color.Black
-private val ErrorRed = Color.Black
+private val AccentYellow = BroadcastUiTokens.PrimaryCta
+private val AccentYellowDark = BroadcastUiTokens.PrimaryCtaPressed
+private val BoldBlack = BroadcastUiTokens.ScreenBackground
+private val DarkGray = BroadcastUiTokens.CardBackground
+private val MediumGray = BroadcastUiTokens.SecondaryText
+private val LightGray = BroadcastUiTokens.TertiaryText
+private val PureWhite = BroadcastUiTokens.PrimaryText
+private val SuccessGreen = BroadcastUiTokens.Success
+private val ErrorRed = BroadcastUiTokens.Error
+private val OnSuccess = Color.White
 
 /**
  * Data class for truck + driver assignment
@@ -301,16 +303,31 @@ fun BroadcastAcceptanceScreen(
     }
 
     suspend fun refreshDriverState(forceRefresh: Boolean) {
+        val startedAt = System.currentTimeMillis()
         driverAssignmentState = DriverAssignmentUiState.Loading
         when (val driverResult = driverRepository.fetchDrivers(forceRefresh = forceRefresh)) {
             is com.weelo.logistics.data.repository.DriverResult.Success -> {
                 allDrivers = driverResult.data.drivers
                 driverAssignmentState = DriverSelectionPolicy.buildUiState(driverResult.data.drivers)
+                BroadcastTelemetry.recordLatency(
+                    name = "driver_assignment_fetch_latency_ms",
+                    ms = System.currentTimeMillis() - startedAt,
+                    attrs = mapOf("broadcastId" to broadcast.broadcastId)
+                )
             }
             is com.weelo.logistics.data.repository.DriverResult.Error -> {
                 driverAssignmentState = DriverAssignmentUiState.Error(
                     message = driverResult.message,
                     retryable = true
+                )
+                BroadcastTelemetry.record(
+                    stage = BroadcastStage.BROADCAST_ACTIVE_FETCH,
+                    status = BroadcastStatus.FAILED,
+                    reason = "driver_fetch_failed",
+                    attrs = mapOf(
+                        "broadcastId" to broadcast.broadcastId,
+                        "message" to driverResult.message
+                    )
                 )
             }
             is com.weelo.logistics.data.repository.DriverResult.Loading -> {
@@ -333,6 +350,29 @@ fun BroadcastAcceptanceScreen(
                 currentStep = AcceptanceStep.CANCELLED
                 delay(1_500L)
                 onDismiss()
+            }
+        }
+    }
+
+    // Keep assignment state fresh when drivers go online/offline in real-time.
+    LaunchedEffect(Unit) {
+        SocketIOService.driverStatusChanged.collectLatest { statusEvent ->
+            if (allDrivers.none { it.id == statusEvent.driverId }) return@collectLatest
+            allDrivers = allDrivers.map { driver ->
+                if (driver.id == statusEvent.driverId) {
+                    driver.copy(isAvailable = statusEvent.isOnline)
+                } else {
+                    driver
+                }
+            }
+            driverAssignmentState = DriverSelectionPolicy.buildUiState(allDrivers)
+            val staleAssignmentDriverIds = assignments.values.filter { driverId ->
+                val updatedDriver = allDrivers.firstOrNull { it.id == driverId } ?: return@filter true
+                !DriverSelectionPolicy.isSelectable(updatedDriver)
+            }.toSet()
+            if (staleAssignmentDriverIds.isNotEmpty()) {
+                assignments = assignments.filterValues { it !in staleAssignmentDriverIds }
+                errorMessage = "Some assigned drivers went offline. Please reassign."
             }
         }
     }
@@ -983,7 +1023,7 @@ private fun TruckSelectionContent(
                 ) {
                     Text(
                         text = "${selectedVehicles.size}/$trucksNeeded",
-                        color = if (canProceed) PureWhite else BoldBlack,
+                        color = if (canProceed) OnSuccess else BroadcastUiTokens.OnPrimaryCta,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Black
                     )
@@ -1132,7 +1172,7 @@ private fun TruckSelectionContent(
                             .weight(1f)
                             .height(52.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = PureWhite
+                            contentColor = BroadcastUiTokens.SecondaryCtaText
                         ),
                         border = androidx.compose.foundation.BorderStroke(1.5.dp, MediumGray),
                         shape = RoundedCornerShape(12.dp)
@@ -1153,7 +1193,7 @@ private fun TruckSelectionContent(
                             .height(52.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (canProceed) SuccessGreen else AccentYellow,
-                            contentColor = PureWhite,
+                            contentColor = if (canProceed) OnSuccess else BroadcastUiTokens.OnPrimaryCta,
                             disabledContainerColor = DarkGray,
                             disabledContentColor = MediumGray
                         ),
@@ -1252,6 +1292,13 @@ private fun BroadcastSummaryCard(broadcast: BroadcastTrip) {
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            BroadcastMiniRouteMapCard(
+                broadcast = broadcast,
+                title = "Route map",
+                subtitle = "${broadcast.distance.toInt()} km",
+                mapHeight = 120.dp
+            )
+
             // Route
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -1600,7 +1647,7 @@ private fun DriverAssignmentContent(
                 ) {
                     Text(
                         text = "${assignments.size}/${vehicles.size}",
-                        color = if (canSubmit) PureWhite else BoldBlack,
+                        color = if (canSubmit) OnSuccess else BroadcastUiTokens.OnPrimaryCta,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Black
                     )
@@ -1720,7 +1767,7 @@ private fun DriverAssignmentContent(
         // ============== BOTTOM ACTION BAR ==============
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = PureWhite,
+            color = BroadcastUiTokens.CardBackground,
             shadowElevation = 8.dp
         ) {
             Column(
@@ -1791,7 +1838,7 @@ private fun DriverAssignmentContent(
                             .weight(1f)
                             .height(52.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = PureWhite
+                            contentColor = BroadcastUiTokens.SecondaryCtaText
                         ),
                         border = androidx.compose.foundation.BorderStroke(1.5.dp, MediumGray),
                         shape = RoundedCornerShape(12.dp)
@@ -1818,7 +1865,7 @@ private fun DriverAssignmentContent(
                             .height(52.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = SuccessGreen,
-                            contentColor = PureWhite,
+                            contentColor = OnSuccess,
                             disabledContainerColor = DarkGray,
                             disabledContentColor = MediumGray
                         ),

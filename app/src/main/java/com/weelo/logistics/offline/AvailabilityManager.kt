@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.weelo.logistics.data.remote.RetrofitClient
+import com.weelo.logistics.utils.HeartbeatManager
 import com.weelo.logistics.utils.TransporterOnlineService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -115,6 +116,7 @@ class AvailabilityManager private constructor(
     companion object {
         /** Frontend cooldown — minimum 2s between toggle presses */
         private const val FRONTEND_COOLDOWN_MS = 2000L
+        const val ERROR_CODE_LOCATION_PERMISSION_REQUIRED = "LOCATION_PERMISSION_REQUIRED"
 
         @Volatile
         private var instance: AvailabilityManager? = null
@@ -170,19 +172,32 @@ class AvailabilityManager private constructor(
                 )
                 if (response.isSuccessful && response.body()?.success == true) {
                     val backendState = response.body()?.data?.isAvailable ?: false
+                    val resolvedBackendState = if (backendState && !hasLocationPermissionForOnline()) {
+                        setLocationPermissionRequiredError("init_backend_sync")
+                        false
+                    } else {
+                        backendState
+                    }
                     val counterAfterGet = _toggleCounter.get()
                     if (counterAfterGet != counterBeforeGet) {
                         timber.log.Timber.i("🔄 Init sync discarded — toggle happened during GET (counter $counterBeforeGet→$counterAfterGet)")
                         return@launch
                     }
                     if (!_isToggling.value && !syncMutex.isLocked) {
-                        setAvailabilityInternal(backendState)
-                        updateHeartbeatForAvailability(backendState)
+                        setAvailabilityInternal(resolvedBackendState)
+                        updateHeartbeatForAvailability(resolvedBackendState)
+                        val needsOfflineSync = backendState && !resolvedBackendState
                         dataStore.edit { prefs ->
-                            prefs[KEY_IS_AVAILABLE] = backendState
-                            prefs[KEY_PENDING_SYNC] = false
+                            prefs[KEY_IS_AVAILABLE] = resolvedBackendState
+                            prefs[KEY_PENDING_SYNC] = needsOfflineSync
+                            prefs[KEY_LAST_UPDATED] = System.currentTimeMillis()
                         }
-                        timber.log.Timber.i("🔄 Backend availability resolved: ${if (backendState) "ONLINE" else "OFFLINE"}")
+                        if (needsOfflineSync) {
+                            timber.log.Timber.w("↩️ Startup forced OFFLINE: backend=ONLINE but location permission missing")
+                        }
+                        timber.log.Timber.i(
+                            "🔄 Backend availability resolved: ${if (resolvedBackendState) "ONLINE" else "OFFLINE"}"
+                        )
                     }
                 }
             } catch (e: Exception) {
@@ -191,10 +206,13 @@ class AvailabilityManager private constructor(
                 updateAvailabilityState(_isAvailable.value)
             } finally {
                 initAvailabilityResolved = true
-                if (_availabilityState.value == AvailabilityState.UNKNOWN) {
-                    updateAvailabilityState(_isAvailable.value)
+                var resolvedState = _isAvailable.value
+                if (resolvedState && !hasLocationPermissionForOnline()) {
+                    forceOfflineForMissingPermission("init_finalize")
+                    resolvedState = false
                 }
-                updateHeartbeatForAvailability(_isAvailable.value)
+                updateAvailabilityState(resolvedState)
+                updateHeartbeatForAvailability(resolvedState)
             }
         }
 
@@ -249,6 +267,12 @@ class AvailabilityManager private constructor(
         _toggleCounter.incrementAndGet() // Invalidate any in-flight init-sync GET
 
         try {
+            if (newState && !hasLocationPermissionForOnline()) {
+                setLocationPermissionRequiredError("toggle_online_guard")
+                timber.log.Timber.w("⛔ ONLINE toggle blocked: location permission missing")
+                return
+            }
+
             // Step 2: Optimistic UI update (instant feedback)
             setAvailabilityInternal(newState)
             updateHeartbeatForAvailability(newState)
@@ -295,6 +319,12 @@ class AvailabilityManager private constructor(
             // Idempotent — no change needed
             return
         }
+
+        if (available && !hasLocationPermissionForOnline()) {
+            forceOfflineForMissingPermission("set_availability")
+            return
+        }
+
         setAvailabilityInternal(available)
         updateHeartbeatForAvailability(available)
         dataStore.edit { prefs ->
@@ -433,11 +463,53 @@ class AvailabilityManager private constructor(
     }
 
     private fun updateHeartbeatForAvailability(available: Boolean) {
-        if (available) {
-            TransporterOnlineService.start(appContext)
-        } else {
+        if (!available) {
+            TransporterOnlineService.stop(appContext)
+            return
+        }
+
+        if (!hasLocationPermissionForOnline()) {
+            setLocationPermissionRequiredError("heartbeat_update")
+            scope.launch {
+                forceOfflineForMissingPermission("heartbeat_update")
+            }
+            return
+        }
+
+        val startResult = TransporterOnlineService.start(
+            context = appContext,
+            expectedAvailability = AvailabilityState.ONLINE
+        )
+        timber.log.Timber.i("🚦 TransporterOnlineService start result: %s", startResult)
+        if (startResult == TransporterOnlineService.StartResult.SKIPPED_MISSING_PERMISSION) {
+            scope.launch {
+                forceOfflineForMissingPermission("service_start_result")
+            }
+        } else if (startResult != TransporterOnlineService.StartResult.STARTED) {
+            timber.log.Timber.w("⚠️ Heartbeat service not started: %s", startResult)
             TransporterOnlineService.stop(appContext)
         }
+    }
+
+    private fun hasLocationPermissionForOnline(): Boolean {
+        return HeartbeatManager.hasLocationPermission(appContext)
+    }
+
+    private fun setLocationPermissionRequiredError(source: String) {
+        _toggleError.value = ERROR_CODE_LOCATION_PERMISSION_REQUIRED
+        timber.log.Timber.w("⚠️ Location permission required for ONLINE (%s)", source)
+    }
+
+    private suspend fun forceOfflineForMissingPermission(source: String) {
+        setLocationPermissionRequiredError(source)
+        setAvailabilityInternal(false)
+        TransporterOnlineService.stop(appContext)
+        dataStore.edit { prefs ->
+            prefs[KEY_IS_AVAILABLE] = false
+            prefs[KEY_LAST_UPDATED] = System.currentTimeMillis()
+            prefs[KEY_PENDING_SYNC] = true
+        }
+        timber.log.Timber.w("↩️ Forced OFFLINE due to missing location permission (%s)", source)
     }
 
     /** Force sync current state with backend */
@@ -458,5 +530,10 @@ class AvailabilityManager private constructor(
     /** Clear error message (called by UI after showing snackbar) */
     fun clearError() {
         _toggleError.value = null
+    }
+
+    /** Set explicit permission error when UI permission request is denied. */
+    fun notifyLocationPermissionRequired() {
+        setLocationPermissionRequiredError("ui_permission_denied")
     }
 }

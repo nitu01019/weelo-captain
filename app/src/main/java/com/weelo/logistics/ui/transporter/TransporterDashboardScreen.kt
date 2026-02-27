@@ -13,7 +13,6 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.data.remote.SocketConnectionState
 import com.weelo.logistics.ui.components.*
@@ -21,6 +20,7 @@ import com.weelo.logistics.ui.components.rememberScreenConfig
 import com.weelo.logistics.ui.components.responsiveHorizontalPadding
 import com.weelo.logistics.ui.components.OfflineBanner
 import com.weelo.logistics.offline.NetworkMonitor
+import com.weelo.logistics.offline.AvailabilityManager
 import com.weelo.logistics.ui.theme.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -74,7 +74,9 @@ fun TransporterDashboardScreen(
     // Network monitoring for offline banner
     val context = LocalContext.current
     val networkMonitor = remember { NetworkMonitor.getInstance(context) }
+    val availabilityManager = remember { AvailabilityManager.getInstance(context) }
     val isOnline by networkMonitor.isOnline.collectAsStateWithLifecycle()
+    val availabilityToggleError by availabilityManager.toggleError.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val dashboardViewModel: TransporterDashboardViewModel = viewModel(
@@ -113,6 +115,7 @@ fun TransporterDashboardScreen(
     // Extract snackbar strings outside LaunchedEffect (must be in @Composable scope)
     val strOrderCancelled = stringResource(R.string.order_cancelled)
     val strCallCustomer = stringResource(R.string.call_customer)
+    val strLocationPermissionRequired = stringResource(R.string.availability_location_permission_required)
 
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
@@ -154,6 +157,23 @@ fun TransporterDashboardScreen(
                 }
             }
         }
+    }
+
+    LaunchedEffect(availabilityToggleError) {
+        val rawError = availabilityToggleError ?: return@LaunchedEffect
+        val snackbarMessage = when {
+            rawError == AvailabilityManager.ERROR_CODE_LOCATION_PERMISSION_REQUIRED -> {
+                strLocationPermissionRequired
+            }
+            rawError.startsWith("429:") -> rawError.substringAfter("429:")
+            rawError.startsWith("409:") -> rawError.substringAfter("409:")
+            else -> rawError
+        }
+        cancelSnackbarHostState.showSnackbar(
+            message = snackbarMessage,
+            duration = androidx.compose.material3.SnackbarDuration.Long
+        )
+        availabilityManager.clearError()
     }
 
     val contentState = dashboardUiState as? TransporterDashboardUiState.Content
@@ -261,7 +281,6 @@ fun TransporterDashboardScreen(
                         },
                         onLogout = {
                             scope.launch { drawerState.close() }
-                            RetrofitClient.clearAllData()
                             onLogout()
                         }
                     )

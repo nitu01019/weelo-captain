@@ -897,7 +897,11 @@ object BroadcastFlowCoordinator {
             stage = BroadcastStage.DISMISSED,
             status = BroadcastStatus.SUCCESS,
             reason = reason,
-            attrs = mapOf("id" to id)
+            attrs = mapOf(
+                "id" to id,
+                "normalizedId" to id,
+                "removeReason" to reason
+            )
         )
         requestReconcile(force = true)
     }
@@ -911,7 +915,10 @@ object BroadcastFlowCoordinator {
         _events.tryEmit(BroadcastCoordinatorEvent.Dropped(id = id, source = source, reason = reason))
         val attrs = mutableMapOf(
             "id" to id.ifBlank { "none" },
+            "normalizedId" to id.ifBlank { "none" },
             "source" to source.name.lowercase(Locale.US),
+            "ingressSource" to source.name.lowercase(Locale.US),
+            "dropReason" to reason.name.lowercase(Locale.US),
             "ingressQueueDepth" to ingressQueueDepth.get().toString()
         )
         attrs.putAll(additionalAttrs)
@@ -920,6 +927,13 @@ object BroadcastFlowCoordinator {
             status = BroadcastStatus.DROPPED,
             reason = reason.name.lowercase(Locale.US),
             attrs = attrs
+        )
+        timber.log.Timber.w(
+            "⚠️ Broadcast dropped id=%s source=%s reason=%s attrs=%s",
+            id.ifBlank { "none" },
+            source.name.lowercase(Locale.US),
+            reason.name.lowercase(Locale.US),
+            attrs
         )
     }
 
@@ -980,9 +994,11 @@ object BroadcastFlowCoordinator {
                 normalized == WeeloEventNames.BUFFER_FLUSH -> BroadcastEventClass.NEW_BROADCAST
 
             normalized == SocketIOService.Events.ORDER_CANCELLED.lowercase(Locale.US) ||
-                normalized == WeeloEventNames.BOOKING_CANCELLED -> BroadcastEventClass.CANCEL
+                normalized == WeeloEventNames.BOOKING_CANCELLED ||
+                normalized == WeeloEventNames.BROADCAST_DISMISSED -> BroadcastEventClass.CANCEL
 
             normalized == SocketIOService.Events.ORDER_EXPIRED.lowercase(Locale.US) ||
+                normalized == WeeloEventNames.ORDER_EXPIRED ||
                 normalized == WeeloEventNames.BOOKING_EXPIRED ||
                 normalized == WeeloEventNames.BROADCAST_EXPIRED -> BroadcastEventClass.EXPIRE
 
@@ -1038,7 +1054,9 @@ object BroadcastFlowCoordinator {
 
     private object WeeloEventNames {
         const val BOOKING_CANCELLED = "booking_cancelled"
+        const val ORDER_EXPIRED = "order_expired"
         const val BOOKING_EXPIRED = "booking_expired"
+        const val BROADCAST_DISMISSED = "broadcast_dismissed"
         const val BROADCAST_EXPIRED = "broadcast_expired"
         const val NOTIFICATION_OPEN = "notification_open"
         const val BUFFER_FLUSH = "buffer_flush"

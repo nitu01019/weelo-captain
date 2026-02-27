@@ -89,6 +89,7 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
     private var lastSoundAtMs = 0L
     private var latestSocketState: SocketConnectionState = SocketConnectionState.Disconnected
     private var consecutiveFetchErrors = 0
+    private val pendingCardRenderLatencyStartMs = mutableMapOf<String, Long>()
     private val periodicRefreshJitterMs = (((System.identityHashCode(this) and Int.MAX_VALUE) % 3000) + 500).toLong()
 
     companion object {
@@ -185,6 +186,18 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
             return
         }
         requestRefresh(forceRefresh = true, debounceMs = 0L)
+    }
+
+    fun onBroadcastCardRendered(broadcastId: String) {
+        val id = broadcastId.trim()
+        if (id.isEmpty()) return
+        val startedAtMs = pendingCardRenderLatencyStartMs.remove(id) ?: return
+        val latency = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(0L)
+        BroadcastTelemetry.recordLatency(
+            name = "broadcast_card_render_latency_ms",
+            ms = latency,
+            attrs = mapOf("broadcastId" to id)
+        )
     }
 
     fun onIgnoreBroadcast(broadcastId: String) {
@@ -611,6 +624,7 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
 
     private fun applyIncomingBroadcast(notification: BroadcastNotification) {
         val incomingTrip = notification.toBroadcastTrip()
+        pendingCardRenderLatencyStartMs[incomingTrip.broadcastId] = System.currentTimeMillis()
         _uiState.update { current ->
             val merged = applyIgnoredRecentlyFilter(mergeIncomingTrip(current.broadcasts, incomingTrip))
             current.copy(

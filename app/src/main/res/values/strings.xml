@@ -200,6 +200,7 @@
     <string name="no_internet_connection">No internet connection</string>
     <string name="offline_banner_message">You\'re offline. Some features may not work.</string>
     <string name="no_network">No network</string>
+    <string name="availability_location_permission_required">Allow location permission to go online and receive nearby broadcasts.</string>
     
     <!-- Map & Components -->
     <string name="pickup_label">Pickup</string>
@@ -394,7 +395,7 @@
     <string name="empty_title_no_drivers_left">No drivers left to assign</string>
     <string name="empty_subtitle_no_drivers_left">All eligible drivers are already used or unavailable for this request.</string>
     <string name="empty_title_no_assignable_drivers">No assignable drivers</string>
-    <string name="empty_subtitle_no_assignable_drivers">No drivers are eligible right now. Retry after availability updates.</string>
+    <string name="empty_subtitle_no_assignable_drivers">No active drivers right now. Offline/on-trip drivers are hidden for assignment.</string>
     <string name="empty_title_no_drivers_for_truck">No drivers available for this truck</string>
     <string name="empty_subtitle_no_drivers_for_truck">Choose another truck or retry after driver availability changes.</string>
 

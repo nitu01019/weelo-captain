@@ -13,6 +13,7 @@ import com.weelo.logistics.broadcast.BroadcastTelemetry
 import com.weelo.logistics.broadcast.BroadcastUiTiming
 import io.socket.client.IO
 import io.socket.client.Socket
+import io.socket.emitter.Emitter
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.json.JSONObject
@@ -22,6 +23,7 @@ import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import java.util.Locale
 
 /**
  * =============================================================================
@@ -210,6 +212,26 @@ object SocketIOService {
     private var serverUrl: String? = null
     private var authToken: String? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private const val BROADCAST_OVERLAY_WATCHDOG_MS = 2_500L
+    private val directBroadcastSocketEvents = setOf("new_broadcast", "new_order_alert", "new_truck_request")
+    private val directCancellationSocketEvents = setOf(
+        "order_cancelled",
+        "booking_cancelled",
+        "broadcast_dismissed",
+        "broadcast_expired",
+        "booking_expired",
+        "order_expired"
+    )
+    private val fallbackBroadcastSocketEvents = setOf("message", "new_booking_request", "broadcast_request", "broadcast_available")
+    private val broadcastPayloadTypes = setOf("new_broadcast", "new_truck_request")
+    private val cancellationPayloadTypes = setOf(
+        "order_cancelled",
+        "booking_cancelled",
+        "broadcast_dismissed",
+        "broadcast_expired",
+        "booking_expired",
+        "order_expired"
+    )
 
     private fun <T> emitHot(flow: MutableSharedFlow<T>, value: T) {
         if (!flow.tryEmit(value)) {
@@ -228,12 +250,15 @@ object SocketIOService {
         // Server -> Client
         const val CONNECTED = "connected"
         const val NEW_BROADCAST = "new_broadcast"
+        const val NEW_TRUCK_REQUEST = "new_truck_request"
         const val BOOKING_UPDATED = "booking_updated"
         const val TRUCK_ASSIGNED = "truck_assigned"
         const val ASSIGNMENT_STATUS_CHANGED = "assignment_status_changed"
         const val TRUCKS_REMAINING_UPDATE = "trucks_remaining_update"
         const val BOOKING_EXPIRED = "booking_expired"
+        const val BOOKING_CANCELLED = "booking_cancelled"
         const val BOOKING_FULLY_FILLED = "booking_fully_filled"
+        const val BROADCAST_DISMISSED = "broadcast_dismissed"
         const val NEW_ORDER_ALERT = "new_order_alert"
         const val ACCEPT_CONFIRMATION = "accept_confirmation"
         const val ERROR = "error"
@@ -424,10 +449,28 @@ object SocketIOService {
             on(Events.NEW_BROADCAST) { args ->
                 handleNewBroadcast(args, Events.NEW_BROADCAST)
             }
-            
+
+            // Legacy alias from older backend/app payload contracts.
+            on(Events.NEW_TRUCK_REQUEST) { args ->
+                handleNewBroadcast(args, Events.NEW_TRUCK_REQUEST)
+            }
+
             on(Events.NEW_ORDER_ALERT) { args ->
                 handleNewBroadcast(args, Events.NEW_ORDER_ALERT)
             }
+
+            // Fallback ingress to protect against event-name drift while keeping
+            // existing direct listeners as primary.
+            onAnyIncoming(Emitter.Listener { incomingArgs ->
+                if (incomingArgs.isEmpty()) return@Listener
+                val rawIncomingEvent = incomingArgs.firstOrNull()?.toString()?.trim().orEmpty()
+                if (rawIncomingEvent.isBlank()) return@Listener
+                val payloadArgs = incomingArgs
+                    .drop(1)
+                    .filterNotNull()
+                    .toTypedArray()
+                maybeRouteIncomingBroadcastFallback(rawIncomingEvent, payloadArgs)
+            })
             
             // Truck assigned notification
             on(Events.TRUCK_ASSIGNED) { args ->
@@ -458,11 +501,25 @@ object SocketIOService {
             on(Events.BOOKING_EXPIRED) { args ->
                 handleBookingExpired(args)
             }
+
+            // Booking cancelled alias (legacy + FCM/socket parity)
+            on(Events.BOOKING_CANCELLED) { args ->
+                if (BroadcastFeatureFlagsRegistry.current().captainCanonicalCancelAliasesEnabled) {
+                    handleOrderCancelled(args)
+                }
+            }
             
             // Broadcast expired (NEW - backend sends this for timeout/cancellation)
             // This is the primary event for removing broadcasts from overlay
             on("broadcast_expired") { args ->
                 handleBookingExpired(args)
+            }
+
+            // Broadcast dismissed alias from canonical cancel flow.
+            on(Events.BROADCAST_DISMISSED) { args ->
+                if (BroadcastFeatureFlagsRegistry.current().captainCanonicalCancelAliasesEnabled) {
+                    handleBookingExpired(args)
+                }
             }
             
             // Booking fully filled
@@ -901,7 +958,11 @@ object SocketIOService {
         BroadcastTelemetry.record(
             stage = BroadcastStage.BROADCAST_WS_RECEIVED,
             status = BroadcastStatus.SUCCESS,
-            attrs = mapOf("event" to rawEventName)
+            attrs = mapOf(
+                "event" to rawEventName,
+                "eventName" to rawEventName,
+                "ingressSource" to "socket"
+            )
         )
 
         val userRole = RetrofitClient.getUserRole()?.lowercase()
@@ -912,6 +973,8 @@ object SocketIOService {
                 reason = "role_not_transporter",
                 attrs = mapOf(
                     "event" to rawEventName,
+                    "eventName" to rawEventName,
+                    "ingressSource" to "socket",
                     "role" to (userRole ?: "unknown")
                 )
             )
@@ -921,6 +984,17 @@ object SocketIOService {
             )
             return
         }
+        BroadcastTelemetry.record(
+            stage = BroadcastStage.BROADCAST_GATED,
+            status = BroadcastStatus.SUCCESS,
+            reason = "role_transporter",
+            attrs = mapOf(
+                "event" to rawEventName,
+                "eventName" to rawEventName,
+                "ingressSource" to "socket",
+                "role" to (userRole ?: "unknown")
+            )
+        )
 
         val envelope = parseIncomingBroadcastEnvelope(
             rawEventName = rawEventName,
@@ -942,6 +1016,11 @@ object SocketIOService {
                     broadcast = broadcastTrip
                 )
             )
+            scheduleBroadcastOverlayWatchdog(
+                broadcastId = broadcastTrip.broadcastId,
+                rawEventName = rawEventName,
+                ingressMode = "coordinator"
+            )
             emitHot(_newBroadcasts, notification)
             return
         }
@@ -951,10 +1030,32 @@ object SocketIOService {
             when (ingestResult.action) {
                 BroadcastOverlayManager.BroadcastIngressAction.SHOWN -> {
                     timber.log.Timber.i("✅ OVERLAY SHOWN for broadcast: ${broadcastTrip.broadcastId}")
+                    BroadcastTelemetry.recordLatency(
+                        name = "overlay_open_latency_ms",
+                        ms = System.currentTimeMillis() - receivedAtMs,
+                        attrs = mapOf(
+                            "broadcastId" to broadcastTrip.broadcastId,
+                            "event" to rawEventName
+                        )
+                    )
+                    scheduleBroadcastOverlayWatchdog(
+                        broadcastId = broadcastTrip.broadcastId,
+                        rawEventName = rawEventName,
+                        ingressMode = "legacy_overlay_manager"
+                    )
                 }
 
                 BroadcastOverlayManager.BroadcastIngressAction.BUFFERED -> {
                     timber.log.Timber.i("📥 Broadcast buffered: ${broadcastTrip.broadcastId} (${ingestResult.reason})")
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.BROADCAST_GATED,
+                        status = BroadcastStatus.BUFFERED,
+                        reason = ingestResult.reason ?: "overlay_buffered",
+                        attrs = mapOf(
+                            "broadcastId" to broadcastTrip.broadcastId,
+                            "event" to rawEventName
+                        )
+                    )
                 }
 
                 BroadcastOverlayManager.BroadcastIngressAction.DROPPED -> {
@@ -964,11 +1065,124 @@ object SocketIOService {
                         ingestResult.reason,
                         BroadcastOverlayManager.getQueueInfo()
                     )
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.BROADCAST_GATED,
+                        status = BroadcastStatus.DROPPED,
+                        reason = ingestResult.reason ?: "overlay_dropped",
+                        attrs = mapOf(
+                            "broadcastId" to broadcastTrip.broadcastId,
+                            "event" to rawEventName
+                        )
+                    )
                 }
             }
         }
 
         emitHot(_newBroadcasts, notification)
+    }
+
+    private fun maybeRouteIncomingBroadcastFallback(
+        rawIncomingEvent: String,
+        payloadArgs: Array<Any>
+    ) {
+        val normalizedEvent = rawIncomingEvent.trim().lowercase(Locale.US)
+        val payload = payloadArgs.firstOrNull() as? JSONObject
+        val payloadType = payload?.optString("type", "")?.trim()?.lowercase(Locale.US).orEmpty()
+        val legacyType = payload?.optString("legacyType", "")?.trim()?.lowercase(Locale.US).orEmpty()
+
+        val resolution = resolveBroadcastFallbackDecision(
+            rawIncomingEvent = rawIncomingEvent,
+            payloadType = payloadType,
+            legacyType = legacyType,
+            directBroadcastSocketEvents = directBroadcastSocketEvents,
+            directCancellationSocketEvents = directCancellationSocketEvents,
+            fallbackBroadcastSocketEvents = fallbackBroadcastSocketEvents,
+            broadcastPayloadTypes = broadcastPayloadTypes,
+            cancellationPayloadTypes = cancellationPayloadTypes
+        )
+        val effectiveEvent = resolution.effectiveEvent ?: return
+
+        when (resolution.route) {
+            BroadcastFallbackRoute.NONE -> return
+            BroadcastFallbackRoute.CANCELLATION -> {
+                if (!BroadcastFeatureFlagsRegistry.current().captainCanonicalCancelAliasesEnabled) return
+
+                timber.log.Timber.w(
+                    "↪️ Fallback routing incoming cancellation event: incoming=%s effective=%s payloadType=%s legacyType=%s",
+                    normalizedEvent,
+                    effectiveEvent,
+                    payloadType.ifBlank { "none" },
+                    legacyType.ifBlank { "none" }
+                )
+                val normalizedId = payload?.let { resolveEventId(it, "orderId", "broadcastId", "bookingId", "id") }.orEmpty()
+                BroadcastTelemetry.record(
+                    stage = BroadcastStage.BROADCAST_GATED,
+                    status = BroadcastStatus.SUCCESS,
+                    reason = "fallback_cancellation_alias",
+                    attrs = mapOf(
+                        "ingressSource" to "socket_fallback",
+                        "eventName" to effectiveEvent,
+                        "normalizedId" to normalizedId.ifBlank { "none" }
+                    )
+                )
+                when (effectiveEvent) {
+                    Events.ORDER_CANCELLED.lowercase(Locale.US),
+                    Events.BOOKING_CANCELLED.lowercase(Locale.US) -> handleOrderCancelled(payloadArgs)
+                    Events.ORDER_EXPIRED.lowercase(Locale.US) -> handleOrderExpired(payloadArgs)
+                    Events.BROADCAST_DISMISSED.lowercase(Locale.US),
+                    Events.BOOKING_EXPIRED.lowercase(Locale.US),
+                    "broadcast_expired" -> handleBookingExpired(payloadArgs)
+                }
+            }
+            BroadcastFallbackRoute.BROADCAST -> {
+                timber.log.Timber.w(
+                    "↪️ Fallback routing incoming broadcast event: incoming=%s effective=%s payloadType=%s legacyType=%s",
+                    normalizedEvent,
+                    effectiveEvent,
+                    payloadType.ifBlank { "none" },
+                    legacyType.ifBlank { "none" }
+                )
+                handleNewBroadcast(payloadArgs, effectiveEvent)
+            }
+        }
+    }
+
+    private fun scheduleBroadcastOverlayWatchdog(
+        broadcastId: String,
+        rawEventName: String,
+        ingressMode: String
+    ) {
+        if (broadcastId.isBlank()) return
+        if (!BroadcastFeatureFlagsRegistry.current().broadcastOverlayWatchdogEnabled) return
+
+        serviceScope.launch {
+            delay(BROADCAST_OVERLAY_WATCHDOG_MS)
+            val overlayVisible = BroadcastOverlayManager.isOverlayVisible.value
+            val currentOverlayId = BroadcastOverlayManager.currentBroadcast.value?.broadcastId.orEmpty()
+            if (overlayVisible || currentOverlayId == broadcastId) return@launch
+
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.BROADCAST_OVERLAY_SHOWN,
+                status = BroadcastStatus.FAILED,
+                reason = "watchdog_overlay_not_visible",
+                attrs = mapOf(
+                    "broadcastId" to broadcastId,
+                    "event" to rawEventName,
+                    "ingressMode" to ingressMode,
+                    "queueInfo" to BroadcastOverlayManager.getQueueInfo()
+                )
+            )
+            timber.log.Timber.w(
+                "⚠️ Overlay watchdog: broadcast=%s not visible after %dms mode=%s queue=%s",
+                broadcastId,
+                BROADCAST_OVERLAY_WATCHDOG_MS,
+                ingressMode,
+                BroadcastOverlayManager.getQueueInfo()
+            )
+            if (BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled) {
+                BroadcastFlowCoordinator.requestReconcile(force = true)
+            }
+        }
     }
 
     private fun parseIncomingBroadcastEnvelope(

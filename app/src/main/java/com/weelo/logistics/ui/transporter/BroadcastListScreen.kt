@@ -279,6 +279,9 @@ fun BroadcastListScreen(
                         items = uiState.visibleBroadcasts,
                         key = { _, item -> item.broadcastId }
                     ) { _, broadcast ->
+                        LaunchedEffect(broadcast.broadcastId) {
+                            viewModel.onBroadcastCardRendered(broadcast.broadcastId)
+                        }
                         val dismissInfo = uiState.dismissedCards[broadcast.broadcastId]
                         val isDismissed = dismissInfo != null
 
