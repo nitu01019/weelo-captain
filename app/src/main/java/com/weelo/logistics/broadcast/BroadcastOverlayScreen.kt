@@ -297,7 +297,7 @@ fun BroadcastOverlayScreen(
                         || result.message.contains("expired", ignoreCase = true)
                     if (isCancelled) {
                         Toast.makeText(context, "This request was cancelled", Toast.LENGTH_SHORT).show()
-                        BroadcastFlowCoordinator.removeEverywhere(broadcast.broadcastId, "order_cancelled")
+                        BroadcastOverlayManager.removeEverywhere(broadcast.broadcastId)
                         BroadcastOverlayManager.dismissCurrentBroadcast()
                     } else {
                         truckHoldStates = truckHoldStates + (key to TruckHoldState(
