@@ -289,11 +289,7 @@ fun BroadcastListScreen(
                             BroadcastRequestCard(
                                 broadcast = broadcast,
                                 isDismissed = isDismissed,
-                                mapRenderMode = if (liveMapIds.contains(broadcast.broadcastId)) {
-                                    BroadcastCardMapRenderMode.LIVE
-                                } else {
-                                    BroadcastCardMapRenderMode.SNAPSHOT
-                                },
+                                mapRenderMode = BroadcastCardMapRenderMode.STATIC_CARD,
                                 snapshotCache = snapshotCache,
                                 onIgnore = {
                                     viewModel.onIgnoreBroadcast(broadcast.broadcastId)
@@ -363,7 +359,7 @@ private fun BroadcastTopBar(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(if (isConnected) Color(0xFF2EBE67) else Color(0xFFB0B0B0))
+                                .background(if (isConnected) BroadcastAccent else Color(0xFFB0B0B0))
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
@@ -465,7 +461,7 @@ private fun BroadcastHeroPanel(
                 }
                 BroadcastCardMapRenderer(
                     routeKey = routeKey,
-                    renderMode = BroadcastCardMapRenderMode.LIVE,
+                    renderMode = BroadcastCardMapRenderMode.LIVE_HERO,
                     snapshotCache = snapshotCache,
                     modifier = Modifier
                         .fillMaxWidth()

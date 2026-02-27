@@ -38,7 +38,7 @@ fun BroadcastMiniRouteMapCard(
     title: String = "Route preview",
     subtitle: String = "",
     mapHeight: Dp = 132.dp,
-    renderMode: BroadcastCardMapRenderMode = BroadcastCardMapRenderMode.SNAPSHOT
+    renderMode: BroadcastCardMapRenderMode = BroadcastCardMapRenderMode.STATIC_CARD
 ) {
     val routeKey = remember(
         broadcast.broadcastId,

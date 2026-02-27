@@ -315,7 +315,7 @@ fun DriverAssignmentScreen(
                             title = "Route map",
                             subtitle = "${currentBroadcast.distance.toInt()} km",
                             mapHeight = 128.dp,
-                            renderMode = BroadcastCardMapRenderMode.SNAPSHOT
+                            renderMode = BroadcastCardMapRenderMode.STATIC_CARD
                         )
                     }
                 }

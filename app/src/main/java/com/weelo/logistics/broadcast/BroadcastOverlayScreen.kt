@@ -72,7 +72,7 @@ private val RapidoGray = BroadcastUiTokens.SecondaryText
 private val RapidoMediumGray = BroadcastUiTokens.TertiaryText
 private val RapidoLightGray = BroadcastUiTokens.SecondaryText
 private val RapidoWhite = BroadcastUiTokens.PrimaryText
-private val RapidoGreen = BroadcastUiTokens.Success
+private val RapidoGreen = BroadcastUiTokens.PrimaryCta
 private val RapidoRed = BroadcastUiTokens.Error
 private val RapidoBlue = BroadcastUiTokens.AccentInfo
 
@@ -839,15 +839,16 @@ private fun BroadcastOverlayContent(
                     }
                 }
                 
-                // ========== EMBEDDED MAP ==========
-                item {
-                    BroadcastRouteMap(
-                        broadcast = broadcast,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                    )
+                // ========== EMBEDDED MAP (toggle-able via feature flag) ==========
+                if (BroadcastFeatureFlagsRegistry.current().broadcastOverlayMapEnabled) {
+                    item {
+                        BroadcastMiniRouteMapCard(
+                            broadcast = broadcast,
+                            modifier = Modifier.fillMaxWidth(),
+                            renderMode = com.weelo.logistics.ui.transporter.BroadcastCardMapRenderMode.STATIC_OVERLAY,
+                            mapHeight = 160.dp
+                        )
+                    }
                 }
                 
                 // ========== DIRECTIONS BUTTONS - PROMINENT ==========
@@ -1284,7 +1285,7 @@ private fun BroadcastOverlayContentNew(
                         title = "Route map",
                         subtitle = "${broadcast.distance.toInt()} km",
                         mapHeight = 136.dp,
-                        renderMode = BroadcastCardMapRenderMode.LIVE
+                        renderMode = BroadcastCardMapRenderMode.STATIC_OVERLAY
                     )
                 }
                 
@@ -2057,150 +2058,15 @@ private fun LegacySingleTruckCard(
                     Button(
                         onClick = { onAccept(selectedQuantity) },
                         shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = RapidoBlack, contentColor = Color.White)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = RapidoYellow,
+                            contentColor = RapidoBlack
+                        )
                     ) {
                         Text("ACCEPT $selectedQuantity", fontWeight = FontWeight.Bold)
                     }
                 }
             }
-        }
-    }
-}
-
-/**
- * =============================================================================
- * EMBEDDED ROUTE MAP - Shows route with markers
- * =============================================================================
- * 
- * Displays a small Google Map showing:
- * - Pickup marker (green)
- * - Drop marker (red)
- * - Intermediate stops (yellow)
- * - Polyline connecting all points
- * 
- * Map auto-zooms to fit all markers
- */
-@Composable
-private fun BroadcastRouteMap(
-    broadcast: BroadcastTrip,
-    modifier: Modifier = Modifier
-) {
-    // Build list of LatLng points
-    val points = remember(broadcast) {
-        if (broadcast.routePoints.isNotEmpty()) {
-            broadcast.routePoints.map { LatLng(it.latitude, it.longitude) }
-        } else {
-            listOf(
-                LatLng(broadcast.pickupLocation.latitude, broadcast.pickupLocation.longitude),
-                LatLng(broadcast.dropLocation.latitude, broadcast.dropLocation.longitude)
-            )
-        }
-    }
-    
-    // Calculate bounds to fit all markers
-    val boundsBuilder = remember(points) {
-        LatLngBounds.builder().apply {
-            points.forEach { include(it) }
-        }
-    }
-    
-    // Camera position
-    val cameraPositionState = rememberCameraPositionState {
-        if (points.isNotEmpty()) {
-            position = CameraPosition.fromLatLngZoom(points.first(), 10f)
-        }
-    }
-    
-    // Auto-fit bounds when map loads
-    LaunchedEffect(points) {
-        if (points.size >= 2) {
-            try {
-                val bounds = boundsBuilder.build()
-                cameraPositionState.animate(
-                    CameraUpdateFactory.newLatLngBounds(bounds, 50),
-                    durationMs = 500
-                )
-            } catch (e: Exception) {
-                // Fallback if bounds calculation fails
-            }
-        }
-    }
-    
-    Box(modifier = modifier) {
-        GoogleMap(
-            modifier = Modifier.fillMaxSize(),
-            cameraPositionState = cameraPositionState,
-            properties = MapProperties(
-                mapType = MapType.NORMAL,
-                isMyLocationEnabled = false
-            ),
-            uiSettings = MapUiSettings(
-                zoomControlsEnabled = false,
-                mapToolbarEnabled = false,
-                compassEnabled = false,
-                myLocationButtonEnabled = false,
-                scrollGesturesEnabled = false,
-                zoomGesturesEnabled = false,
-                tiltGesturesEnabled = false,
-                rotationGesturesEnabled = false
-            )
-        ) {
-            // Draw markers for each point
-            if (broadcast.routePoints.isNotEmpty()) {
-                broadcast.routePoints.forEach { point ->
-                    val position = LatLng(point.latitude, point.longitude)
-                    val markerColor = when (point.type) {
-                        RoutePointType.PICKUP -> BitmapDescriptorFactory.HUE_GREEN
-                        RoutePointType.STOP -> BitmapDescriptorFactory.HUE_YELLOW
-                        RoutePointType.DROP -> BitmapDescriptorFactory.HUE_RED
-                    }
-                    
-                    Marker(
-                        state = MarkerState(position = position),
-                        title = point.displayName,
-                        snippet = point.shortAddress,
-                        icon = BitmapDescriptorFactory.defaultMarker(markerColor)
-                    )
-                }
-            } else {
-                // Legacy - just pickup and drop
-                Marker(
-                    state = MarkerState(position = points.first()),
-                    title = "Pickup",
-                    snippet = broadcast.pickupLocation.address,
-                    icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)
-                )
-                Marker(
-                    state = MarkerState(position = points.last()),
-                    title = "Drop",
-                    snippet = broadcast.dropLocation.address,
-                    icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_RED)
-                )
-            }
-            
-            // Draw polyline connecting points
-            if (points.size >= 2) {
-                Polyline(
-                    points = points,
-                    color = RapidoBlack,
-                    width = 8f
-                )
-            }
-        }
-        
-        // Overlay tap hint
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(8.dp)
-                .background(Color.White.copy(alpha = 0.94f), RoundedCornerShape(4.dp))
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-        ) {
-            Text(
-                "Tap 'Get Directions' for navigation",
-                color = RapidoWhite,
-                fontSize = 10.sp
-            )
         }
     }
 }

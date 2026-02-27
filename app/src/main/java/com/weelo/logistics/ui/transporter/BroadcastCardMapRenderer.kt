@@ -1,21 +1,29 @@
 package com.weelo.logistics.ui.transporter
 
-import androidx.compose.foundation.Canvas
+import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.LatLng
@@ -28,12 +36,16 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
-import java.util.LinkedHashMap
+import com.weelo.logistics.BuildConfig
+import com.weelo.logistics.ui.theme.BroadcastUiTokens
+import java.util.Locale
 import kotlin.math.abs
 
 enum class BroadcastCardMapRenderMode {
-    SNAPSHOT,
-    LIVE
+    LIVE_HERO,
+    STATIC_CARD,
+    STATIC_OVERLAY,
+    FALLBACK_PLACEHOLDER
 }
 
 data class RoutePreviewKey(
@@ -44,75 +56,139 @@ data class RoutePreviewKey(
     val dropLng: Double
 )
 
-data class RoutePreviewSnapshot(
-    val pickup: Offset,
-    val drop: Offset,
-    val bend: Offset
+/**
+ * Kept for call-site compatibility. Static map rendering is now URL/cache based.
+ */
+class RouteMapSnapshotCache(
+    @Suppress("unused")
+    private val maxEntries: Int = 128
 )
 
-class RouteMapSnapshotCache(
-    private val maxEntries: Int = 128
-) {
-    private val cache = object : LinkedHashMap<RoutePreviewKey, RoutePreviewSnapshot>(maxEntries, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<RoutePreviewKey, RoutePreviewSnapshot>?): Boolean {
-            return size > maxEntries
-        }
-    }
-
-    @Synchronized
-    private fun getOrPut(key: RoutePreviewKey): RoutePreviewSnapshot {
-        cache[key]?.let { return it }
-        val created = buildSnapshot(key)
-        cache[key] = created
-        return created
-    }
-
-    @Composable
-    fun rememberSnapshot(key: RoutePreviewKey): RoutePreviewSnapshot {
-        return remember(key) { getOrPut(key) }
-    }
-
-    private fun buildSnapshot(key: RoutePreviewKey): RoutePreviewSnapshot {
-        val seed = key.hashCode()
-        val lngDelta = key.dropLng - key.pickupLng
-        val latDelta = key.dropLat - key.pickupLat
-        val horizontalShift = if (lngDelta >= 0) 0.08f else -0.08f
-        val verticalShift = if (latDelta >= 0) -0.05f else 0.05f
-
-        val pickup = Offset(
-            x = 0.23f + normalized(seed shr 3, -0.06f, 0.06f),
-            y = 0.28f + normalized(seed shr 7, -0.07f, 0.07f)
-        )
-        val drop = Offset(
-            x = 0.76f + normalized(seed shr 11, -0.06f, 0.06f),
-            y = 0.70f + normalized(seed shr 15, -0.07f, 0.07f)
-        )
-
-        val midpoint = Offset((pickup.x + drop.x) / 2f, (pickup.y + drop.y) / 2f)
-        val bend = Offset(
-            x = midpoint.x + horizontalShift + normalized(seed shr 19, -0.08f, 0.08f),
-            y = midpoint.y + verticalShift + normalized(seed shr 23, -0.09f, 0.09f)
-        )
-
-        return RoutePreviewSnapshot(
-            pickup = pickup,
-            drop = drop,
-            bend = bend
-        )
-    }
-
-    private fun normalized(seed: Int, min: Float, max: Float): Float {
-        val range = max - min
-        val ratio = (abs(seed) % 10_000) / 10_000f
-        return min + (ratio * range)
-    }
-}
+private data class StaticMapRequest(
+    val url: String,
+    val cacheKey: String
+)
 
 @Composable
 fun BroadcastCardMapRenderer(
     routeKey: RoutePreviewKey,
     renderMode: BroadcastCardMapRenderMode,
+    @Suppress("UNUSED_PARAMETER")
     snapshotCache: RouteMapSnapshotCache,
+    modifier: Modifier = Modifier
+) {
+    val hasValidCoords = remember(routeKey) {
+        !(routeKey.pickupLat == 0.0 &&
+            routeKey.pickupLng == 0.0 &&
+            routeKey.dropLat == 0.0 &&
+            routeKey.dropLng == 0.0)
+    }
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(BroadcastUiTokens.CardMutedBackground)
+    ) {
+        when {
+            !hasValidCoords || renderMode == BroadcastCardMapRenderMode.FALLBACK_PLACEHOLDER -> {
+                RoutePlaceholder(routeKey = routeKey, modifier = Modifier.fillMaxSize())
+            }
+            renderMode == BroadcastCardMapRenderMode.LIVE_HERO -> {
+                LiveRoutePreview(routeKey = routeKey, modifier = Modifier.fillMaxSize())
+            }
+            else -> {
+                StaticRoutePreview(
+                    routeKey = routeKey,
+                    renderMode = renderMode,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StaticRoutePreview(
+    routeKey: RoutePreviewKey,
+    renderMode: BroadcastCardMapRenderMode,
+    modifier: Modifier = Modifier
+) {
+    val apiKey = remember { BuildConfig.MAPS_API_KEY.trim() }
+    val request = remember(routeKey, renderMode, apiKey) {
+        buildStaticMapRequest(routeKey, renderMode, apiKey)
+    }
+
+    if (request == null) {
+        RoutePlaceholder(routeKey = routeKey, modifier = modifier)
+        return
+    }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    SubcomposeAsyncImage(
+        model = ImageRequest.Builder(context)
+            .data(request.url)
+            .diskCacheKey(request.cacheKey)
+            .memoryCacheKey(request.cacheKey)
+            .crossfade(true)
+            .build(),
+        contentDescription = "Route preview",
+        modifier = modifier,
+        loading = { RoutePlaceholder(routeKey = routeKey, modifier = Modifier.fillMaxSize()) },
+        error = { RoutePlaceholder(routeKey = routeKey, modifier = Modifier.fillMaxSize()) }
+    )
+}
+
+@Composable
+private fun RoutePlaceholder(
+    routeKey: RoutePreviewKey? = null,
+    modifier: Modifier = Modifier
+) {
+    val routeDistanceLabel = remember(routeKey) {
+        routeKey?.let { key ->
+            val km = estimateDistanceKm(
+                key.pickupLat,
+                key.pickupLng,
+                key.dropLat,
+                key.dropLng
+            )
+            if (km > 0.1) String.format(Locale.US, "%.1f km route", km) else null
+        }
+    }
+
+    Box(
+        modifier = modifier.background(BroadcastUiTokens.CardMutedBackground),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(horizontal = 16.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Map,
+                contentDescription = null,
+                tint = BroadcastUiTokens.TertiaryText
+            )
+            Text(
+                text = "Route map unavailable",
+                color = BroadcastUiTokens.SecondaryText,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+            if (!routeDistanceLabel.isNullOrBlank()) {
+                Text(
+                    text = routeDistanceLabel,
+                    color = BroadcastUiTokens.TertiaryText,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveRoutePreview(
+    routeKey: RoutePreviewKey,
     modifier: Modifier = Modifier
 ) {
     val pickup = remember(routeKey.pickupLat, routeKey.pickupLng) {
@@ -121,117 +197,6 @@ fun BroadcastCardMapRenderer(
     val drop = remember(routeKey.dropLat, routeKey.dropLng) {
         LatLng(routeKey.dropLat, routeKey.dropLng)
     }
-
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFFF6F7FB))
-    ) {
-        when {
-            routeKey.pickupLat == 0.0 && routeKey.pickupLng == 0.0 && routeKey.dropLat == 0.0 && routeKey.dropLng == 0.0 -> {
-                SnapshotRoutePreview(
-                    routeKey = routeKey,
-                    snapshotCache = snapshotCache,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            renderMode == BroadcastCardMapRenderMode.LIVE -> {
-                LiveRoutePreview(
-                    routeKey = routeKey,
-                    pickup = pickup,
-                    drop = drop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            else -> {
-                SnapshotRoutePreview(
-                    routeKey = routeKey,
-                    snapshotCache = snapshotCache,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SnapshotRoutePreview(
-    routeKey: RoutePreviewKey,
-    snapshotCache: RouteMapSnapshotCache,
-    modifier: Modifier = Modifier
-) {
-    val snapshot = snapshotCache.rememberSnapshot(routeKey)
-
-    Canvas(modifier = modifier) {
-        val width = size.width
-        val height = size.height
-
-        val gridColor = Color(0xFFE8EBF2)
-        val routeColor = Color(0xFFF2D22E)
-        val routeStroke = 7.dp.toPx()
-
-        for (i in 1..4) {
-            val y = height * (i / 5f)
-            drawLine(
-                color = gridColor,
-                start = Offset(0f, y),
-                end = Offset(width, y),
-                strokeWidth = 1.dp.toPx()
-            )
-        }
-
-        for (i in 1..5) {
-            val x = width * (i / 6f)
-            drawLine(
-                color = gridColor,
-                start = Offset(x, 0f),
-                end = Offset(x, height),
-                strokeWidth = 1.dp.toPx()
-            )
-        }
-
-        val pickupOffset = Offset(width * snapshot.pickup.x, height * snapshot.pickup.y)
-        val dropOffset = Offset(width * snapshot.drop.x, height * snapshot.drop.y)
-        val bendOffset = Offset(width * snapshot.bend.x, height * snapshot.bend.y)
-
-        val routePath = Path().apply {
-            moveTo(pickupOffset.x, pickupOffset.y)
-            quadraticBezierTo(
-                bendOffset.x,
-                bendOffset.y,
-                dropOffset.x,
-                dropOffset.y
-            )
-        }
-
-        drawPath(
-            path = routePath,
-            color = routeColor,
-            style = Stroke(width = routeStroke, cap = StrokeCap.Round)
-        )
-
-        drawCircle(
-            color = Color(0xFF1EB66A),
-            radius = 6.dp.toPx(),
-            center = pickupOffset
-        )
-        drawCircle(
-            color = Color(0xFFFF5B5B),
-            radius = 6.dp.toPx(),
-            center = dropOffset
-        )
-    }
-}
-
-@Composable
-private fun LiveRoutePreview(
-    routeKey: RoutePreviewKey,
-    pickup: LatLng,
-    drop: LatLng,
-    modifier: Modifier = Modifier
-) {
     val cameraPositionState = rememberCameraPositionState()
 
     LaunchedEffect(routeKey) {
@@ -260,7 +225,7 @@ private fun LiveRoutePreview(
         Marker(
             state = MarkerState(position = pickup),
             title = "Pickup",
-            icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)
+            icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_YELLOW)
         )
         Marker(
             state = MarkerState(position = drop),
@@ -269,8 +234,95 @@ private fun LiveRoutePreview(
         )
         Polyline(
             points = listOf(pickup, drop),
-            color = Color(0xFFF2D22E),
+            color = BroadcastUiTokens.PrimaryCta,
             width = 8f
         )
     }
+}
+
+private fun buildStaticMapRequest(
+    routeKey: RoutePreviewKey,
+    renderMode: BroadcastCardMapRenderMode,
+    apiKey: String
+): StaticMapRequest? {
+    if (apiKey.isBlank()) return null
+
+    val size = when (renderMode) {
+        BroadcastCardMapRenderMode.STATIC_OVERLAY -> "960x420"
+        BroadcastCardMapRenderMode.STATIC_CARD -> "720x360"
+        BroadcastCardMapRenderMode.LIVE_HERO,
+        BroadcastCardMapRenderMode.FALLBACK_PLACEHOLDER -> "720x360"
+    }
+
+    val zoom = calculateStaticMapZoom(routeKey)
+    val pickup = formatLatLng(routeKey.pickupLat, routeKey.pickupLng)
+    val drop = formatLatLng(routeKey.dropLat, routeKey.dropLng)
+    val cacheKey = buildString {
+        append("broadcast_static_map:")
+        append(routeKey.broadcastId)
+        append(':')
+        append(pickup)
+        append(':')
+        append(drop)
+        append(':')
+        append(size)
+        append(':')
+        append(zoom)
+        append(":light")
+    }
+
+    val url = Uri.parse("https://maps.googleapis.com/maps/api/staticmap")
+        .buildUpon()
+        .appendQueryParameter("size", size)
+        .appendQueryParameter("scale", "2")
+        .appendQueryParameter("maptype", "roadmap")
+        .appendQueryParameter("zoom", zoom.toString())
+        .appendQueryParameter("style", "feature:poi|visibility:off")
+        .appendQueryParameter("style", "feature:transit|visibility:off")
+        .appendQueryParameter("style", "feature:road|saturation:-15|lightness:10")
+        .appendQueryParameter("markers", "color:0xF2D22E|label:P|$pickup")
+        .appendQueryParameter("markers", "color:0xE05858|label:D|$drop")
+        .appendQueryParameter("path", "color:0xF2D22E|weight:6|$pickup|$drop")
+        .appendQueryParameter("key", apiKey)
+        .build()
+        .toString()
+
+    return StaticMapRequest(url = url, cacheKey = cacheKey)
+}
+
+private fun calculateStaticMapZoom(routeKey: RoutePreviewKey): Int {
+    val latDelta = abs(routeKey.pickupLat - routeKey.dropLat)
+    val lngDelta = abs(routeKey.pickupLng - routeKey.dropLng)
+    val maxDelta = maxOf(latDelta, lngDelta)
+    return when {
+        maxDelta > 3.0 -> 7
+        maxDelta > 1.5 -> 8
+        maxDelta > 0.7 -> 9
+        maxDelta > 0.25 -> 10
+        maxDelta > 0.08 -> 11
+        else -> 12
+    }
+}
+
+private fun formatLatLng(lat: Double, lng: Double): String {
+    return String.format(Locale.US, "%.5f,%.5f", lat, lng)
+}
+
+private fun estimateDistanceKm(
+    startLat: Double,
+    startLng: Double,
+    endLat: Double,
+    endLng: Double
+): Double {
+    val earthRadiusKm = 6371.0
+    val dLat = Math.toRadians(endLat - startLat)
+    val dLng = Math.toRadians(endLng - startLng)
+    val lat1 = Math.toRadians(startLat)
+    val lat2 = Math.toRadians(endLat)
+
+    val a = kotlin.math.sin(dLat / 2) * kotlin.math.sin(dLat / 2) +
+        kotlin.math.sin(dLng / 2) * kotlin.math.sin(dLng / 2) *
+        kotlin.math.cos(lat1) * kotlin.math.cos(lat2)
+    val c = 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
+    return earthRadiusKm * c
 }

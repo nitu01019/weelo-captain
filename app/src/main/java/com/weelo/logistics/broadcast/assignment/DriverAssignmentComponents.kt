@@ -70,9 +70,9 @@ private val DarkGray = BroadcastUiTokens.CardBackground
 private val MediumGray = BroadcastUiTokens.SecondaryText
 private val LightGray = BroadcastUiTokens.TertiaryText
 private val PureWhite = BroadcastUiTokens.PrimaryText
-private val SuccessGreen = BroadcastUiTokens.Success
+private val SuccessGreen = BroadcastUiTokens.PrimaryCta
 private val ErrorRed = BroadcastUiTokens.Error
-private val OnSuccess = Color.White
+private val OnSuccess = BroadcastUiTokens.OnPrimaryCta
 
 @Composable
 fun BroadcastDriverAssignmentContent(
