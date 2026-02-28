@@ -406,6 +406,9 @@ object SocketIOService {
                 timber.log.Timber.i("✅ Socket.IO connected")
                 _connectionState.value = SocketConnectionState.Connected
                 BroadcastOverlayManager.onSocketReconnected()
+                if (BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled) {
+                    BroadcastFlowCoordinator.requestReconcile(force = true)
+                }
                 
                 // AUTO-RECONNECT HEARTBEAT:
                 // If driver was ONLINE before disconnect, auto-restart heartbeat.
@@ -1226,7 +1229,7 @@ object SocketIOService {
                     rawEventName = rawEventName,
                     normalizedId = "",
                     receivedAtMs = receivedAtMs,
-                    payloadVersion = data.optString("payloadVersion").takeIf { it.isNotBlank() },
+                    payloadVersion = resolvePayloadVersion(data, ""),
                     parseWarnings = listOf("missing_id"),
                     broadcast = null
                 )
@@ -1336,7 +1339,7 @@ object SocketIOService {
                 rawEventName = rawEventName,
                 normalizedId = normalizedId,
                 receivedAtMs = receivedAtMs,
-                payloadVersion = data.optString("payloadVersion").takeIf { it.isNotBlank() },
+                payloadVersion = resolvePayloadVersion(data, normalizedId),
                 parseWarnings = parseWarnings,
                 broadcast = notification
             )
@@ -1392,6 +1395,19 @@ object SocketIOService {
             is String -> raw.toLongOrNull()
             else -> null
         }
+    }
+
+    private fun resolvePayloadVersion(data: JSONObject, normalizedId: String): String? {
+        val eventId = resolveOptionalString(data, "eventId")
+        if (!eventId.isNullOrBlank()) return "event:$eventId"
+
+        val eventVersion = resolveOptionalInt(data, "eventVersion")
+        val serverTimeMs = resolveOptionalLong(data, "serverTimeMs")
+        if (eventVersion != null && serverTimeMs != null && serverTimeMs > 0L) {
+            return "v$eventVersion@$serverTimeMs|$normalizedId"
+        }
+
+        return data.optString("payloadVersion").takeIf { it.isNotBlank() }
     }
 
     private fun dismissWindowMs(): Long {
@@ -2050,7 +2066,10 @@ data class BroadcastNotification(
             yourAvailableTrucks = yourAvailableTrucks,
             yourTotalTrucks = yourTotalTrucks,
             trucksStillNeeded = trucksStillNeeded.takeIf { it > 0 } ?: (trucksNeeded - trucksFilled),
-            isPersonalized = isPersonalized
+            isPersonalized = isPersonalized,
+            eventId = eventId,
+            eventVersion = eventVersion,
+            serverTimeMs = serverTimeMs
         )
     }
 }

@@ -1,11 +1,14 @@
 package com.weelo.logistics
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.activity.compose.setContent
@@ -28,7 +31,12 @@ import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
 import com.weelo.logistics.broadcast.BroadcastFlowCoordinator
 import com.weelo.logistics.broadcast.BroadcastOverlayManager
 import com.weelo.logistics.broadcast.BroadcastOverlayScreen
+import com.weelo.logistics.broadcast.BroadcastRecoveryScheduler
+import com.weelo.logistics.broadcast.BroadcastRecoveryTracker
 import com.weelo.logistics.broadcast.BroadcastRolePolicy
+import com.weelo.logistics.broadcast.BroadcastStage
+import com.weelo.logistics.broadcast.BroadcastStatus
+import com.weelo.logistics.broadcast.BroadcastTelemetry
 import com.weelo.logistics.data.model.BroadcastTrip
 import com.weelo.logistics.data.remote.BroadcastNotification
 import com.weelo.logistics.data.remote.NotificationTokenSync
@@ -91,6 +99,7 @@ class MainActivity : ComponentActivity() {
     internal var localeCode by mutableStateOf("en")
         private set
     private var lastHandledNotificationKey: String? = null
+    private var batteryGuidanceDialogVisible = false
 
     /**
      * Hard reset task after logout so system back / recents cannot reopen a
@@ -164,6 +173,7 @@ class MainActivity : ComponentActivity() {
         
         // Initialize BroadcastOverlayManager with context for availability checks
         BroadcastOverlayManager.initialize(this)
+        scheduleBroadcastRecovery(trigger = "main_activity_on_create")
         handleNotificationIntent(intent)
         
         // =====================================================================
@@ -299,6 +309,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        scheduleBroadcastRecovery(trigger = "main_activity_on_resume")
+        maybeShowBatteryOptimizationGuidance()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -371,5 +387,56 @@ class MainActivity : ComponentActivity() {
         if (isFinishing) {
             BroadcastOverlayManager.clearAll()
         }
+    }
+
+    private fun scheduleBroadcastRecovery(trigger: String) {
+        if (!RetrofitClient.isLoggedIn()) return
+        if (!BroadcastRolePolicy.canHandleBroadcastIngress(RetrofitClient.getUserRole())) return
+        BroadcastRecoveryScheduler.schedule(this, trigger)
+    }
+
+    private fun maybeShowBatteryOptimizationGuidance() {
+        if (batteryGuidanceDialogVisible) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        if (!RetrofitClient.isLoggedIn()) return
+        if (!BroadcastRolePolicy.canHandleBroadcastIngress(RetrofitClient.getUserRole())) return
+        if (!BroadcastRecoveryTracker.shouldShowBatteryGuidance(this)) return
+
+        val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val alreadyWhitelisted = powerManager?.isIgnoringBatteryOptimizations(packageName) == true
+        if (alreadyWhitelisted) {
+            BroadcastRecoveryTracker.markBatteryGuidanceShown(this)
+            return
+        }
+
+        batteryGuidanceDialogVisible = true
+        AlertDialog.Builder(this)
+            .setTitle("Improve Broadcast Reliability")
+            .setMessage("Battery optimization may delay new broadcast alerts. Allow background optimization exemption for more reliable notifications.")
+            .setPositiveButton("Open Settings") { _, _ ->
+                BroadcastRecoveryTracker.markBatteryGuidanceShown(this)
+                batteryGuidanceDialogVisible = false
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                }
+                BroadcastTelemetry.record(
+                    stage = BroadcastStage.BATTERY_OPTIMIZATION_GUIDANCE,
+                    status = BroadcastStatus.SUCCESS,
+                    reason = "settings_opened"
+                )
+            }
+            .setNegativeButton("Not Now") { _, _ ->
+                BroadcastRecoveryTracker.markBatteryGuidanceShown(this)
+                batteryGuidanceDialogVisible = false
+                BroadcastTelemetry.record(
+                    stage = BroadcastStage.BATTERY_OPTIMIZATION_GUIDANCE,
+                    status = BroadcastStatus.SKIPPED,
+                    reason = "user_deferred"
+                )
+            }
+            .setOnDismissListener {
+                batteryGuidanceDialogVisible = false
+            }
+            .show()
     }
 }

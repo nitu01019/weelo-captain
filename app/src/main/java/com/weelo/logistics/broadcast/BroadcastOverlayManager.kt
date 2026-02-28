@@ -19,7 +19,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.LinkedHashMap
-import java.util.concurrent.ConcurrentLinkedQueue
+import kotlin.math.abs
 
 /**
  * Global manager for transporter broadcast overlay lifecycle.
@@ -41,8 +41,8 @@ object BroadcastOverlayManager {
     private var appContext: Context? = null
     private var availabilityObserverJob: Job? = null
 
-    private val broadcastQueue = ConcurrentLinkedQueue<QueuedBroadcast>()
-    private val startupBufferQueue = ConcurrentLinkedQueue<BufferedBroadcast>()
+    private val broadcastQueue = mutableListOf<QueuedBroadcast>()
+    private val startupBufferQueue = ArrayDeque<BufferedBroadcast>()
 
     private val dedupeLock = Any()
     private val seenBroadcastIds = object : LinkedHashMap<String, Long>(DEDUPE_LRU_SIZE, 0.75f, true) {
@@ -73,6 +73,7 @@ object BroadcastOverlayManager {
 
     private val _broadcastEvents = MutableSharedFlow<BroadcastEvent>()
     val broadcastEvents: SharedFlow<BroadcastEvent> = _broadcastEvents.asSharedFlow()
+    private var countdownTimerJob: Job? = null
 
     data class BufferedBroadcast(
         val trip: BroadcastTrip,
@@ -98,6 +99,16 @@ object BroadcastOverlayManager {
         val action: BroadcastIngressAction,
         val reason: String? = null
     )
+
+    private val queuePriorityComparator = Comparator<QueuedBroadcast> { a, b ->
+        when {
+            a.expiresAtMs != b.expiresAtMs -> a.expiresAtMs.compareTo(b.expiresAtMs)
+            a.broadcast.farePerTruck != b.broadcast.farePerTruck -> b.broadcast.farePerTruck.compareTo(a.broadcast.farePerTruck)
+            (a.broadcast.eventVersion ?: 0) != (b.broadcast.eventVersion ?: 0) ->
+                (b.broadcast.eventVersion ?: 0).compareTo(a.broadcast.eventVersion ?: 0)
+            else -> b.broadcast.broadcastTime.compareTo(a.broadcast.broadcastTime)
+        }
+    }
 
     sealed class BroadcastEvent {
         data class Accepted(val broadcast: BroadcastTrip) : BroadcastEvent()
@@ -218,8 +229,8 @@ object BroadcastOverlayManager {
             mutex.withLock {
                 val current = _currentBroadcast.value ?: return@withLock
                 val queued = createQueuedBroadcast(current)
-                if (!queued.isExpired() && broadcastQueue.none { it.broadcast.broadcastId == current.broadcastId }) {
-                    broadcastQueue.offer(queued)
+                if (!queued.isExpired()) {
+                    enqueueQueuedBroadcastLocked(queued)
                 }
                 hideOverlayInternal()
                 updateQueueSizeLocked()
@@ -271,21 +282,59 @@ object BroadcastOverlayManager {
         }
     }
 
+    /**
+     * Patch current/queued broadcast payload with newer canonical snapshot.
+     */
+    fun upsertBroadcastData(broadcast: BroadcastTrip) {
+        val id = broadcast.broadcastId.trim()
+        if (id.isEmpty()) return
+        scope.launch {
+            mutex.withLock {
+                val current = _currentBroadcast.value
+                if (current?.broadcastId == id) {
+                    _currentBroadcast.value = broadcast
+                    val queued = createQueuedBroadcast(broadcast, receivedAtMs = current.broadcastTime)
+                    _remainingTimeSeconds.value = (queued.remainingTimeMs() / 1000).toInt()
+                    startCountdownTimer(queued)
+                }
+
+                val allIndex = _allBroadcasts.indexOfFirst { it.broadcastId == id }
+                if (allIndex >= 0) {
+                    _allBroadcasts[allIndex] = broadcast
+                }
+
+                for (index in broadcastQueue.indices) {
+                    val queued = broadcastQueue[index]
+                    if (queued.broadcast.broadcastId == id) {
+                        broadcastQueue[index] = createQueuedBroadcast(
+                            broadcast = broadcast,
+                            receivedAtMs = queued.receivedAtMs
+                        )
+                    }
+                }
+                broadcastQueue.sortWith(queuePriorityComparator)
+                updateCurrentIndexLocked()
+                updateQueueSizeLocked()
+            }
+        }
+    }
+
     fun showPreviousBroadcast() {
         scope.launch {
             mutex.withLock {
                 if (_allBroadcasts.size <= 1) return@withLock
                 val newIndex = if (_currentIndex.value > 0) _currentIndex.value - 1 else _allBroadcasts.lastIndex
                 _currentIndex.value = newIndex
-                val broadcast = _allBroadcasts.getOrNull(newIndex)
-                if (broadcast != null) {
-                    _currentBroadcast.value = broadcast
-                    _isOverlayVisible.value = true
-                    _remainingTimeSeconds.value = (createQueuedBroadcast(broadcast).remainingTimeMs() / 1000).toInt()
+                    val broadcast = _allBroadcasts.getOrNull(newIndex)
+                    if (broadcast != null) {
+                        _currentBroadcast.value = broadcast
+                        _isOverlayVisible.value = true
+                        _remainingTimeSeconds.value = (createQueuedBroadcast(broadcast).remainingTimeMs() / 1000).toInt()
+                        startCountdownTimer(createQueuedBroadcast(broadcast))
+                    }
                 }
             }
         }
-    }
 
     fun showNextBroadcast() {
         scope.launch {
@@ -293,15 +342,16 @@ object BroadcastOverlayManager {
                 if (_allBroadcasts.size <= 1) return@withLock
                 val newIndex = if (_currentIndex.value < _allBroadcasts.lastIndex) _currentIndex.value + 1 else 0
                 _currentIndex.value = newIndex
-                val broadcast = _allBroadcasts.getOrNull(newIndex)
-                if (broadcast != null) {
-                    _currentBroadcast.value = broadcast
-                    _isOverlayVisible.value = true
-                    _remainingTimeSeconds.value = (createQueuedBroadcast(broadcast).remainingTimeMs() / 1000).toInt()
+                    val broadcast = _allBroadcasts.getOrNull(newIndex)
+                    if (broadcast != null) {
+                        _currentBroadcast.value = broadcast
+                        _isOverlayVisible.value = true
+                        _remainingTimeSeconds.value = (createQueuedBroadcast(broadcast).remainingTimeMs() / 1000).toInt()
+                        startCountdownTimer(createQueuedBroadcast(broadcast))
+                    }
                 }
             }
         }
-    }
 
     fun getQueueInfo(): String {
         return "Queue=${broadcastQueue.size}, StartupBuffer=${startupBufferQueue.size}, Current=${_currentBroadcast.value?.broadcastId}, Visible=${_isOverlayVisible.value}, Active=${_allBroadcasts.size}, Availability=${getAvailabilityState()}"
@@ -352,7 +402,17 @@ object BroadcastOverlayManager {
         val now = System.currentTimeMillis()
         val fallbackExpiry = receivedAtMs + DEFAULT_BROADCAST_TIMEOUT_MS
         val broadcastExpiry = broadcast.expiryTime?.takeIf { it > 0L } ?: fallbackExpiry
-        val effectiveExpiry = broadcastExpiry.coerceAtLeast(now + 1_000L)
+        val sourceNow = broadcast.serverTimeMs?.takeIf { it > 0L }
+            ?: broadcast.broadcastTime.takeIf { it > 0L }
+            ?: receivedAtMs
+        val canApplyClockOffset = abs(now - sourceNow) <= 30_000L
+        val effectiveExpiry = if (canApplyClockOffset) {
+            // Align expiry with local clock using server time offset when sourceNow is fresh.
+            (broadcastExpiry + (now - sourceNow)).coerceAtLeast(now + 1_000L)
+        } else {
+            // For stale source timestamps (e.g. createdAt from feed), trust absolute expiry.
+            broadcastExpiry.coerceAtLeast(now + 1_000L)
+        }
         return QueuedBroadcast(
             broadcast = broadcast,
             receivedAtMs = receivedAtMs,
@@ -388,7 +448,7 @@ object BroadcastOverlayManager {
         }
 
         if (startupBufferQueue.size >= MAX_STARTUP_BUFFER_SIZE) {
-            val evicted = startupBufferQueue.poll()
+            val evicted = startupBufferQueue.removeFirstOrNull()
             if (evicted != null) {
                 unregisterBroadcastId(evicted.trip.broadcastId)
                 BroadcastTelemetry.record(
@@ -400,7 +460,7 @@ object BroadcastOverlayManager {
             }
         }
 
-        startupBufferQueue.offer(item)
+        startupBufferQueue.addLast(item)
         updateQueueSizeLocked()
     }
 
@@ -409,7 +469,7 @@ object BroadcastOverlayManager {
             mutex.withLock {
                 var flushed = 0
                 while (true) {
-                    val item = startupBufferQueue.poll() ?: break
+                    val item = startupBufferQueue.removeFirstOrNull() ?: break
                     if (isStartupBufferExpired(item)) {
                         unregisterBroadcastId(item.trip.broadcastId)
                         BroadcastTelemetry.record(
@@ -440,7 +500,7 @@ object BroadcastOverlayManager {
         scope.launch {
             mutex.withLock {
                 while (true) {
-                    val item = startupBufferQueue.poll() ?: break
+                    val item = startupBufferQueue.removeFirstOrNull() ?: break
                     unregisterBroadcastId(item.trip.broadcastId)
                     BroadcastTelemetry.record(
                         stage = BroadcastStage.BROADCAST_GATED,
@@ -492,9 +552,14 @@ object BroadcastOverlayManager {
         if (!forceImmediate && _currentBroadcast.value != null && _isOverlayVisible.value) {
             _allBroadcasts.add(broadcast)
             _totalBroadcastCount.value = _allBroadcasts.size
-            broadcastQueue.offer(queued)
+            enqueueQueuedBroadcastLocked(queued)
             updateQueueSizeLocked()
-            _broadcastEvents.emit(BroadcastEvent.NewBroadcast(broadcast, broadcastQueue.size))
+            _broadcastEvents.emit(
+                BroadcastEvent.NewBroadcast(
+                    broadcast = broadcast,
+                    queuePosition = queuePositionForLocked(broadcast.broadcastId)
+                )
+            )
             BroadcastTelemetry.record(
                 stage = BroadcastStage.BROADCAST_GATED,
                 status = BroadcastStatus.BUFFERED,
@@ -532,12 +597,8 @@ object BroadcastOverlayManager {
     private suspend fun removeEverywhereInternal(broadcastId: String) {
         val currentId = _currentBroadcast.value?.broadcastId
 
-        broadcastQueue
-            .filter { it.broadcast.broadcastId == broadcastId }
-            .forEach { broadcastQueue.remove(it) }
-        startupBufferQueue
-            .filter { it.trip.broadcastId == broadcastId }
-            .forEach { startupBufferQueue.remove(it) }
+        broadcastQueue.removeAll { it.broadcast.broadcastId == broadcastId }
+        startupBufferQueue.removeAll { it.trip.broadcastId == broadcastId }
         _allBroadcasts.removeAll { it.broadcastId == broadcastId }
 
         _totalBroadcastCount.value = _allBroadcasts.size
@@ -585,7 +646,8 @@ object BroadcastOverlayManager {
     }
 
     private fun startCountdownTimer(queuedBroadcast: QueuedBroadcast) {
-        scope.launch {
+        countdownTimerJob?.cancel()
+        countdownTimerJob = scope.launch {
             while (_currentBroadcast.value?.broadcastId == queuedBroadcast.broadcast.broadcastId) {
                 val remainingMs = queuedBroadcast.remainingTimeMs()
                 _remainingTimeSeconds.value = (remainingMs / 1000).toInt()
@@ -603,6 +665,8 @@ object BroadcastOverlayManager {
     }
 
     private fun hideOverlayInternal() {
+        countdownTimerJob?.cancel()
+        countdownTimerJob = null
         _currentBroadcast.value = null
         _isOverlayVisible.value = false
         _remainingTimeSeconds.value = 0
@@ -619,7 +683,9 @@ object BroadcastOverlayManager {
             }
             expired
         }
-        queueExpired.forEach { broadcastQueue.remove(it) }
+        if (queueExpired.isNotEmpty()) {
+            broadcastQueue.removeAll(queueExpired.toSet())
+        }
 
         if (expiredIds.isNotEmpty()) {
             _allBroadcasts.removeAll { broadcast -> expiredIds.contains(broadcast.broadcastId) }
@@ -642,7 +708,9 @@ object BroadcastOverlayManager {
             }
             expired
         }
-        startupExpired.forEach { startupBufferQueue.remove(it) }
+        if (startupExpired.isNotEmpty()) {
+            startupBufferQueue.removeAll(startupExpired.toSet())
+        }
         startupExpiredIds.forEach { id ->
             unregisterBroadcastId(id)
             BroadcastTelemetry.record(
@@ -658,14 +726,15 @@ object BroadcastOverlayManager {
 
     private fun pollNextQueueBroadcastLocked(): QueuedBroadcast? {
         cleanExpiredQueueLocked()
-        while (true) {
-            val next = broadcastQueue.poll() ?: return null
+        while (broadcastQueue.isNotEmpty()) {
+            val next = broadcastQueue.removeAt(0)
             if (!next.isExpired()) {
                 return next
             }
             _allBroadcasts.removeAll { it.broadcastId == next.broadcast.broadcastId }
             _totalBroadcastCount.value = _allBroadcasts.size
         }
+        return null
     }
 
     private fun updateCurrentIndexLocked() {
@@ -679,5 +748,18 @@ object BroadcastOverlayManager {
 
     private fun updateQueueSizeLocked() {
         _queueSize.value = broadcastQueue.size + startupBufferQueue.size
+    }
+
+    private fun enqueueQueuedBroadcastLocked(queued: QueuedBroadcast) {
+        broadcastQueue.removeAll { it.broadcast.broadcastId == queued.broadcast.broadcastId }
+        broadcastQueue.add(queued)
+        if (BroadcastFeatureFlagsRegistry.current().captainBurstQueueModeEnabled) {
+            broadcastQueue.sortWith(queuePriorityComparator)
+        }
+    }
+
+    private fun queuePositionForLocked(broadcastId: String): Int {
+        val idx = broadcastQueue.indexOfFirst { it.broadcast.broadcastId == broadcastId }
+        return if (idx >= 0) idx + 1 else broadcastQueue.size
     }
 }

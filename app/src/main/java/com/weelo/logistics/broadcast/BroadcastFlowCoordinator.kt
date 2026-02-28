@@ -119,6 +119,8 @@ object BroadcastFlowCoordinator {
     private const val INGRESS_CHANNEL_CAPACITY = 1_024
     private const val CANCELLATION_TOMBSTONE_MAX_SIZE = 5_000
     private const val CANCELLATION_TOMBSTONE_TTL_MS = 60_000L
+    private const val DISMISS_LATENCY_TRACK_MAX_SIZE = 5_000
+    private const val SNAPSHOT_RECONCILE_COOLDOWN_MS = 3_000L
     private const val RECONCILE_DEBOUNCE_MS = 350L
     private const val MIN_FETCH_INTERVAL_MS = 1_200L
     private val TERMINAL_ORDER_STATUSES = setOf(
@@ -145,6 +147,10 @@ object BroadcastFlowCoordinator {
     private val ingressQueueDepth = AtomicInteger(0)
     private val cancellationTombstones = LinkedHashMap<String, Long>(CANCELLATION_TOMBSTONE_MAX_SIZE, 0.75f, true)
     private val tombstoneLock = Any()
+    private val dismissLatencyById = LinkedHashMap<String, Long>(DISMISS_LATENCY_TRACK_MAX_SIZE, 0.75f, true)
+    private val dismissLatencyLock = Any()
+    private val snapshotReconcileLock = Any()
+    private val snapshotReconcileAtMs = LinkedHashMap<String, Long>(1_024, 0.75f, true)
 
     private val _feedState = MutableStateFlow(BroadcastFeedState())
     val feedState: StateFlow<BroadcastFeedState> = _feedState.asStateFlow()
@@ -164,6 +170,7 @@ object BroadcastFlowCoordinator {
     private var pendingForceReconcile = false
     private var pendingReconcileAfterActive = false
     private var lastFetchStartedAtMs = 0L
+    private var lastSyncCursor: String? = null
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
@@ -263,10 +270,12 @@ object BroadcastFlowCoordinator {
         activeReconcileJob = null
         pendingForceReconcile = false
         pendingReconcileAfterActive = false
+        lastSyncCursor = null
         drainIngressQueue()
         pendingQueue.clear()
         dedupeIds.clear()
         clearCancellationTombstones()
+        clearDismissLatencyTracking()
         stateStore.clear()
         _feedState.value = BroadcastFeedState(
             availabilityState = AvailabilityState.UNKNOWN,
@@ -754,6 +763,10 @@ object BroadcastFlowCoordinator {
             )
         )
         requestReconcile(force = false)
+        markSeenInRecoveryStore(normalizedId)
+        if (flags.captainReconcileSnapshotEnabled) {
+            triggerSnapshotReconcile(normalizedId)
+        }
     }
 
     private fun runReconcile(forceRefresh: Boolean) {
@@ -797,9 +810,11 @@ object BroadcastFlowCoordinator {
 
                 when (val result = repository.fetchActiveBroadcasts(
                     forceRefresh = forceRefresh,
+                    syncCursor = if (forceRefresh) null else lastSyncCursor,
                     queryMode = BroadcastFetchQueryMode.BOOKINGS_REQUESTS_PRIMARY_WITH_BROADCASTS_FALLBACK
                 )) {
                     is BroadcastResult.Success -> {
+                        lastSyncCursor = result.data.syncCursor ?: lastSyncCursor
                         val before = stateStore.snapshotSorted()
                         val beforeById = before.associateBy { it.broadcastId }
                         val incoming = result.data.broadcasts
@@ -813,6 +828,7 @@ object BroadcastFlowCoordinator {
                             .forEach { stateStore.removeById(it) }
 
                         val after = stateStore.snapshotSorted()
+                        after.forEach { markSeenInRecoveryStore(it.broadcastId) }
                         val afterById = after.associateBy { it.broadcastId }
                         val added = after.filter { it.broadcastId !in beforeById }
                         val updated = after.filter { current ->
@@ -836,7 +852,10 @@ object BroadcastFlowCoordinator {
                         BroadcastTelemetry.record(
                             stage = BroadcastStage.RECONCILE_DONE,
                             status = BroadcastStatus.SUCCESS,
-                            attrs = mapOf("count" to after.size.toString())
+                            attrs = mapOf(
+                                "count" to after.size.toString(),
+                                "syncCursor" to (lastSyncCursor ?: "none")
+                            )
                         )
                     }
 
@@ -892,6 +911,16 @@ object BroadcastFlowCoordinator {
         )
         if (emitDismissEvent) {
             _events.tryEmit(BroadcastCoordinatorEvent.Dismissed(id, reason))
+        }
+        consumeDismissStart(id)?.let { startedAtMs ->
+            BroadcastTelemetry.recordLatency(
+                name = "cancel_to_dismiss_ms",
+                ms = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(0L),
+                attrs = mapOf(
+                    "normalizedId" to id,
+                    "removeReason" to reason
+                )
+            )
         }
         BroadcastTelemetry.record(
             stage = BroadcastStage.DISMISSED,
@@ -962,6 +991,108 @@ object BroadcastFlowCoordinator {
         return "${eventClass.name}|$normalizedId|$semanticVersion"
     }
 
+    private fun markSeenInRecoveryStore(broadcastId: String) {
+        val context = appContext ?: return
+        BroadcastRecoveryTracker.markSeen(context, broadcastId)
+    }
+
+    private fun shouldRunSnapshotReconcile(broadcastId: String, nowMs: Long): Boolean {
+        synchronized(snapshotReconcileLock) {
+            val lastRun = snapshotReconcileAtMs[broadcastId] ?: 0L
+            if (nowMs - lastRun < SNAPSHOT_RECONCILE_COOLDOWN_MS) {
+                return false
+            }
+            snapshotReconcileAtMs[broadcastId] = nowMs
+            if (snapshotReconcileAtMs.size > 1_024) {
+                val iterator = snapshotReconcileAtMs.entries.iterator()
+                if (iterator.hasNext()) {
+                    iterator.next()
+                    iterator.remove()
+                }
+            }
+            return true
+        }
+    }
+
+    private fun isSnapshotTerminalState(state: String): Boolean {
+        return when (state.lowercase(Locale.US)) {
+            "cancelled", "canceled", "expired", "accepted", "completed", "fully_filled", "closed" -> true
+            else -> false
+        }
+    }
+
+    private fun triggerSnapshotReconcile(broadcastId: String) {
+        if (broadcastId.isBlank()) return
+        val context = appContext ?: return
+        val nowMs = System.currentTimeMillis()
+        if (!shouldRunSnapshotReconcile(broadcastId, nowMs)) return
+
+        scope.launch {
+            val repository = BroadcastRepository.getInstance(context)
+            when (val snapshotResult = repository.getBroadcastSnapshot(broadcastId)) {
+                is BroadcastResult.Success -> {
+                    val snapshot = snapshotResult.data
+                    lastSyncCursor = snapshot.syncCursor ?: lastSyncCursor
+                    val state = snapshot.state.lowercase(Locale.US)
+                    if (isSnapshotTerminalState(state)) {
+                        addCancellationTombstone(broadcastId)
+                        removeEverywhere(
+                            id = broadcastId,
+                            reason = "snapshot_$state",
+                            emitDismissEvent = true
+                        )
+                        return@launch
+                    }
+
+                    val snapshotTrip = snapshot.broadcast ?: run {
+                        requestReconcile(force = true)
+                        return@launch
+                    }
+                    val previous = stateStore.upsert(snapshotTrip)
+                    val delta = if (previous == null) {
+                        BroadcastStateDelta(added = listOf(snapshotTrip))
+                    } else if (previous != snapshotTrip) {
+                        BroadcastStateDelta(updated = listOf(snapshotTrip))
+                    } else {
+                        null
+                    }
+                    publishState(
+                        delta = delta,
+                        pendingCount = pendingQueue.size(),
+                        availabilityState = _feedState.value.availabilityState,
+                        isReconciling = _feedState.value.isReconciling
+                    )
+                    BroadcastOverlayManager.upsertBroadcastData(snapshotTrip)
+                    markSeenInRecoveryStore(snapshotTrip.broadcastId)
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.RECONCILE_DONE,
+                        status = BroadcastStatus.SUCCESS,
+                        reason = "snapshot_reconciled",
+                        attrs = mapOf(
+                            "id" to snapshotTrip.broadcastId,
+                            "syncCursor" to (snapshot.syncCursor ?: "none"),
+                            "dispatchState" to snapshot.dispatchState
+                        )
+                    )
+                }
+
+                is BroadcastResult.Error -> {
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.RECONCILE_DONE,
+                        status = BroadcastStatus.FAILED,
+                        reason = "snapshot_failed",
+                        attrs = mapOf(
+                            "id" to broadcastId,
+                            "error" to snapshotResult.message
+                        )
+                    )
+                }
+
+                is BroadcastResult.Loading -> Unit
+            }
+        }
+    }
+
     private fun startDismissSequence(
         id: String,
         reason: String,
@@ -969,6 +1100,7 @@ object BroadcastFlowCoordinator {
         customerName: String
     ) {
         if (id.isBlank()) return
+        markDismissStart(id)
         _dismissed.tryEmit(
             BroadcastDismissedNotification(
                 broadcastId = id,
@@ -1033,6 +1165,32 @@ object BroadcastFlowCoordinator {
     private fun clearCancellationTombstones() {
         synchronized(tombstoneLock) {
             cancellationTombstones.clear()
+        }
+    }
+
+    private fun markDismissStart(id: String, nowMs: Long = System.currentTimeMillis()) {
+        if (id.isBlank()) return
+        synchronized(dismissLatencyLock) {
+            dismissLatencyById[id] = nowMs
+            while (dismissLatencyById.size > DISMISS_LATENCY_TRACK_MAX_SIZE) {
+                val iterator = dismissLatencyById.entries.iterator()
+                if (!iterator.hasNext()) break
+                iterator.next()
+                iterator.remove()
+            }
+        }
+    }
+
+    private fun consumeDismissStart(id: String): Long? {
+        if (id.isBlank()) return null
+        synchronized(dismissLatencyLock) {
+            return dismissLatencyById.remove(id)
+        }
+    }
+
+    private fun clearDismissLatencyTracking() {
+        synchronized(dismissLatencyLock) {
+            dismissLatencyById.clear()
         }
     }
 

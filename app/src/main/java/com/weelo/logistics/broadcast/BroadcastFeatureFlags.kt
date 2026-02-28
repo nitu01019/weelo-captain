@@ -18,6 +18,12 @@ interface BroadcastFeatureFlags {
     val captainCanonicalCancelAliasesEnabled: Boolean
     /** When false, the map section in broadcast overlay is completely hidden. */
     val broadcastOverlayMapEnabled: Boolean
+    /** When enabled, coordinator performs snapshot reconcile to patch stale broadcast payloads. */
+    val captainReconcileSnapshotEnabled: Boolean
+    /** Enables map-safe/fallback rendering path for overlay critical actions. */
+    val captainOverlaySafeRenderEnabled: Boolean
+    /** Enables deterministic burst queue policy for multiple concurrent broadcasts. */
+    val captainBurstQueueModeEnabled: Boolean
 }
 
 interface BroadcastFeatureFlagProvider {
@@ -34,7 +40,10 @@ data class DefaultBroadcastFeatureFlags(
     override val broadcastOverlayWatchdogEnabled: Boolean = true,
     override val captainCancelEventStrictDedupeEnabled: Boolean = true,
     override val captainCanonicalCancelAliasesEnabled: Boolean = true,
-    override val broadcastOverlayMapEnabled: Boolean = true
+    override val broadcastOverlayMapEnabled: Boolean = true,
+    override val captainReconcileSnapshotEnabled: Boolean = true,
+    override val captainOverlaySafeRenderEnabled: Boolean = true,
+    override val captainBurstQueueModeEnabled: Boolean = true
 ) : BroadcastFeatureFlags
 
 private class SharedPrefsBroadcastFeatureFlagProvider(
@@ -51,7 +60,10 @@ private class SharedPrefsBroadcastFeatureFlagProvider(
             broadcastOverlayWatchdogEnabled = prefs.getBoolean(KEY_OVERLAY_WATCHDOG_ENABLED, true),
             captainCancelEventStrictDedupeEnabled = prefs.getBoolean(KEY_CAPTAIN_CANCEL_EVENT_STRICT_DEDUPE_ENABLED, true),
             captainCanonicalCancelAliasesEnabled = prefs.getBoolean(KEY_CAPTAIN_CANONICAL_CANCEL_ALIASES_ENABLED, true),
-            broadcastOverlayMapEnabled = prefs.getBoolean(KEY_OVERLAY_MAP_ENABLED, true)
+            broadcastOverlayMapEnabled = prefs.getBoolean(KEY_OVERLAY_MAP_ENABLED, true),
+            captainReconcileSnapshotEnabled = prefs.getBoolean(KEY_CAPTAIN_RECONCILE_SNAPSHOT_ENABLED, true),
+            captainOverlaySafeRenderEnabled = prefs.getBoolean(KEY_CAPTAIN_OVERLAY_SAFE_RENDER_ENABLED, true),
+            captainBurstQueueModeEnabled = prefs.getBoolean(KEY_CAPTAIN_BURST_QUEUE_MODE_ENABLED, true)
         )
     }
 
@@ -66,6 +78,9 @@ private class SharedPrefsBroadcastFeatureFlagProvider(
         const val KEY_CAPTAIN_CANCEL_EVENT_STRICT_DEDUPE_ENABLED = "captain_cancel_event_strict_dedupe_enabled"
         const val KEY_CAPTAIN_CANONICAL_CANCEL_ALIASES_ENABLED = "captain_canonical_cancel_aliases_enabled"
         const val KEY_OVERLAY_MAP_ENABLED = "broadcast_overlay_map_enabled"
+        const val KEY_CAPTAIN_RECONCILE_SNAPSHOT_ENABLED = "captain_reconcile_snapshot_enabled"
+        const val KEY_CAPTAIN_OVERLAY_SAFE_RENDER_ENABLED = "captain_overlay_safe_render_enabled"
+        const val KEY_CAPTAIN_BURST_QUEUE_MODE_ENABLED = "captain_burst_queue_mode_enabled"
     }
 }
 

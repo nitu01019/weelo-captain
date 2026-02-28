@@ -87,7 +87,8 @@ interface BroadcastApiService {
         @Query("transporterId") transporterId: String? = null,
         @Query("driverId") driverId: String? = null,
         @Query("vehicleType") vehicleType: String? = null,
-        @Query("maxDistance") maxDistance: Double? = null
+        @Query("maxDistance") maxDistance: Double? = null,
+        @Query("syncCursor") syncCursor: String? = null
     ): Response<BroadcastListResponse>
     
     /**
@@ -267,7 +268,8 @@ interface BroadcastApiService {
      */
     @GET("bookings/requests/active")
     suspend fun getActiveTruckRequests(
-        @Header("Authorization") token: String
+        @Header("Authorization") token: String,
+        @Query("syncCursor") syncCursor: String? = null
     ): Response<ActiveTruckRequestsResponse>
     
     /**
@@ -320,6 +322,15 @@ interface BroadcastApiService {
         @Header("Authorization") token: String,
         @Path("orderId") orderId: String
     ): Response<OrderDetailsResponse>
+
+    /**
+     * Snapshot endpoint used for stale payload reconciliation.
+     */
+    @GET("bookings/orders/{orderId}/broadcast-snapshot")
+    suspend fun getBroadcastSnapshot(
+        @Header("Authorization") token: String,
+        @Path("orderId") orderId: String
+    ): Response<BroadcastSnapshotResponse>
 }
 
 // ============== Request/Response Data Classes ==============
@@ -336,6 +347,7 @@ data class BroadcastListResponse(
     val success: Boolean,
     val broadcasts: List<BroadcastResponseData>? = null,
     val count: Int? = null,
+    val syncCursor: String? = null,
     val error: ApiErrorInfo? = null
 )
 
@@ -563,7 +575,9 @@ data class ActiveTruckRequestsResponse(
 
 data class ActiveTruckRequestsData(
     val orders: List<OrderWithRequests>,
-    val count: Int
+    val count: Int,
+    val syncCursor: String? = null,
+    val snapshotUnchanged: Boolean = false
 )
 
 data class OrderWithRequests(
@@ -656,4 +670,24 @@ data class OrderSummaryInfo(
     val trucksFilled: Int,
     val trucksSearching: Int,
     val trucksExpired: Int
+)
+
+data class BroadcastSnapshotResponse(
+    val success: Boolean,
+    val data: BroadcastSnapshotData?,
+    val error: ApiErrorInfo? = null
+)
+
+data class BroadcastSnapshotData(
+    val orderId: String,
+    val state: String,
+    val status: String,
+    val dispatchState: String,
+    val reasonCode: String?,
+    val eventVersion: Int,
+    val serverTimeMs: Long,
+    val expiresAtMs: Long,
+    val syncCursor: String?,
+    val order: OrderInfo,
+    val requests: List<TruckRequestInfo>
 )

@@ -295,7 +295,13 @@ data class BroadcastTrip(
     val trucksStillNeeded: Int = 0,
     
     /** Whether this is a personalized broadcast (true) or generic (false) */
-    val isPersonalized: Boolean = false
+    val isPersonalized: Boolean = false,
+
+    /** Lifecycle metadata used for strict dedupe/order/reconcile. */
+    val eventId: String? = null,
+    val eventVersion: Int? = null,
+    val serverTimeMs: Long? = null,
+    val reasonCode: String? = null
 ) {
     /**
      * Get remaining trucks needed across all types

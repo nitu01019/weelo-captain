@@ -153,6 +153,7 @@ dependencies {
     // Lifecycle
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.6.2")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     
     // Hilt for Dependency Injection - Temporarily disabled
     // implementation("com.google.dagger:hilt-android:2.48")
