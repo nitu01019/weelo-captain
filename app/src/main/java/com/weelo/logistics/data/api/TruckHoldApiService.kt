@@ -12,7 +12,7 @@ import retrofit2.http.*
  * API endpoints for the BookMyShow-style truck holding system.
  * 
  * FLOW:
- * 1. holdTrucks() → Trucks held for 15 seconds
+ * 1. holdTrucks() → Trucks held for server-configured hold window
  * 2. confirmHold() → Trucks assigned permanently  
  * 3. releaseHold() → Trucks released back to pool
  * 
@@ -21,12 +21,13 @@ import retrofit2.http.*
 interface TruckHoldApiService {
     
     /**
-     * Hold trucks for selection
+     * Hold trucks for selection (server-configured hold window)
      * POST /api/v1/truck-hold/hold
      */
     @POST("truck-hold/hold")
     suspend fun holdTrucks(
-        @Body request: HoldTrucksRequest
+        @Body request: HoldTrucksRequest,
+        @Header("X-Idempotency-Key") idempotencyKey: String? = null
     ): Response<HoldTrucksResponse>
     
     /**
@@ -65,8 +66,21 @@ interface TruckHoldApiService {
      */
     @POST("truck-hold/release")
     suspend fun releaseHold(
-        @Body request: ReleaseHoldRequest
+        @Body request: ReleaseHoldRequest,
+        @Header("X-Idempotency-Key") idempotencyKey: String? = null
     ): Response<ReleaseHoldResponse>
+
+    /**
+     * Get active hold for current transporter and vehicle key.
+     * Used for timeout/uncertain-response reconciliation.
+     * GET /api/v1/truck-hold/my-active
+     */
+    @GET("truck-hold/my-active")
+    suspend fun getMyActiveHold(
+        @Query("orderId") orderId: String,
+        @Query("vehicleType") vehicleType: String,
+        @Query("vehicleSubtype") vehicleSubtype: String
+    ): Response<MyActiveHoldResponse>
     
     /**
      * Get real-time truck availability for an order
@@ -157,7 +171,19 @@ data class HoldData(
     val expiresAt: String,
     
     @SerializedName("heldQuantity")
-    val heldQuantity: Int
+    val heldQuantity: Int,
+
+    @SerializedName("holdState")
+    val holdState: String? = null,
+
+    @SerializedName("eventId")
+    val eventId: String? = null,
+
+    @SerializedName("eventVersion")
+    val eventVersion: Int? = null,
+
+    @SerializedName("serverTimeMs")
+    val serverTimeMs: Long? = null
 )
 
 data class ConfirmHoldResponse(
@@ -228,7 +254,47 @@ data class ReleaseHoldResponse(
     val success: Boolean,
     
     @SerializedName("message")
-    val message: String?
+    val message: String?,
+
+    @SerializedName("error")
+    val error: ApiError? = null
+)
+
+data class MyActiveHoldResponse(
+    @SerializedName("success")
+    val success: Boolean,
+
+    @SerializedName("data")
+    val data: MyActiveHoldData?,
+
+    @SerializedName("message")
+    val message: String? = null,
+
+    @SerializedName("error")
+    val error: ApiError? = null
+)
+
+data class MyActiveHoldData(
+    @SerializedName("holdId")
+    val holdId: String,
+
+    @SerializedName("orderId")
+    val orderId: String,
+
+    @SerializedName("vehicleType")
+    val vehicleType: String,
+
+    @SerializedName("vehicleSubtype")
+    val vehicleSubtype: String,
+
+    @SerializedName("quantity")
+    val quantity: Int,
+
+    @SerializedName("expiresAt")
+    val expiresAt: String,
+
+    @SerializedName("status")
+    val status: String
 )
 
 data class OrderAvailabilityResponse(

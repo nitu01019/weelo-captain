@@ -6,6 +6,7 @@ import com.weelo.logistics.data.api.AcceptBroadcastRequest
 import com.weelo.logistics.data.api.AcceptBroadcastResponse
 import com.weelo.logistics.data.api.BroadcastListResponse
 import com.weelo.logistics.data.api.BroadcastResponseData
+import com.weelo.logistics.data.api.BroadcastSnapshotData
 import com.weelo.logistics.data.api.OrderWithRequests
 import com.weelo.logistics.data.model.RequestedVehicle
 import com.weelo.logistics.data.api.DeclineBroadcastRequest
@@ -33,6 +34,8 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Locale
+import java.util.UUID
+import java.io.IOException
 import retrofit2.Response
 import timber.log.Timber
 
@@ -84,7 +87,21 @@ data class CachedBroadcastList(
     val broadcasts: List<BroadcastTrip>,
     val totalCount: Int,
     val lastUpdated: Long,
+    val syncCursor: String? = null,
     val isStale: Boolean = false
+)
+
+data class BroadcastSnapshot(
+    val orderId: String,
+    val state: String,
+    val status: String,
+    val dispatchState: String,
+    val reasonCode: String?,
+    val eventVersion: Int,
+    val serverTimeMs: Long,
+    val expiresAtMs: Long,
+    val syncCursor: String?,
+    val broadcast: BroadcastTrip?
 )
 
 enum class BroadcastFetchQueryMode {
@@ -123,6 +140,8 @@ class BroadcastRepository private constructor(
     
     // Track accepted broadcasts locally for immediate UI feedback
     private val acceptedBroadcastIds = mutableSetOf<String>()
+    private val holdAttemptIdempotencyKeys = mutableMapOf<String, String>()
+    private val releaseAttemptIdempotencyKeys = mutableMapOf<String, String>()
 
     private data class ActiveBroadcastFetchAttempt(
         val response: Response<BroadcastListResponse>,
@@ -135,6 +154,8 @@ class BroadcastRepository private constructor(
         val path: String,
         val code: Int,
         val success: Boolean,
+        val syncCursor: String? = null,
+        val snapshotUnchanged: Boolean = false,
         val reason: String? = null,
         val rawError: String? = null
     )
@@ -178,7 +199,8 @@ class BroadcastRepository private constructor(
         token: String,
         effectiveUserId: String,
         vehicleType: String?,
-        queryMode: BroadcastFetchQueryMode
+        queryMode: BroadcastFetchQueryMode,
+        syncCursor: String?
     ): ActiveBroadcastFetchAttempt {
         val role = RetrofitClient.getUserRole()?.lowercase(Locale.US)
         if (queryMode == BroadcastFetchQueryMode.LEGACY_DRIVER_ONLY || role != "transporter") {
@@ -186,7 +208,8 @@ class BroadcastRepository private constructor(
                 response = broadcastApi.getActiveBroadcasts(
                     token = token,
                     driverId = effectiveUserId,
-                    vehicleType = vehicleType
+                    vehicleType = vehicleType,
+                    syncCursor = syncCursor
                 ),
                 path = "legacy_driver_query"
             )
@@ -196,7 +219,8 @@ class BroadcastRepository private constructor(
             token = token,
             transporterId = effectiveUserId,
             driverId = null,
-            vehicleType = vehicleType
+            vehicleType = vehicleType,
+            syncCursor = syncCursor
         )
         if (transporterResponse.isSuccessful && transporterResponse.body()?.success == true) {
             return ActiveBroadcastFetchAttempt(
@@ -217,7 +241,8 @@ class BroadcastRepository private constructor(
             token = token,
             transporterId = null,
             driverId = effectiveUserId,
-            vehicleType = vehicleType
+            vehicleType = vehicleType,
+            syncCursor = syncCursor
         )
         return ActiveBroadcastFetchAttempt(
             response = legacyFallbackResponse,
@@ -236,26 +261,59 @@ class BroadcastRepository private constructor(
 
     private suspend fun fetchActiveBroadcastsFromBookingsRequests(
         token: String,
-        vehicleType: String?
+        vehicleType: String?,
+        syncCursor: String?
     ): ActiveBookingsRequestsFetchAttempt {
-        val response = broadcastApi.getActiveTruckRequests(token = token)
+        val response = broadcastApi.getActiveTruckRequests(
+            token = token,
+            syncCursor = syncCursor
+        )
         if (response.isSuccessful && response.body()?.success == true) {
-            val mapped = mapActiveRequestsToBroadcastTrips(response.body()?.data?.orders.orEmpty())
-            val filtered = if (vehicleType.isNullOrBlank()) {
-                mapped
-            } else {
-                val normalizedVehicleType = vehicleType.trim().lowercase(Locale.US)
-                mapped.filter { trip ->
-                    val category = trip.vehicleType ?: return@filter false
-                    category.id.lowercase(Locale.US) == normalizedVehicleType ||
-                        category.name.lowercase(Locale.US).contains(normalizedVehicleType)
+            val data = response.body()?.data
+            val responseSyncCursor = data?.syncCursor
+            if (data?.snapshotUnchanged == true) {
+                val cached = cachedBroadcasts
+                val cachedFiltered = cached?.broadcasts?.let { filterByVehicleType(it, vehicleType) }
+                if (cachedFiltered != null) {
+                    return ActiveBookingsRequestsFetchAttempt(
+                        broadcasts = cachedFiltered,
+                        path = "bookings_requests_primary",
+                        code = response.code(),
+                        success = true,
+                        syncCursor = responseSyncCursor,
+                        snapshotUnchanged = true,
+                        reason = "snapshot_unchanged_cache"
+                    )
+                }
+
+                if (!syncCursor.isNullOrBlank()) {
+                    val fullSnapshotResponse = broadcastApi.getActiveTruckRequests(
+                        token = token,
+                        syncCursor = null
+                    )
+                    if (fullSnapshotResponse.isSuccessful && fullSnapshotResponse.body()?.success == true) {
+                        val fullMapped = mapActiveRequestsToBroadcastTrips(fullSnapshotResponse.body()?.data?.orders.orEmpty())
+                        return ActiveBookingsRequestsFetchAttempt(
+                            broadcasts = filterByVehicleType(fullMapped, vehicleType),
+                            path = "bookings_requests_primary_refetch_full",
+                            code = fullSnapshotResponse.code(),
+                            success = true,
+                            syncCursor = fullSnapshotResponse.body()?.data?.syncCursor,
+                            snapshotUnchanged = false,
+                            reason = "snapshot_unchanged_refetched_full"
+                        )
+                    }
                 }
             }
+
+            val mapped = mapActiveRequestsToBroadcastTrips(data?.orders.orEmpty())
+            val filtered = filterByVehicleType(mapped, vehicleType)
             return ActiveBookingsRequestsFetchAttempt(
                 broadcasts = filtered,
                 path = "bookings_requests_primary",
                 code = response.code(),
-                success = true
+                success = true,
+                syncCursor = responseSyncCursor
             )
         }
 
@@ -270,9 +328,14 @@ class BroadcastRepository private constructor(
             path = "bookings_requests_primary",
             code = response.code(),
             success = false,
+            syncCursor = null,
             reason = "bookings_requests_unavailable",
             rawError = rawError
         )
+    }
+
+    private fun responseSyncCursorFromBookingsAttempt(attempt: ActiveBookingsRequestsFetchAttempt): String? {
+        return attempt.syncCursor
     }
 
     private fun shouldFallbackToBroadcastsActive(attempt: ActiveBookingsRequestsFetchAttempt): Boolean {
@@ -285,6 +348,19 @@ class BroadcastRepository private constructor(
             error.contains("route not found") ||
             error.contains("unsupported") ||
             error.contains("not implemented")
+    }
+
+    private fun filterByVehicleType(
+        broadcasts: List<BroadcastTrip>,
+        vehicleType: String?
+    ): List<BroadcastTrip> {
+        if (vehicleType.isNullOrBlank()) return broadcasts
+        val normalizedVehicleType = vehicleType.trim().lowercase(Locale.US)
+        return broadcasts.filter { trip ->
+            val category = trip.vehicleType ?: return@filter false
+            category.id.lowercase(Locale.US) == normalizedVehicleType ||
+                category.name.lowercase(Locale.US).contains(normalizedVehicleType)
+        }
     }
     
     /**
@@ -299,14 +375,16 @@ class BroadcastRepository private constructor(
         forceRefresh: Boolean = false,
         vehicleType: String? = null,
         userId: String? = null,
+        syncCursor: String? = null,
         queryMode: BroadcastFetchQueryMode = BroadcastFetchQueryMode.BOOKINGS_REQUESTS_PRIMARY_WITH_BROADCASTS_FALLBACK
     ): BroadcastResult<CachedBroadcastList> = withContext(Dispatchers.IO) {
         cacheMutex.withLock {
             // Check cache validity (30 seconds for real-time data)
             val cached = cachedBroadcasts
             val now = System.currentTimeMillis()
+            val cacheCursorMatches = syncCursor.isNullOrBlank() || cached?.syncCursor == syncCursor
             
-            if (!forceRefresh && cached != null && (now - cached.lastUpdated) < cacheValidityMs) {
+            if (!forceRefresh && cached != null && (now - cached.lastUpdated) < cacheValidityMs && cacheCursorMatches) {
                 // Return cached data if still valid
                 timber.log.Timber.d("✅ Returning cached broadcasts (${cached.broadcasts.size} items)")
                 _broadcastsState.value = BroadcastResult.Success(cached)
@@ -339,6 +417,7 @@ class BroadcastRepository private constructor(
                 var resolvedReason: String? = null
                 var resolvedHttpCode = 200
                 var resolvedError: String? = null
+                var resolvedSyncCursor: String? = syncCursor
                 var mappedBroadcasts: List<BroadcastTrip>? = null
                 var aliasFallbackUsed = false
 
@@ -348,7 +427,8 @@ class BroadcastRepository private constructor(
                 ) {
                     val bookingsAttempt = fetchActiveBroadcastsFromBookingsRequests(
                         token = normalizedToken,
-                        vehicleType = vehicleType
+                        vehicleType = vehicleType,
+                        syncCursor = syncCursor
                     )
                     resolvedPath = bookingsAttempt.path
                     resolvedReason = bookingsAttempt.reason
@@ -356,19 +436,22 @@ class BroadcastRepository private constructor(
 
                     if (bookingsAttempt.success) {
                         mappedBroadcasts = bookingsAttempt.broadcasts
+                        resolvedSyncCursor = responseSyncCursorFromBookingsAttempt(bookingsAttempt)
                     } else if (shouldFallbackToBroadcastsActive(bookingsAttempt)) {
                         aliasFallbackUsed = true
                         val fallbackAttempt = fetchActiveBroadcastsWithQueryPolicy(
                             token = normalizedToken,
                             effectiveUserId = effectiveUserId,
                             vehicleType = vehicleType,
-                            queryMode = BroadcastFetchQueryMode.TRANSPORTER_PRIMARY_WITH_FALLBACK
+                            queryMode = BroadcastFetchQueryMode.TRANSPORTER_PRIMARY_WITH_FALLBACK,
+                            syncCursor = syncCursor
                         )
                         val fallbackResponse = fallbackAttempt.response
                         resolvedPath = "${bookingsAttempt.path}->${fallbackAttempt.path}"
                         resolvedReason = fallbackAttempt.reason ?: "bookings_primary_fallback_to_broadcasts"
                         resolvedHttpCode = fallbackResponse.code()
                         if (fallbackResponse.isSuccessful && fallbackResponse.body()?.success == true) {
+                            resolvedSyncCursor = fallbackResponse.body()?.syncCursor ?: resolvedSyncCursor
                             mappedBroadcasts = fallbackResponse.body()
                                 ?.broadcasts
                                 .orEmpty()
@@ -387,13 +470,15 @@ class BroadcastRepository private constructor(
                         token = normalizedToken,
                         effectiveUserId = effectiveUserId,
                         vehicleType = vehicleType,
-                        queryMode = queryMode
+                        queryMode = queryMode,
+                        syncCursor = syncCursor
                     )
                     val response = fetchAttempt.response
                     resolvedPath = fetchAttempt.path
                     resolvedReason = fetchAttempt.reason
                     resolvedHttpCode = response.code()
                     if (response.isSuccessful && response.body()?.success == true) {
+                        resolvedSyncCursor = response.body()?.syncCursor ?: resolvedSyncCursor
                         mappedBroadcasts = response.body()
                             ?.broadcasts
                             .orEmpty()
@@ -441,6 +526,7 @@ class BroadcastRepository private constructor(
                         broadcasts = sortedBroadcasts,
                         totalCount = sortedBroadcasts.size,
                         lastUpdated = now,
+                        syncCursor = resolvedSyncCursor,
                         isStale = false
                     )
                     
@@ -502,7 +588,7 @@ class BroadcastRepository private constructor(
         try {
             val token = RetrofitClient.getAccessToken()
             if (token.isNullOrEmpty()) {
-                return@withContext BroadcastResult.Error("Not authenticated", 401)
+                return@withContext BroadcastResult.Error("Session expired. Please login again.", 401, "AUTH_EXPIRED")
             }
             
             val response = broadcastApi.getBroadcastById(
@@ -522,6 +608,42 @@ class BroadcastRepository private constructor(
             
         } catch (e: Exception) {
             timber.log.Timber.e(e, "❌ Error fetching broadcast $broadcastId")
+            return@withContext BroadcastResult.Error(e.message ?: "Network error")
+        }
+    }
+
+    suspend fun getBroadcastSnapshot(orderId: String): BroadcastResult<BroadcastSnapshot> = withContext(Dispatchers.IO) {
+        try {
+            val token = RetrofitClient.getAccessToken()
+            if (token.isNullOrEmpty()) {
+                return@withContext BroadcastResult.Error("Not authenticated", 401)
+            }
+
+            val response = broadcastApi.getBroadcastSnapshot(
+                token = "Bearer $token",
+                orderId = orderId
+            )
+            if (!response.isSuccessful || response.body()?.success != true || response.body()?.data == null) {
+                val errorMsg = response.body()?.error?.message ?: "Failed to fetch broadcast snapshot"
+                return@withContext BroadcastResult.Error(errorMsg, response.code())
+            }
+
+            val data = response.body()!!.data!!
+            val snapshot = BroadcastSnapshot(
+                orderId = data.orderId,
+                state = data.state,
+                status = data.status,
+                dispatchState = data.dispatchState,
+                reasonCode = data.reasonCode,
+                eventVersion = data.eventVersion,
+                serverTimeMs = data.serverTimeMs,
+                expiresAtMs = data.expiresAtMs,
+                syncCursor = data.syncCursor,
+                broadcast = mapBroadcastSnapshotToTrip(data)
+            )
+            return@withContext BroadcastResult.Success(snapshot)
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "❌ Error fetching broadcast snapshot $orderId")
             return@withContext BroadcastResult.Error(e.message ?: "Network error")
         }
     }
@@ -616,6 +738,39 @@ class BroadcastRepository private constructor(
 
         val fallback = fallbackMessage?.takeIf { it.isNotBlank() } ?: "Failed to accept broadcast"
         return fallback to null
+    }
+
+    private fun buildHoldAttemptKey(
+        orderId: String,
+        vehicleType: String,
+        vehicleSubtype: String,
+        quantity: Int
+    ): String {
+        return "${orderId.trim().lowercase(Locale.US)}|${vehicleType.trim().lowercase(Locale.US)}|${vehicleSubtype.trim().lowercase(Locale.US)}|$quantity"
+    }
+
+    private suspend fun reconcileActiveHold(
+        orderId: String,
+        vehicleType: String,
+        vehicleSubtype: String
+    ): HoldTrucksResult? {
+        return try {
+            val response = truckHoldApi.getMyActiveHold(
+                orderId = orderId,
+                vehicleType = vehicleType,
+                vehicleSubtype = vehicleSubtype
+            )
+            if (!response.isSuccessful) return null
+            val data = response.body()?.data ?: return null
+            HoldTrucksResult(
+                holdId = data.holdId,
+                expiresAt = data.expiresAt,
+                heldQuantity = data.quantity
+            )
+        } catch (e: Exception) {
+            timber.log.Timber.w(e, "⚠️ Active hold reconciliation failed")
+            null
+        }
     }
     
     /**
@@ -763,6 +918,8 @@ class BroadcastRepository private constructor(
     fun clearCache() {
         cachedBroadcasts = null
         acceptedBroadcastIds.clear()
+        holdAttemptIdempotencyKeys.clear()
+        releaseAttemptIdempotencyKeys.clear()
         _broadcastsState.value = BroadcastResult.Loading
         timber.log.Timber.d("🗑️ Cache cleared")
     }
@@ -773,6 +930,22 @@ class BroadcastRepository private constructor(
 
     private fun mapActiveRequestsToBroadcastTrips(orders: List<OrderWithRequests>): List<BroadcastTrip> {
         return orders.map { group -> mapOrderGroupToBroadcastTrip(group) }
+    }
+
+    private fun mapBroadcastSnapshotToTrip(snapshot: BroadcastSnapshotData): BroadcastTrip {
+        val mapped = mapOrderGroupToBroadcastTrip(
+            OrderWithRequests(
+                order = snapshot.order,
+                requests = snapshot.requests
+            )
+        )
+        return mapped.copy(
+            broadcastTime = snapshot.serverTimeMs.takeIf { it > 0 } ?: mapped.broadcastTime,
+            expiryTime = snapshot.expiresAtMs.takeIf { it > 0 } ?: mapped.expiryTime,
+            eventVersion = snapshot.eventVersion,
+            serverTimeMs = snapshot.serverTimeMs,
+            reasonCode = snapshot.reasonCode
+        )
     }
 
     private fun mapOrderGroupToBroadcastTrip(group: OrderWithRequests): BroadcastTrip {
@@ -953,7 +1126,7 @@ class BroadcastRepository private constructor(
     // =========================================================================
     // 
     // FLOW:
-    // 1. holdTrucks() → Trucks held for 15 seconds (Redis lock)
+    // 1. holdTrucks() → Trucks held for server-configured hold window
     // 2. confirmHoldWithAssignments() → Assign vehicles + drivers atomically
     // 3. releaseHold() → Release if user cancels or timeout
     //
@@ -964,7 +1137,7 @@ class BroadcastRepository private constructor(
     private val truckHoldApi by lazy { RetrofitClient.truckHoldApi }
     
     /**
-     * Hold trucks for selection (15-second lock)
+     * Hold trucks for selection (server-configured hold window)
      * 
      * IMPORTANT: This is the first step in the acceptance flow.
      * Trucks are locked atomically via Redis - only ONE transporter wins.
@@ -981,10 +1154,12 @@ class BroadcastRepository private constructor(
         vehicleSubtype: String,
         quantity: Int
     ): BroadcastResult<HoldTrucksResult> = withContext(Dispatchers.IO) {
+        val attemptKey = buildHoldAttemptKey(orderId, vehicleType, vehicleSubtype, quantity)
+        val idempotencyKey = holdAttemptIdempotencyKeys.getOrPut(attemptKey) { UUID.randomUUID().toString() }
         try {
             val token = RetrofitClient.getAccessToken()
             if (token.isNullOrEmpty()) {
-                return@withContext BroadcastResult.Error("Not authenticated", 401)
+                return@withContext BroadcastResult.Error("Session expired. Please login again.", 401, "AUTH_EXPIRED")
             }
             
             timber.log.Timber.i("🔒 Holding $quantity trucks: $vehicleType $vehicleSubtype for order $orderId")
@@ -996,11 +1171,13 @@ class BroadcastRepository private constructor(
                 quantity = quantity
             )
             
-            val response = truckHoldApi.holdTrucks(request)
+            val response = truckHoldApi.holdTrucks(request, idempotencyKey)
             
             if (response.isSuccessful && response.body()?.success == true) {
                 val data = response.body()!!.data!!
                 timber.log.Timber.i("✅ Trucks held! HoldID: ${data.holdId}, Expires: ${data.expiresAt}")
+                // Hold attempt completed; next user-initiated hold should use a fresh key.
+                holdAttemptIdempotencyKeys.remove(attemptKey)
                 
                 return@withContext BroadcastResult.Success(
                     HoldTrucksResult(
@@ -1010,16 +1187,56 @@ class BroadcastRepository private constructor(
                     )
                 )
             } else {
+                if (response.code() == 401) {
+                    return@withContext BroadcastResult.Error("Session expired. Please login again.", 401, "AUTH_EXPIRED")
+                }
+
                 val errorMsg = response.body()?.error?.message 
                     ?: response.body()?.message
                     ?: response.errorBody()?.string()
                     ?: "Failed to hold trucks"
                 val errorCode = response.body()?.error?.code
+
+                if (
+                    errorCode == "ALREADY_HOLDING" ||
+                    errorCode == "HOLD_ALREADY_ACTIVE" ||
+                    response.code() == 408 ||
+                    response.code() == 504 ||
+                    response.code() >= 500
+                ) {
+                    val recovered = reconcileActiveHold(orderId, vehicleType, vehicleSubtype)
+                    if (recovered != null) {
+                        timber.log.Timber.i("✅ Recovered active hold after uncertain hold outcome: ${recovered.holdId}")
+                        holdAttemptIdempotencyKeys.remove(attemptKey)
+                        return@withContext BroadcastResult.Success(recovered)
+                    }
+                }
+
+                if (errorCode == "IDEMPOTENCY_CONFLICT") {
+                    holdAttemptIdempotencyKeys.remove(attemptKey)
+                } else if (
+                    response.code() in 400..499 &&
+                    response.code() != 408 &&
+                    errorCode != "ALREADY_HOLDING" &&
+                    errorCode != "HOLD_ALREADY_ACTIVE"
+                ) {
+                    // Deterministic client/business errors should not pin future attempts to old keys.
+                    holdAttemptIdempotencyKeys.remove(attemptKey)
+                }
+
                 timber.log.Timber.e("❌ Hold failed: $errorMsg (code: $errorCode)")
-                return@withContext BroadcastResult.Error(errorMsg, response.code())
+                return@withContext BroadcastResult.Error(errorMsg, response.code(), errorCode)
             }
             
         } catch (e: Exception) {
+            if (e is IOException) {
+                val recovered = reconcileActiveHold(orderId, vehicleType, vehicleSubtype)
+                if (recovered != null) {
+                    timber.log.Timber.i("✅ Recovered active hold after network failure: ${recovered.holdId}")
+                    holdAttemptIdempotencyKeys.remove(attemptKey)
+                    return@withContext BroadcastResult.Success(recovered)
+                }
+            }
             timber.log.Timber.e(e, "❌ Network error holding trucks")
             return@withContext BroadcastResult.Error(e.message ?: "Network error")
         }
@@ -1077,6 +1294,9 @@ class BroadcastRepository private constructor(
                     )
                 )
             } else {
+                if (response.code() == 401) {
+                    return@withContext BroadcastResult.Error("Session expired. Please login again.", 401, "AUTH_EXPIRED")
+                }
                 val error = response.body()?.error
                 val errorMsg = error?.message 
                     ?: response.body()?.message
@@ -1110,26 +1330,41 @@ class BroadcastRepository private constructor(
      * @param holdId The hold ID to release
      */
     suspend fun releaseHold(holdId: String): BroadcastResult<Boolean> = withContext(Dispatchers.IO) {
+        val normalizedHoldId = holdId.trim()
+        val idempotencyKey = releaseAttemptIdempotencyKeys.getOrPut(normalizedHoldId) { UUID.randomUUID().toString() }
         try {
             val token = RetrofitClient.getAccessToken()
             if (token.isNullOrEmpty()) {
-                return@withContext BroadcastResult.Error("Not authenticated", 401)
+                return@withContext BroadcastResult.Error("Session expired. Please login again.", 401, "AUTH_EXPIRED")
             }
             
-            timber.log.Timber.i("🔓 Releasing hold: $holdId")
+            timber.log.Timber.i("🔓 Releasing hold: $normalizedHoldId")
             
-            val request = com.weelo.logistics.data.api.ReleaseHoldRequest(holdId = holdId)
-            val response = truckHoldApi.releaseHold(request)
+            val request = com.weelo.logistics.data.api.ReleaseHoldRequest(holdId = normalizedHoldId)
+            val response = truckHoldApi.releaseHold(request, idempotencyKey)
             
             if (response.isSuccessful && response.body()?.success == true) {
                 timber.log.Timber.i("✅ Hold released")
+                releaseAttemptIdempotencyKeys.remove(normalizedHoldId)
                 return@withContext BroadcastResult.Success(true)
             } else {
-                val errorMsg = response.body()?.message 
+                if (response.code() == 401) {
+                    return@withContext BroadcastResult.Error("Session expired. Please login again.", 401, "AUTH_EXPIRED")
+                }
+
+                val apiCode = response.body()?.error?.code
+                if (apiCode == "HOLD_NOT_FOUND") {
+                    timber.log.Timber.i("ℹ️ Hold not found on release; treating as already released")
+                    releaseAttemptIdempotencyKeys.remove(normalizedHoldId)
+                    return@withContext BroadcastResult.Success(true)
+                }
+
+                val errorMsg = response.body()?.error?.message
+                    ?: response.body()?.message 
                     ?: response.errorBody()?.string()
                     ?: "Failed to release hold"
                 timber.log.Timber.e("❌ Release failed: $errorMsg")
-                return@withContext BroadcastResult.Error(errorMsg, response.code())
+                return@withContext BroadcastResult.Error(errorMsg, response.code(), apiCode)
             }
             
         } catch (e: Exception) {

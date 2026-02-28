@@ -107,6 +107,7 @@ class BroadcastAssignmentCoordinator(
             "BROADCAST_FILLED" -> "This booking has already been fully assigned."
             "BROADCAST_EXPIRED" -> "This booking request has expired."
             "INVALID_ASSIGNMENT_STATE" -> "Assignment state changed. Please retry."
+            "AUTH_EXPIRED" -> "Session expired. Please login again."
             else -> fallbackMessage
         }
     }

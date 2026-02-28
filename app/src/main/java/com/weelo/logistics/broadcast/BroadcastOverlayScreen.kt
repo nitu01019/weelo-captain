@@ -140,6 +140,7 @@ fun BroadcastOverlayScreen(
     val isVisible by BroadcastOverlayManager.isOverlayVisible.collectAsState()
     val currentBroadcast by BroadcastOverlayManager.currentBroadcast.collectAsState()
     val remainingSeconds by BroadcastOverlayManager.remainingTimeSeconds.collectAsState()
+    val queueSize by BroadcastOverlayManager.queueSize.collectAsState()
     val currentIndex by BroadcastOverlayManager.currentIndex.collectAsState()
     val totalCount by BroadcastOverlayManager.totalBroadcastCount.collectAsState()
     
@@ -187,6 +188,29 @@ fun BroadcastOverlayScreen(
                 soundService.playBroadcastSound()
             }
         }
+    }
+
+    LaunchedEffect(currentBroadcast?.broadcastId) {
+        val broadcast = currentBroadcast ?: return@LaunchedEffect
+        val safeMapEnabled = BroadcastFeatureFlagsRegistry.current().captainOverlaySafeRenderEnabled
+        val hasCoords = broadcast.pickupLocation.latitude != 0.0 &&
+            broadcast.pickupLocation.longitude != 0.0 &&
+            broadcast.dropLocation.latitude != 0.0 &&
+            broadcast.dropLocation.longitude != 0.0
+        val renderResult = when {
+            safeMapEnabled && hasCoords -> "success"
+            !hasCoords -> "map_failed_fallback"
+            else -> "compose_failed_fallback"
+        }
+        BroadcastTelemetry.record(
+            stage = BroadcastStage.BROADCAST_OVERLAY_RENDER,
+            status = if (renderResult == "success") BroadcastStatus.SUCCESS else BroadcastStatus.BUFFERED,
+            reason = renderResult,
+            attrs = mapOf(
+                "broadcastId" to broadcast.broadcastId,
+                "overlayRenderResult" to renderResult
+            )
+        )
     }
     
     // =========================================================================
@@ -283,7 +307,7 @@ fun BroadcastOverlayScreen(
                         status = TruckHoldStatus.ACCEPTED,
                         isHolding = false
                     ))
-                    Toast.makeText(context, "✓ $quantity truck(s) held", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "✓ $quantity truck(s) reserved. Assign drivers to finalize.", Toast.LENGTH_SHORT).show()
                 }
                 is BroadcastResult.Error -> {
                     timber.log.Timber.e("❌ Hold failed: ${result.message}")
@@ -404,6 +428,7 @@ fun BroadcastOverlayScreen(
                         remainingSeconds = remainingSeconds,
                         currentIndex = currentIndex,
                         totalCount = totalCount,
+                        pendingQueueCount = queueSize,
                         truckHoldStates = truckHoldStates,
                         isSubmitEnabled = isSubmitEnabled && dismissInfo == null,
                         totalAcceptedQuantity = totalAcceptedQuantity,
@@ -1036,6 +1061,7 @@ private fun BroadcastOverlayContentNew(
     remainingSeconds: Int,
     currentIndex: Int,
     totalCount: Int,
+    pendingQueueCount: Int,
     truckHoldStates: Map<String, TruckHoldState>,
     isSubmitEnabled: Boolean,
     totalAcceptedQuantity: Int,
@@ -1136,6 +1162,16 @@ private fun BroadcastOverlayContentNew(
                     color = RapidoYellow,
                     letterSpacing = 2.sp
                 )
+
+                if (pendingQueueCount > 0) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "+$pendingQueueCount waiting",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = RapidoLightGray
+                    )
+                }
                 
                 // Navigation (if multiple broadcasts) - Smooth animated carousel
                 if (showNavigation) {
@@ -1280,13 +1316,46 @@ private fun BroadcastOverlayContentNew(
                 }
 
                 item {
-                    BroadcastMiniRouteMapCard(
-                        broadcast = broadcast,
-                        title = "Route map",
-                        subtitle = "${broadcast.distance.toInt()} km",
-                        mapHeight = 136.dp,
-                        renderMode = BroadcastCardMapRenderMode.STATIC_OVERLAY
-                    )
+                    val hasCoords = broadcast.pickupLocation.latitude != 0.0 &&
+                        broadcast.pickupLocation.longitude != 0.0 &&
+                        broadcast.dropLocation.latitude != 0.0 &&
+                        broadcast.dropLocation.longitude != 0.0
+                    val safeMapEnabled = BroadcastFeatureFlagsRegistry.current().captainOverlaySafeRenderEnabled
+
+                    if (safeMapEnabled && hasCoords) {
+                        BroadcastMiniRouteMapCard(
+                            broadcast = broadcast,
+                            title = "Route map",
+                            subtitle = "${broadcast.distance.toInt()} km",
+                            mapHeight = 136.dp,
+                            renderMode = BroadcastCardMapRenderMode.STATIC_OVERLAY
+                        )
+                    } else {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = BroadcastUiTokens.CardMutedBackground,
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 16.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = "Route map unavailable",
+                                    color = BroadcastUiTokens.SecondaryText,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = "${broadcast.pickupLocation.address} → ${broadcast.dropLocation.address}",
+                                    color = BroadcastUiTokens.TertiaryText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
                 }
                 
                 // ========== ROUTE (Compact) ==========

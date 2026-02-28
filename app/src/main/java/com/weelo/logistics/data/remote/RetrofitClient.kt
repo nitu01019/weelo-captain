@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.runBlocking
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
@@ -437,11 +438,29 @@ object RetrofitClient {
     /**
      * Synchronous token refresh
      */
-    @Suppress("UNUSED_PARAMETER")
     private fun refreshTokenSync(refreshToken: String): Boolean {
-        // TODO: Implement actual token refresh API call
-        // For now, return false to force re-login
-        return false
+        return try {
+            val response = runBlocking {
+                authApi.refreshToken(RefreshTokenRequest(refreshToken))
+            }
+            val body = response.body()
+            val newAccessToken = body?.data?.accessToken
+
+            if (response.isSuccessful && body?.success == true && !newAccessToken.isNullOrBlank()) {
+                securePrefs?.edit()?.apply {
+                    putString(KEY_ACCESS_TOKEN, newAccessToken)
+                    apply()
+                }
+                _authState.value = true
+                true
+            } else {
+                timber.log.Timber.w("⚠️ refreshTokenSync failed: code=${response.code()} success=${body?.success}")
+                false
+            }
+        } catch (e: Exception) {
+            timber.log.Timber.w(e, "⚠️ refreshTokenSync exception")
+            false
+        }
     }
     
     // ==========================================================================
