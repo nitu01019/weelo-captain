@@ -217,7 +217,11 @@ object BroadcastFlowCoordinator {
                 val id = dismissed.broadcastId.trim()
                 if (id.isEmpty()) return@collect
                 val reason = dismissed.reason.ifBlank { "dismissed" }
-                addCancellationTombstone(id)
+                val cancellationVersionToken = buildCancellationVersionToken(
+                    eventVersion = dismissed.eventVersion,
+                    serverTimeMs = dismissed.serverTimeMs
+                )
+                addCancellationTombstone(id, cancellationVersionToken)
                 startDismissSequence(
                     id = id,
                     reason = reason,
@@ -479,7 +483,7 @@ object BroadcastFlowCoordinator {
             return
         }
 
-        if (eventClass == BroadcastEventClass.NEW_BROADCAST && hasCancellationTombstone(normalizedId)) {
+        if (eventClass == BroadcastEventClass.NEW_BROADCAST && hasCancellationTombstone(normalizedId, envelope.payloadVersion)) {
             emitDrop(
                 id = normalizedId,
                 source = envelope.source,
@@ -507,7 +511,7 @@ object BroadcastFlowCoordinator {
         }
 
         if (eventClass == BroadcastEventClass.CANCEL || eventClass == BroadcastEventClass.EXPIRE) {
-            addCancellationTombstone(normalizedId)
+            addCancellationTombstone(normalizedId, envelope.payloadVersion)
             startDismissSequence(
                 id = normalizedId,
                 reason = envelope.rawEventName,
@@ -1035,7 +1039,7 @@ object BroadcastFlowCoordinator {
                     lastSyncCursor = snapshot.syncCursor ?: lastSyncCursor
                     val state = snapshot.state.lowercase(Locale.US)
                     if (isSnapshotTerminalState(state)) {
-                        addCancellationTombstone(broadcastId)
+                        addCancellationTombstone(broadcastId, "v${snapshot.eventVersion}")
                         removeEverywhere(
                             id = broadcastId,
                             reason = "snapshot_$state",
@@ -1139,10 +1143,29 @@ object BroadcastFlowCoordinator {
         }
     }
 
-    private fun addCancellationTombstone(id: String, nowMs: Long = System.currentTimeMillis()) {
+    private fun tombstoneKey(id: String, payloadVersion: String?): String {
+        val normalizedId = id.trim()
+        val normalizedVersion = payloadVersion?.trim().orEmpty()
+        return if (normalizedVersion.isBlank()) normalizedId else "$normalizedId|$normalizedVersion"
+    }
+
+    private fun buildCancellationVersionToken(eventVersion: Int?, serverTimeMs: Long?): String? {
+        if (eventVersion == null || serverTimeMs == null || serverTimeMs <= 0L) return null
+        return "v${eventVersion}@${serverTimeMs}"
+    }
+
+    private fun addCancellationTombstone(
+        id: String,
+        payloadVersion: String? = null,
+        nowMs: Long = System.currentTimeMillis()
+    ) {
         if (id.isBlank()) return
         synchronized(tombstoneLock) {
             pruneExpiredTombstonesLocked(nowMs)
+            val key = tombstoneKey(id, payloadVersion)
+            cancellationTombstones[key] = nowMs
+            // Keep base-key tombstone for backward compatibility payloads that
+            // do not include version metadata.
             cancellationTombstones[id] = nowMs
             while (cancellationTombstones.size > CANCELLATION_TOMBSTONE_MAX_SIZE) {
                 val iterator = cancellationTombstones.entries.iterator()
@@ -1153,12 +1176,21 @@ object BroadcastFlowCoordinator {
         }
     }
 
-    private fun hasCancellationTombstone(id: String, nowMs: Long = System.currentTimeMillis()): Boolean {
+    private fun hasCancellationTombstone(
+        id: String,
+        payloadVersion: String? = null,
+        nowMs: Long = System.currentTimeMillis()
+    ): Boolean {
         if (id.isBlank()) return false
         synchronized(tombstoneLock) {
             pruneExpiredTombstonesLocked(nowMs)
-            val ts = cancellationTombstones[id] ?: return false
-            return nowMs - ts <= CANCELLATION_TOMBSTONE_TTL_MS
+            val exactKey = tombstoneKey(id, payloadVersion)
+            val exactTs = cancellationTombstones[exactKey]
+            if (exactTs != null && nowMs - exactTs <= CANCELLATION_TOMBSTONE_TTL_MS) {
+                return true
+            }
+            val fallbackTs = cancellationTombstones[id] ?: return false
+            return nowMs - fallbackTs <= CANCELLATION_TOMBSTONE_TTL_MS
         }
     }
 

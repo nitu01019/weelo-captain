@@ -57,7 +57,8 @@ interface TruckHoldApiService {
      */
     @POST("truck-hold/confirm-with-assignments")
     suspend fun confirmHoldWithAssignments(
-        @Body request: ConfirmHoldWithAssignmentsRequest
+        @Body request: ConfirmHoldWithAssignmentsRequest,
+        @Header("X-Idempotency-Key") idempotencyKey: String? = null
     ): Response<ConfirmHoldWithAssignmentsResponse>
     
     /**
