@@ -937,7 +937,9 @@ object SocketIOService {
                 customerName = data.optString("customerName", ""),
                 customerPhone = data.optString("customerPhone", ""),
                 pickupAddress = data.optString("pickupAddress", ""),
-                dropAddress = data.optString("dropAddress", "")
+                dropAddress = data.optString("dropAddress", ""),
+                compensationAmount = data.optDouble("compensationAmount", 0.0),
+                settlementState = data.optString("settlementState", "none")
             )
 
             serviceScope.launch {
@@ -2273,7 +2275,9 @@ data class TripCancelledNotification(
     val customerName: String = "",
     val customerPhone: String = "",
     val pickupAddress: String = "",
-    val dropAddress: String = ""
+    val dropAddress: String = "",
+    val compensationAmount: Double = 0.0,
+    val settlementState: String = "none"
 )
 
 // =============================================================================

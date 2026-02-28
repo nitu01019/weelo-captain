@@ -142,6 +142,7 @@ class BroadcastRepository private constructor(
     private val acceptedBroadcastIds = mutableSetOf<String>()
     private val holdAttemptIdempotencyKeys = mutableMapOf<String, String>()
     private val releaseAttemptIdempotencyKeys = mutableMapOf<String, String>()
+    private val confirmAttemptIdempotencyKeys = mutableMapOf<String, String>()
 
     private data class ActiveBroadcastFetchAttempt(
         val response: Response<BroadcastListResponse>,
@@ -920,6 +921,7 @@ class BroadcastRepository private constructor(
         acceptedBroadcastIds.clear()
         holdAttemptIdempotencyKeys.clear()
         releaseAttemptIdempotencyKeys.clear()
+        confirmAttemptIdempotencyKeys.clear()
         _broadcastsState.value = BroadcastResult.Loading
         timber.log.Timber.d("🗑️ Cache cleared")
     }
@@ -1260,16 +1262,18 @@ class BroadcastRepository private constructor(
         holdId: String,
         assignments: List<Pair<String, String>> // vehicleId to driverId
     ): BroadcastResult<ConfirmHoldResult> = withContext(Dispatchers.IO) {
+        val normalizedHoldId = holdId.trim()
+        val idempotencyKey = confirmAttemptIdempotencyKeys.getOrPut(normalizedHoldId) { UUID.randomUUID().toString() }
         try {
             val token = RetrofitClient.getAccessToken()
             if (token.isNullOrEmpty()) {
                 return@withContext BroadcastResult.Error("Not authenticated", 401)
             }
             
-            timber.log.Timber.i("📤 Confirming hold $holdId with ${assignments.size} assignments")
+            timber.log.Timber.i("📤 Confirming hold $normalizedHoldId with ${assignments.size} assignments (idempotency: $idempotencyKey)")
             
             val request = com.weelo.logistics.data.api.ConfirmHoldWithAssignmentsRequest(
-                holdId = holdId,
+                holdId = normalizedHoldId,
                 assignments = assignments.map { (vehicleId, driverId) ->
                     com.weelo.logistics.data.api.VehicleDriverAssignment(
                         vehicleId = vehicleId,
@@ -1278,11 +1282,14 @@ class BroadcastRepository private constructor(
                 }
             )
             
-            val response = truckHoldApi.confirmHoldWithAssignments(request)
+            val response = truckHoldApi.confirmHoldWithAssignments(request, idempotencyKey)
             
             if (response.isSuccessful && response.body()?.success == true) {
                 val data = response.body()!!.data!!
                 timber.log.Timber.i("✅ Hold confirmed! Assignments: ${data.assignmentIds.size}, Trips: ${data.tripIds.size}")
+                
+                // Confirm completed; clear key so next confirm uses fresh one
+                confirmAttemptIdempotencyKeys.remove(normalizedHoldId)
                 
                 // Invalidate cache
                 invalidateCache()
@@ -1302,6 +1309,13 @@ class BroadcastRepository private constructor(
                     ?: response.body()?.message
                     ?: response.errorBody()?.string()
                     ?: "Failed to confirm hold"
+
+                val apiCode = error?.code
+
+                // Clear key on deterministic client errors (except timeout/conflict)
+                if (response.code() in 400..499 && response.code() != 408 && response.code() != 409) {
+                    confirmAttemptIdempotencyKeys.remove(normalizedHoldId)
+                }
                     
                 // Include failed assignments in error message if available
                 val failedInfo = error?.failedAssignments?.joinToString("\n") { 
@@ -1314,11 +1328,12 @@ class BroadcastRepository private constructor(
                 return@withContext BroadcastResult.Error(
                     message = fullError,
                     code = response.code(),
-                    apiCode = error?.code
+                    apiCode = apiCode
                 )
             }
             
         } catch (e: Exception) {
+            // Keep idempotency key for transient/network errors — retry should use same key
             timber.log.Timber.e(e, "❌ Network error confirming hold")
             return@withContext BroadcastResult.Error(e.message ?: "Network error")
         }
