@@ -108,6 +108,9 @@ class BroadcastAssignmentCoordinator(
             "BROADCAST_EXPIRED" -> "This booking request has expired."
             "INVALID_ASSIGNMENT_STATE" -> "Assignment state changed. Please retry."
             "AUTH_EXPIRED" -> "Session expired. Please login again."
+            "PARTIAL_FILL_TIMEOUT" -> "Some trucks were confirmed, but remaining trucks timed out."
+            "NO_TRANSPORTER_ACCEPTANCE" -> "Request timed out because no transporter accepted in time."
+            "NO_ONLINE_TRANSPORTERS" -> "No transporters were available nearby for the remaining trucks."
             else -> fallbackMessage
         }
     }
