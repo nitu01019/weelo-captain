@@ -358,6 +358,7 @@ class BroadcastRepository private constructor(
         if (vehicleType.isNullOrBlank()) return broadcasts
         val normalizedVehicleType = vehicleType.trim().lowercase(Locale.US)
         return broadcasts.filter { trip ->
+            @Suppress("DEPRECATION")
             val category = trip.vehicleType ?: return@filter false
             category.id.lowercase(Locale.US) == normalizedVehicleType ||
                 category.name.lowercase(Locale.US).contains(normalizedVehicleType)
@@ -414,11 +415,10 @@ class BroadcastRepository private constructor(
 
                 timber.log.Timber.d("📡 Fetching broadcasts for user: $effectiveUserId")
                 val normalizedToken = "Bearer $token"
-                var resolvedPath = "broadcasts_active"
-                var resolvedReason: String? = null
-                var resolvedHttpCode = 200
+                var resolvedPath: String
+                var resolvedReason: String?
+                var resolvedHttpCode: Int
                 var resolvedError: String? = null
-                var resolvedSyncCursor: String? = syncCursor
                 var mappedBroadcasts: List<BroadcastTrip>? = null
                 var aliasFallbackUsed = false
 
@@ -437,7 +437,6 @@ class BroadcastRepository private constructor(
 
                     if (bookingsAttempt.success) {
                         mappedBroadcasts = bookingsAttempt.broadcasts
-                        resolvedSyncCursor = responseSyncCursorFromBookingsAttempt(bookingsAttempt)
                     } else if (shouldFallbackToBroadcastsActive(bookingsAttempt)) {
                         aliasFallbackUsed = true
                         val fallbackAttempt = fetchActiveBroadcastsWithQueryPolicy(
@@ -452,7 +451,6 @@ class BroadcastRepository private constructor(
                         resolvedReason = fallbackAttempt.reason ?: "bookings_primary_fallback_to_broadcasts"
                         resolvedHttpCode = fallbackResponse.code()
                         if (fallbackResponse.isSuccessful && fallbackResponse.body()?.success == true) {
-                            resolvedSyncCursor = fallbackResponse.body()?.syncCursor ?: resolvedSyncCursor
                             mappedBroadcasts = fallbackResponse.body()
                                 ?.broadcasts
                                 .orEmpty()
@@ -479,7 +477,6 @@ class BroadcastRepository private constructor(
                     resolvedReason = fetchAttempt.reason
                     resolvedHttpCode = response.code()
                     if (response.isSuccessful && response.body()?.success == true) {
-                        resolvedSyncCursor = response.body()?.syncCursor ?: resolvedSyncCursor
                         mappedBroadcasts = response.body()
                             ?.broadcasts
                             .orEmpty()
@@ -527,7 +524,7 @@ class BroadcastRepository private constructor(
                         broadcasts = sortedBroadcasts,
                         totalCount = sortedBroadcasts.size,
                         lastUpdated = now,
-                        syncCursor = resolvedSyncCursor,
+                        syncCursor = syncCursor,
                         isStale = false
                     )
                     

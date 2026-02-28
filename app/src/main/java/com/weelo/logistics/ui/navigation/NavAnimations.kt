@@ -276,6 +276,7 @@ object NavAnimations {
         }
     }
 
+    @Suppress("UNUSED_PARAMETER")
     fun enterForRoute(initialRoute: String?, targetRoute: String?): EnterTransition =
         when (routeProfile(targetRoute)) {
             RouteProfile.AUTH -> fadeIn
@@ -284,6 +285,7 @@ object NavAnimations {
             RouteProfile.STANDARD -> slideInFromRight
         }
 
+    @Suppress("UNUSED_PARAMETER")
     fun exitForRoute(initialRoute: String?, targetRoute: String?): ExitTransition =
         when (routeProfile(targetRoute)) {
             RouteProfile.AUTH -> fadeOut
@@ -292,6 +294,7 @@ object NavAnimations {
             RouteProfile.STANDARD -> slideOutToLeft
         }
 
+    @Suppress("UNUSED_PARAMETER")
     fun popEnterForRoute(initialRoute: String?, targetRoute: String?): EnterTransition =
         when (routeProfile(targetRoute)) {
             RouteProfile.AUTH -> fadeIn
@@ -300,6 +303,7 @@ object NavAnimations {
             RouteProfile.STANDARD -> slideInFromLeft
         }
 
+    @Suppress("UNUSED_PARAMETER")
     fun popExitForRoute(initialRoute: String?, targetRoute: String?): ExitTransition =
         when (routeProfile(initialRoute)) {
             RouteProfile.AUTH -> fadeOut

@@ -505,7 +505,7 @@ class GPSTrackingService : Service() {
             copy
         }
         try {
-            val token = RetrofitClient.getAccessToken() ?: run {
+            RetrofitClient.getAccessToken() ?: run {
                 timber.log.Timber.w("⚠️ No token for sync flush — re-queueing ${batchToSend.size} points")
                 retryBatch(batchToSend)
                 return
