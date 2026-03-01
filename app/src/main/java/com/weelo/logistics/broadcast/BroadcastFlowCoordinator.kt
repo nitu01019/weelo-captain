@@ -1,5 +1,6 @@
 package com.weelo.logistics.broadcast
 
+import com.weelo.logistics.data.api.DispatchReplayEventData
 import android.content.Context
 import com.weelo.logistics.data.model.BroadcastTrip
 import com.weelo.logistics.data.remote.RetrofitClient
@@ -171,6 +172,7 @@ object BroadcastFlowCoordinator {
     private var pendingReconcileAfterActive = false
     private var lastFetchStartedAtMs = 0L
     private var lastSyncCursor: String? = null
+    private var lastReplayCursor: Long? = null
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
@@ -218,6 +220,8 @@ object BroadcastFlowCoordinator {
                 if (id.isEmpty()) return@collect
                 val reason = dismissed.reason.ifBlank { "dismissed" }
                 val cancellationVersionToken = buildCancellationVersionToken(
+                    orderLifecycleVersion = dismissed.orderLifecycleVersion,
+                    dispatchRevision = dismissed.dispatchRevision,
                     eventVersion = dismissed.eventVersion,
                     serverTimeMs = dismissed.serverTimeMs
                 )
@@ -275,6 +279,7 @@ object BroadcastFlowCoordinator {
         pendingForceReconcile = false
         pendingReconcileAfterActive = false
         lastSyncCursor = null
+        lastReplayCursor = null
         drainIngressQueue()
         pendingQueue.clear()
         dedupeIds.clear()
@@ -359,6 +364,114 @@ object BroadcastFlowCoordinator {
             scheduledReconcileJob = null
             runReconcile(forceRefresh = forceRefresh)
         }
+    }
+
+    private data class ReplayApplyResult(
+        val hadEvents: Boolean,
+        val changed: Boolean,
+        val requiresSnapshotFallback: Boolean
+    )
+
+    private suspend fun applyReplayEvents(
+        repository: BroadcastRepository,
+        events: List<DispatchReplayEventData>
+    ): ReplayApplyResult {
+        if (events.isEmpty()) {
+            return ReplayApplyResult(
+                hadEvents = false,
+                changed = false,
+                requiresSnapshotFallback = false
+            )
+        }
+
+        var changed = false
+        var requiresSnapshotFallback = false
+
+        events.sortedBy { it.sequence }.forEach { event ->
+            val orderId = event.orderId.trim()
+            if (orderId.isEmpty()) return@forEach
+
+            when (event.eventType.lowercase(Locale.US)) {
+                "broadcast_created", "broadcast_updated" -> {
+                    when (val snapshotResult = repository.getBroadcastSnapshot(orderId)) {
+                        is BroadcastResult.Success -> {
+                            val snapshot = snapshotResult.data
+                            lastSyncCursor = snapshot.syncCursor ?: lastSyncCursor
+                            val state = snapshot.state.lowercase(Locale.US)
+                            if (isSnapshotTerminalState(state)) {
+                                addCancellationTombstone(
+                                    orderId,
+                                    buildCancellationVersionToken(
+                                        orderLifecycleVersion = snapshot.orderLifecycleVersion,
+                                        dispatchRevision = snapshot.dispatchRevision,
+                                        eventVersion = snapshot.eventVersion,
+                                        serverTimeMs = snapshot.serverTimeMs
+                                    )
+                                )
+                                removeEverywhere(
+                                    id = orderId,
+                                    reason = "replay_$state",
+                                    emitDismissEvent = true,
+                                    requestReconcileAfter = false
+                                )
+                                changed = true
+                            } else {
+                                val snapshotTrip = snapshot.broadcast
+                                if (snapshotTrip == null) {
+                                    requiresSnapshotFallback = true
+                                } else {
+                                    val previous = stateStore.upsert(snapshotTrip)
+                                    val delta = if (previous == null) {
+                                        BroadcastStateDelta(added = listOf(snapshotTrip))
+                                    } else if (previous != snapshotTrip) {
+                                        BroadcastStateDelta(updated = listOf(snapshotTrip))
+                                    } else {
+                                        null
+                                    }
+                                    publishState(
+                                        delta = delta,
+                                        pendingCount = pendingQueue.size(),
+                                        availabilityState = _feedState.value.availabilityState,
+                                        isReconciling = true
+                                    )
+                                    BroadcastOverlayManager.upsertBroadcastData(snapshotTrip)
+                                    markSeenInRecoveryStore(snapshotTrip.broadcastId)
+                                    if (delta != null) {
+                                        changed = true
+                                    }
+                                }
+                            }
+                        }
+
+                        is BroadcastResult.Error -> requiresSnapshotFallback = true
+                        is BroadcastResult.Loading -> requiresSnapshotFallback = true
+                    }
+                }
+
+                "order_cancelled", "order_expired", "order_fully_filled" -> {
+                    addCancellationTombstone(
+                        orderId,
+                        buildCancellationVersionToken(
+                            orderLifecycleVersion = event.orderLifecycleVersion,
+                            dispatchRevision = event.dispatchRevision
+                        )
+                    )
+                    removeEverywhere(
+                        id = orderId,
+                        reason = "replay_${event.eventType.lowercase(Locale.US)}",
+                        emitDismissEvent = true,
+                        requestReconcileAfter = false
+                    )
+                    changed = true
+                }
+            }
+        }
+
+        return ReplayApplyResult(
+            hadEvents = true,
+            changed = changed,
+            requiresSnapshotFallback = requiresSnapshotFallback
+        )
     }
 
     private fun enqueueIngress(envelope: BroadcastIngressEnvelope) {
@@ -812,72 +925,128 @@ object BroadcastFlowCoordinator {
                     )
                 )
 
-                when (val result = repository.fetchActiveBroadcasts(
-                    forceRefresh = forceRefresh,
-                    syncCursor = if (forceRefresh) null else lastSyncCursor,
-                    queryMode = BroadcastFetchQueryMode.BOOKINGS_REQUESTS_PRIMARY_WITH_BROADCASTS_FALLBACK
-                )) {
+                var replayHandled = false
+                var snapshotFallbackRequired = forceRefresh
+                var replayFailureReason: String? = null
+                var replayCursorCandidate: Long? = null
+
+                when (val replayResult = repository.getDispatchReplay(cursor = lastReplayCursor, limit = 50)) {
                     is BroadcastResult.Success -> {
-                        lastSyncCursor = result.data.syncCursor ?: lastSyncCursor
-                        val before = stateStore.snapshotSorted()
-                        val beforeById = before.associateBy { it.broadcastId }
-                        val incoming = result.data.broadcasts
-                        val incomingIds = incoming.map { it.broadcastId }.toSet()
+                        replayCursorCandidate = replayResult.data.cursor
+                        val replayApplyResult = applyReplayEvents(repository, replayResult.data.events)
+                        replayHandled = replayApplyResult.hadEvents
+                        snapshotFallbackRequired = snapshotFallbackRequired ||
+                            replayResult.data.snapshotRequired ||
+                            replayApplyResult.requiresSnapshotFallback ||
+                            (!replayApplyResult.hadEvents && forceRefresh)
 
-                        incoming.forEach { trip ->
-                            stateStore.upsert(trip)
-                        }
-                        beforeById.keys
-                            .filterNot { it in incomingIds }
-                            .forEach { stateStore.removeById(it) }
-
-                        val after = stateStore.snapshotSorted()
-                        after.forEach { markSeenInRecoveryStore(it.broadcastId) }
-                        val afterById = after.associateBy { it.broadcastId }
-                        val added = after.filter { it.broadcastId !in beforeById }
-                        val updated = after.filter { current ->
-                            val previous = beforeById[current.broadcastId]
-                            previous != null && previous != current
-                        }
-                        val removedIds = beforeById.keys.filterNot { it in afterById }
-                        val delta = BroadcastStateDelta(
-                            added = added,
-                            updated = updated,
-                            removedIds = removedIds
-                        )
-
-                        publishState(
-                            delta = delta,
-                            pendingCount = pendingQueue.size(),
-                            availabilityState = _feedState.value.availabilityState,
-                            isReconciling = false
-                        )
-                        _events.tryEmit(BroadcastCoordinatorEvent.ReconcileDone(true))
-                        BroadcastTelemetry.record(
-                            stage = BroadcastStage.RECONCILE_DONE,
-                            status = BroadcastStatus.SUCCESS,
-                            attrs = mapOf(
-                                "count" to after.size.toString(),
-                                "syncCursor" to (lastSyncCursor ?: "none")
+                        if (!snapshotFallbackRequired) {
+                            lastReplayCursor = replayCursorCandidate
+                            publishState(
+                                pendingCount = pendingQueue.size(),
+                                availabilityState = _feedState.value.availabilityState,
+                                isReconciling = false
                             )
-                        )
+                            _events.tryEmit(BroadcastCoordinatorEvent.ReconcileDone(true))
+                            BroadcastTelemetry.record(
+                                stage = BroadcastStage.RECONCILE_DONE,
+                                status = BroadcastStatus.SUCCESS,
+                                reason = if (replayHandled) "dispatch_replay" else "dispatch_replay_noop",
+                                attrs = mapOf(
+                                    "count" to stateStore.snapshotSorted().size.toString(),
+                                    "syncCursor" to (lastSyncCursor ?: "none"),
+                                    "replayCursor" to (lastReplayCursor ?: 0L).toString()
+                                )
+                            )
+                        }
                     }
 
                     is BroadcastResult.Error -> {
-                        publishState(
-                            pendingCount = pendingQueue.size(),
-                            availabilityState = _feedState.value.availabilityState,
-                            isReconciling = false
-                        )
-                        _events.tryEmit(BroadcastCoordinatorEvent.ReconcileDone(false, result.message))
-                        BroadcastTelemetry.record(
-                            stage = BroadcastStage.RECONCILE_DONE,
-                            status = BroadcastStatus.FAILED,
-                            reason = result.message
-                        )
+                        replayFailureReason = replayResult.message
+                        snapshotFallbackRequired = true
                     }
 
-                    is BroadcastResult.Loading -> Unit
+                    is BroadcastResult.Loading -> snapshotFallbackRequired = true
+                }
+
+                if (snapshotFallbackRequired) {
+                    when (val result = repository.fetchActiveBroadcasts(
+                        forceRefresh = true,
+                        syncCursor = if (forceRefresh) null else lastSyncCursor,
+                        queryMode = BroadcastFetchQueryMode.BOOKINGS_REQUESTS_PRIMARY_WITH_BROADCASTS_FALLBACK
+                    )) {
+                        is BroadcastResult.Success -> {
+                            if (replayCursorCandidate != null) {
+                                lastReplayCursor = replayCursorCandidate
+                            }
+                            lastSyncCursor = result.data.syncCursor ?: lastSyncCursor
+                            val before = stateStore.snapshotSorted()
+                            val beforeById = before.associateBy { it.broadcastId }
+                            val incoming = result.data.broadcasts
+                            val incomingIds = incoming.map { it.broadcastId }.toSet()
+
+                            incoming.forEach { trip ->
+                                stateStore.upsert(trip)
+                            }
+                            beforeById.keys
+                                .filterNot { it in incomingIds }
+                                .forEach { stateStore.removeById(it) }
+
+                            val after = stateStore.snapshotSorted()
+                            after.forEach { markSeenInRecoveryStore(it.broadcastId) }
+                            val afterById = after.associateBy { it.broadcastId }
+                            val added = after.filter { it.broadcastId !in beforeById }
+                            val updated = after.filter { current ->
+                                val previous = beforeById[current.broadcastId]
+                                previous != null && previous != current
+                            }
+                            val removedIds = beforeById.keys.filterNot { it in afterById }
+                            val delta = BroadcastStateDelta(
+                                added = added,
+                                updated = updated,
+                                removedIds = removedIds
+                            )
+
+                            publishState(
+                                delta = delta,
+                                pendingCount = pendingQueue.size(),
+                                availabilityState = _feedState.value.availabilityState,
+                                isReconciling = false
+                            )
+                            _events.tryEmit(BroadcastCoordinatorEvent.ReconcileDone(true))
+                            BroadcastTelemetry.record(
+                                stage = BroadcastStage.RECONCILE_DONE,
+                                status = BroadcastStatus.SUCCESS,
+                                reason = if (replayFailureReason.isNullOrBlank()) {
+                                    "snapshot_fallback"
+                                } else {
+                                    "replay_failed_snapshot_fallback"
+                                },
+                                attrs = mapOf(
+                                    "count" to after.size.toString(),
+                                    "syncCursor" to (lastSyncCursor ?: "none"),
+                                    "replayCursor" to (lastReplayCursor ?: 0L).toString()
+                                )
+                            )
+                        }
+
+                        is BroadcastResult.Error -> {
+                            publishState(
+                                pendingCount = pendingQueue.size(),
+                                availabilityState = _feedState.value.availabilityState,
+                                isReconciling = false
+                            )
+                            val reason = replayFailureReason ?: result.message
+                            _events.tryEmit(BroadcastCoordinatorEvent.ReconcileDone(false, reason))
+                            BroadcastTelemetry.record(
+                                stage = BroadcastStage.RECONCILE_DONE,
+                                status = BroadcastStatus.FAILED,
+                                reason = reason
+                            )
+                        }
+
+                        is BroadcastResult.Loading -> Unit
+                    }
                 }
             } finally {
                 activeReconcileJob = null
@@ -897,7 +1066,12 @@ object BroadcastFlowCoordinator {
         }
     }
 
-    private fun removeEverywhere(id: String, reason: String, emitDismissEvent: Boolean = true) {
+    private fun removeEverywhere(
+        id: String,
+        reason: String,
+        emitDismissEvent: Boolean = true,
+        requestReconcileAfter: Boolean = true
+    ) {
         if (id.isBlank()) return
         pendingQueue.removeById(id)
         stateStore.removeById(id)
@@ -936,7 +1110,9 @@ object BroadcastFlowCoordinator {
                 "removeReason" to reason
             )
         )
-        requestReconcile(force = true)
+        if (requestReconcileAfter) {
+            requestReconcile(force = true)
+        }
     }
 
     private fun emitDrop(
@@ -1039,11 +1215,20 @@ object BroadcastFlowCoordinator {
                     lastSyncCursor = snapshot.syncCursor ?: lastSyncCursor
                     val state = snapshot.state.lowercase(Locale.US)
                     if (isSnapshotTerminalState(state)) {
-                        addCancellationTombstone(broadcastId, "v${snapshot.eventVersion}")
+                        addCancellationTombstone(
+                            broadcastId,
+                            buildCancellationVersionToken(
+                                orderLifecycleVersion = snapshot.orderLifecycleVersion,
+                                dispatchRevision = snapshot.dispatchRevision,
+                                eventVersion = snapshot.eventVersion,
+                                serverTimeMs = snapshot.serverTimeMs
+                            )
+                        )
                         removeEverywhere(
                             id = broadcastId,
                             reason = "snapshot_$state",
-                            emitDismissEvent = true
+                            emitDismissEvent = true,
+                            requestReconcileAfter = false
                         )
                         return@launch
                     }
@@ -1149,7 +1334,18 @@ object BroadcastFlowCoordinator {
         return if (normalizedVersion.isBlank()) normalizedId else "$normalizedId|$normalizedVersion"
     }
 
-    private fun buildCancellationVersionToken(eventVersion: Int?, serverTimeMs: Long?): String? {
+    private fun buildCancellationVersionToken(
+        orderLifecycleVersion: Long? = null,
+        dispatchRevision: Long? = null,
+        eventVersion: Int? = null,
+        serverTimeMs: Long? = null
+    ): String? {
+        if (orderLifecycleVersion != null && orderLifecycleVersion >= 0L) {
+            return "lifecycle:$orderLifecycleVersion"
+        }
+        if (dispatchRevision != null && dispatchRevision >= 0L) {
+            return "dispatch:$dispatchRevision"
+        }
         if (eventVersion == null || serverTimeMs == null || serverTimeMs <= 0L) return null
         return "v${eventVersion}@${serverTimeMs}"
     }

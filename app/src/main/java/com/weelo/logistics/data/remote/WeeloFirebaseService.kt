@@ -223,11 +223,12 @@ class WeeloFirebaseService : FirebaseMessagingService() {
             )
             // ACK delivery via socket (Uber RAMEN-style guarantee)
             if (!normalizedBroadcastId.isNullOrBlank()) {
-                SocketIOService.socket?.emit("broadcast_ack", org.json.JSONObject().apply {
-                    put("orderId", normalizedBroadcastId)
-                    put("receivedAt", System.currentTimeMillis())
-                    put("source", "fcm")
-                })
+                SocketIOService.emitDispatchAck(
+                    orderId = normalizedBroadcastId,
+                    dispatchRevision = data["dispatchRevision"]?.toLongOrNull(),
+                    source = "fcm",
+                    receivedAtMs = System.currentTimeMillis()
+                )
             }
         }
         

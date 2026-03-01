@@ -299,6 +299,8 @@ data class BroadcastTrip(
 
     /** Lifecycle metadata used for strict dedupe/order/reconcile. */
     val eventId: String? = null,
+    val dispatchRevision: Long? = null,
+    val orderLifecycleVersion: Long? = null,
     val eventVersion: Int? = null,
     val serverTimeMs: Long? = null,
     val reasonCode: String? = null

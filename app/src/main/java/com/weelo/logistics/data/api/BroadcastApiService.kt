@@ -331,6 +331,13 @@ interface BroadcastApiService {
         @Header("Authorization") token: String,
         @Path("orderId") orderId: String
     ): Response<BroadcastSnapshotResponse>
+
+    @GET("transporter/dispatch/replay")
+    suspend fun getDispatchReplay(
+        @Header("Authorization") token: String,
+        @Query("cursor") cursor: Long? = null,
+        @Query("limit") limit: Int = 50
+    ): Response<DispatchReplayResponse>
 }
 
 // ============== Request/Response Data Classes ==============
@@ -600,7 +607,9 @@ data class OrderInfo(
     val weight: String?,
     val status: String,
     val expiresAt: String,
-    val createdAt: String
+    val createdAt: String,
+    val dispatchRevision: Long? = null,
+    val lifecycleEventVersion: Long? = null
 )
 
 data class LocationInfo(
@@ -684,10 +693,42 @@ data class BroadcastSnapshotData(
     val status: String,
     val dispatchState: String,
     val reasonCode: String?,
+    val dispatchRevision: Long = 0L,
+    val orderLifecycleVersion: Long = 0L,
     val eventVersion: Int,
     val serverTimeMs: Long,
     val expiresAtMs: Long,
     val syncCursor: String?,
+    val cursorType: String? = null,
+    val snapshotBasis: String? = null,
+    val snapshotTimeMs: Long? = null,
     val order: OrderInfo,
     val requests: List<TruckRequestInfo>
+)
+
+data class DispatchReplayResponse(
+    val success: Boolean,
+    val data: DispatchReplayData?,
+    val error: ApiErrorInfo? = null
+)
+
+data class DispatchReplayData(
+    val cursor: Long,
+    val snapshotRequired: Boolean = false,
+    val hasMore: Boolean = false,
+    val replayWindowStart: Long = 0L,
+    val replayWindowEnd: Long = 0L,
+    val cursorType: String? = null,
+    val events: List<DispatchReplayEventData> = emptyList()
+)
+
+data class DispatchReplayEventData(
+    val sequence: Long,
+    val orderId: String,
+    val dispatchRevision: Long = 0L,
+    val orderLifecycleVersion: Long = 0L,
+    val eventType: String,
+    val expiresAtMs: Long? = null,
+    val payload: Map<String, @JvmSuppressWildcards Any?>? = null,
+    val createdAt: String? = null
 )

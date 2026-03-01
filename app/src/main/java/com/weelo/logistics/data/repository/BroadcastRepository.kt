@@ -6,6 +6,7 @@ import com.weelo.logistics.data.api.AcceptBroadcastRequest
 import com.weelo.logistics.data.api.AcceptBroadcastResponse
 import com.weelo.logistics.data.api.BroadcastListResponse
 import com.weelo.logistics.data.api.BroadcastResponseData
+import com.weelo.logistics.data.api.DispatchReplayData
 import com.weelo.logistics.data.api.BroadcastSnapshotData
 import com.weelo.logistics.data.api.OrderWithRequests
 import com.weelo.logistics.data.model.RequestedVehicle
@@ -97,6 +98,8 @@ data class BroadcastSnapshot(
     val status: String,
     val dispatchState: String,
     val reasonCode: String?,
+    val dispatchRevision: Long,
+    val orderLifecycleVersion: Long,
     val eventVersion: Int,
     val serverTimeMs: Long,
     val expiresAtMs: Long,
@@ -633,6 +636,8 @@ class BroadcastRepository private constructor(
                 status = data.status,
                 dispatchState = data.dispatchState,
                 reasonCode = data.reasonCode,
+                dispatchRevision = data.dispatchRevision,
+                orderLifecycleVersion = data.orderLifecycleVersion,
                 eventVersion = data.eventVersion,
                 serverTimeMs = data.serverTimeMs,
                 expiresAtMs = data.expiresAtMs,
@@ -642,6 +647,33 @@ class BroadcastRepository private constructor(
             return@withContext BroadcastResult.Success(snapshot)
         } catch (e: Exception) {
             timber.log.Timber.e(e, "❌ Error fetching broadcast snapshot $orderId")
+            return@withContext BroadcastResult.Error(e.message ?: "Network error")
+        }
+    }
+
+    suspend fun getDispatchReplay(
+        cursor: Long?,
+        limit: Int = 50
+    ): BroadcastResult<DispatchReplayData> = withContext(Dispatchers.IO) {
+        try {
+            val token = RetrofitClient.getAccessToken()
+            if (token.isNullOrEmpty()) {
+                return@withContext BroadcastResult.Error("Not authenticated", 401)
+            }
+
+            val response = broadcastApi.getDispatchReplay(
+                token = "Bearer $token",
+                cursor = cursor,
+                limit = limit.coerceIn(1, 100)
+            )
+            if (!response.isSuccessful || response.body()?.success != true || response.body()?.data == null) {
+                val errorMsg = response.body()?.error?.message ?: "Failed to fetch dispatch replay"
+                return@withContext BroadcastResult.Error(errorMsg, response.code())
+            }
+
+            return@withContext BroadcastResult.Success(response.body()!!.data!!)
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "❌ Error fetching dispatch replay cursor=$cursor")
             return@withContext BroadcastResult.Error(e.message ?: "Network error")
         }
     }
@@ -944,6 +976,9 @@ class BroadcastRepository private constructor(
             eventVersion = snapshot.eventVersion,
             serverTimeMs = snapshot.serverTimeMs,
             reasonCode = snapshot.reasonCode
+            ,
+            dispatchRevision = snapshot.dispatchRevision,
+            orderLifecycleVersion = snapshot.orderLifecycleVersion
         )
     }
 
@@ -992,7 +1027,9 @@ class BroadcastRepository private constructor(
             expiryTime = parseTimestamp(order.expiresAt),
             notes = null,
             isUrgent = false,
-            requestedVehicles = requestedVehicles
+            requestedVehicles = requestedVehicles,
+            dispatchRevision = order.dispatchRevision,
+            orderLifecycleVersion = order.lifecycleEventVersion
         )
     }
 

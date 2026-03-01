@@ -1,5 +1,6 @@
 package com.weelo.logistics.data.remote
 
+import com.weelo.logistics.WeeloApp
 import com.weelo.logistics.broadcast.BroadcastOverlayManager
 import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
 import com.weelo.logistics.broadcast.BroadcastFlowCoordinator
@@ -1057,15 +1058,14 @@ object SocketIOService {
 
         // ACK delivery back to server (Uber RAMEN-style at-least-once guarantee)
         // Server tracks pending ACKs in Redis SET → removes on ACK → retries unACKed via FCM
-        val ackOrderId = broadcastTrip.broadcastId.ifBlank {
-            broadcastTrip.orderId
-        }
+        val ackOrderId = broadcastTrip.broadcastId
         if (ackOrderId.isNotBlank()) {
-            socket?.emit("broadcast_ack", org.json.JSONObject().apply {
-                put("orderId", ackOrderId)
-                put("receivedAt", receivedAtMs)
-                put("source", "socket")
-            })
+            emitDispatchAck(
+                orderId = ackOrderId,
+                dispatchRevision = broadcastTrip.dispatchRevision,
+                source = "socket",
+                receivedAtMs = receivedAtMs
+            )
         }
 
         if (BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled) {
@@ -1378,6 +1378,8 @@ object SocketIOService {
                 trucksStillNeeded = trucksStillNeeded,
                 isPersonalized = isPersonalized,
                 eventId = resolveOptionalString(data, "eventId"),
+                dispatchRevision = resolveOptionalLong(data, "dispatchRevision"),
+                orderLifecycleVersion = resolveOptionalLong(data, "orderLifecycleVersion"),
                 eventVersion = resolveOptionalInt(data, "eventVersion"),
                 serverTimeMs = resolveOptionalLong(data, "serverTimeMs")
             )
@@ -1459,6 +1461,25 @@ object SocketIOService {
     }
 
     private fun resolvePayloadVersion(data: JSONObject, normalizedId: String): String? {
+        val dispatchRevision = resolveOptionalLong(data, "dispatchRevision")
+        val orderLifecycleVersion = resolveOptionalLong(data, "orderLifecycleVersion")
+        if ((dispatchRevision != null && dispatchRevision >= 0L) ||
+            (orderLifecycleVersion != null && orderLifecycleVersion >= 0L)
+        ) {
+            return buildString {
+                append("order:")
+                append(normalizedId)
+                dispatchRevision?.takeIf { it >= 0L }?.let {
+                    append("|dispatch:")
+                    append(it)
+                }
+                orderLifecycleVersion?.takeIf { it >= 0L }?.let {
+                    append("|lifecycle:")
+                    append(it)
+                }
+            }
+        }
+
         val eventId = resolveOptionalString(data, "eventId")
         if (!eventId.isNullOrBlank()) return "event:$eventId"
 
@@ -1485,6 +1506,26 @@ object SocketIOService {
             BroadcastOverlayManager.removeEverywhere(broadcastId)
             timber.log.Timber.i("🧹 Removed broadcast %s after dismiss window", broadcastId)
         }
+    }
+
+    fun emitDispatchAck(
+        orderId: String,
+        dispatchRevision: Long? = null,
+        source: String,
+        receivedAtMs: Long = System.currentTimeMillis()
+    ) {
+        val normalizedOrderId = orderId.trim()
+        if (normalizedOrderId.isEmpty()) return
+
+        val ackPayload = JSONObject().apply {
+            put("orderId", normalizedOrderId)
+            dispatchRevision?.let { put("dispatchRevision", it) }
+            put("receivedAt", receivedAtMs)
+            put("source", source)
+        }
+
+        socket?.emit("dispatch_ack", ackPayload)
+        socket?.emit("broadcast_ack", ackPayload)
     }
     
     /**
@@ -1652,6 +1693,8 @@ object SocketIOService {
                         message = message,
                         customerName = customerName,
                         eventId = resolveOptionalString(data, "eventId"),
+                        dispatchRevision = resolveOptionalLong(data, "dispatchRevision"),
+                        orderLifecycleVersion = resolveOptionalLong(data, "orderLifecycleVersion"),
                         eventVersion = resolveOptionalInt(data, "eventVersion"),
                         serverTimeMs = resolveOptionalLong(data, "serverTimeMs")
                     )
@@ -1746,6 +1789,8 @@ object SocketIOService {
                     message = message,
                     customerName = data.optString("customerName", ""),
                     eventId = resolveOptionalString(data, "eventId"),
+                    dispatchRevision = resolveOptionalLong(data, "dispatchRevision"),
+                    orderLifecycleVersion = resolveOptionalLong(data, "orderLifecycleVersion"),
                     eventVersion = resolveOptionalInt(data, "eventVersion"),
                     serverTimeMs = resolveOptionalLong(data, "serverTimeMs")
                 )
@@ -1765,6 +1810,8 @@ object SocketIOService {
                 cancelledAt = cancelledAt,
                 assignmentsCancelled = assignmentsCancelled,
                 eventId = resolveOptionalString(data, "eventId"),
+                dispatchRevision = resolveOptionalLong(data, "dispatchRevision"),
+                orderLifecycleVersion = resolveOptionalLong(data, "orderLifecycleVersion"),
                 eventVersion = resolveOptionalInt(data, "eventVersion"),
                 serverTimeMs = resolveOptionalLong(data, "serverTimeMs"),
                 customerName = data.optString("customerName", ""),
@@ -1813,6 +1860,8 @@ object SocketIOService {
                     message = "This booking request has expired",
                     customerName = data.optString("customerName", ""),
                     eventId = resolveOptionalString(data, "eventId"),
+                    dispatchRevision = resolveOptionalLong(data, "dispatchRevision"),
+                    orderLifecycleVersion = resolveOptionalLong(data, "orderLifecycleVersion"),
                     eventVersion = resolveOptionalInt(data, "eventVersion"),
                     serverTimeMs = resolveOptionalLong(data, "serverTimeMs")
                 )
@@ -2040,6 +2089,8 @@ data class BroadcastNotification(
     val trucksStillNeeded: Int = 0,            // How many order still needs
     val isPersonalized: Boolean = false,         // Is this a personalized broadcast?
     val eventId: String? = null,
+    val dispatchRevision: Long? = null,
+    val orderLifecycleVersion: Long? = null,
     val eventVersion: Int? = null,
     val serverTimeMs: Long? = null
 ) {
@@ -2129,6 +2180,8 @@ data class BroadcastNotification(
             trucksStillNeeded = trucksStillNeeded.takeIf { it > 0 } ?: (trucksNeeded - trucksFilled),
             isPersonalized = isPersonalized,
             eventId = eventId,
+            dispatchRevision = dispatchRevision,
+            orderLifecycleVersion = orderLifecycleVersion,
             eventVersion = eventVersion,
             serverTimeMs = serverTimeMs
         )
@@ -2369,6 +2422,8 @@ data class OrderCancelledNotification(
     val cancelledAt: String,              // ISO timestamp
     val assignmentsCancelled: Int = 0,    // How many assignments were released
     val eventId: String? = null,
+    val dispatchRevision: Long? = null,
+    val orderLifecycleVersion: Long? = null,
     val eventVersion: Int? = null,
     val serverTimeMs: Long? = null,
     // CUSTOMER CONTACT — Driver/transporter can call even after cancel
@@ -2402,6 +2457,8 @@ data class BroadcastDismissedNotification(
     val message: String,             // Human-readable message for overlay
     val customerName: String = "",   // Customer name (if cancelled)
     val eventId: String? = null,
+    val dispatchRevision: Long? = null,
+    val orderLifecycleVersion: Long? = null,
     val eventVersion: Int? = null,
     val serverTimeMs: Long? = null
 )
