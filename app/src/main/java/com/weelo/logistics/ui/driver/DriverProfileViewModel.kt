@@ -268,7 +268,6 @@ class DriverProfileViewModel(
                     // Reset state after 2 seconds
                     delay(2000)
                     _photoUpdateState.value = PhotoUpdateState.Idle
-
                 } else {
                     val errorMsg = response.body()?.message ?: "Failed to update photo"
                     _photoUpdateState.value = PhotoUpdateState.Error(errorMsg)

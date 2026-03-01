@@ -185,9 +185,30 @@ object SocketIOService {
                 try {
                     val heartbeatData = org.json.JSONObject().apply {
                         put("type", "heartbeat")
-                        // TODO: Add real GPS coordinates here when location service is available
-                        // put("lat", currentLat)
-                        // put("lng", currentLng)
+                        // Attach latest GPS so backend refreshes Redis GEO index
+                        try {
+                            val ctx = WeeloApp.getInstance()?.applicationContext
+                            if (ctx != null) {
+                                val locationManager = ctx.getSystemService(
+                                    android.content.Context.LOCATION_SERVICE
+                                ) as? android.location.LocationManager
+                                @Suppress("MissingPermission")
+                                val loc = locationManager?.getLastKnownLocation(
+                                    android.location.LocationManager.GPS_PROVIDER
+                                ) ?: locationManager?.getLastKnownLocation(
+                                    android.location.LocationManager.NETWORK_PROVIDER
+                                )
+                                if (loc != null) {
+                                    put("lat", loc.latitude)
+                                    put("lng", loc.longitude)
+                                    put("speed", loc.speed.toDouble())
+                                    put("battery", getDeviceBatteryLevel(ctx))
+                                }
+                            }
+                        } catch (locErr: Exception) {
+                            // Non-critical — heartbeat still extends presence TTL
+                            timber.log.Timber.w("GPS unavailable for heartbeat: ${locErr.message}")
+                        }
                     }
                     socket?.emit(Events.HEARTBEAT, heartbeatData)
                 } catch (e: Exception) {
@@ -196,6 +217,18 @@ object SocketIOService {
                 kotlinx.coroutines.delay(12_000) // 12 seconds
             }
         }
+    }
+    
+    /**
+     * Get device battery level (0-100) for heartbeat telemetry.
+     * Returns -1 if unavailable.
+     */
+    private fun getDeviceBatteryLevel(ctx: android.content.Context): Int {
+        return try {
+            val bm = ctx.getSystemService(android.content.Context.BATTERY_SERVICE)
+                as? android.os.BatteryManager
+            bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+        } catch (_: Exception) { -1 }
     }
     
     /**
@@ -373,7 +406,10 @@ object SocketIOService {
                 auth = authPayload
                 reconnection = true
                 reconnectionAttempts = 10
-                reconnectionDelay = 1000
+                // JITTERED BACKOFF: Add 0-2s random jitter to prevent thundering herd
+                // when thousands of transporters reconnect simultaneously after network outage.
+                // Without jitter, all reconnect at T+1s → Redis/ALB overwhelmed.
+                reconnectionDelay = 1000L + kotlin.random.Random.nextLong(2000L)
                 reconnectionDelayMax = 30000
                 timeout = 20000
                 forceNew = true
@@ -417,6 +453,16 @@ object SocketIOService {
                 if (_isOnlineLocally) {
                     timber.log.Timber.i("💓 Auto-restarting heartbeat on reconnect (driver was online)")
                     startHeartbeat()
+                }
+                
+                // Relay latest FCM token to backend on every connect/reconnect
+                // Handles: app reinstall, cache clear, token refresh while offline
+                val latestFcmToken = WeeloFirebaseService.fcmToken
+                if (!latestFcmToken.isNullOrBlank()) {
+                    socket?.emit("fcm_token_refresh", org.json.JSONObject().apply {
+                        put("fcmToken", latestFcmToken)
+                    })
+                    timber.log.Timber.i("🔄 FCM token relayed to backend on connect")
                 }
             }
             
@@ -1008,6 +1054,19 @@ object SocketIOService {
         )
         val notification = envelope.broadcast ?: return
         val broadcastTrip = notification.toBroadcastTrip()
+
+        // ACK delivery back to server (Uber RAMEN-style at-least-once guarantee)
+        // Server tracks pending ACKs in Redis SET → removes on ACK → retries unACKed via FCM
+        val ackOrderId = broadcastTrip.broadcastId.ifBlank {
+            broadcastTrip.orderId
+        }
+        if (ackOrderId.isNotBlank()) {
+            socket?.emit("broadcast_ack", org.json.JSONObject().apply {
+                put("orderId", ackOrderId)
+                put("receivedAt", receivedAtMs)
+                put("source", "socket")
+            })
+        }
 
         if (BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled) {
             BroadcastFlowCoordinator.ingestSocketEnvelope(
