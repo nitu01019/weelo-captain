@@ -411,6 +411,33 @@ class GPSTrackingService : Service() {
                 speed = location.speed,
                 bearing = location.bearing
             )
+        } else {
+            // CASE 6.1 FIX: Socket disconnected — fall back to HTTP POST
+            // This ensures backend always receives location even during poor network
+            serviceScope.launch {
+                try {
+                    val request = com.weelo.logistics.data.api.BatchLocationRequest(
+                        tripId = location.tripId,
+                        points = listOf(
+                            com.weelo.logistics.data.api.BatchLocationPoint(
+                                latitude = location.latitude,
+                                longitude = location.longitude,
+                                speed = location.speed,
+                                bearing = location.bearing,
+                                accuracy = location.accuracy,
+                                timestamp = ISO_UTC_FORMAT.get()!!.format(java.util.Date(location.timestamp))
+                            )
+                        )
+                    )
+                    val response = RetrofitClient.trackingApi.uploadBatch(request)
+                    if (response.isSuccessful) {
+                        timber.log.Timber.d("📤 Location sent via HTTP fallback (socket disconnected)")
+                    }
+                } catch (e: Exception) {
+                    // Non-critical — batch flush will catch it later
+                    timber.log.Timber.d("📤 HTTP location fallback failed: ${e.message}")
+                }
+            }
         }
     }
 
