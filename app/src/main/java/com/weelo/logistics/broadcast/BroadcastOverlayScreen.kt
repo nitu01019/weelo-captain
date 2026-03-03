@@ -852,6 +852,17 @@ private fun BroadcastOverlayContent(
                     }
                 }
 
+                // ========== EMBEDDED MAP (toggle-able via feature flag) ==========
+                if (BroadcastFeatureFlagsRegistry.current().broadcastOverlayMapEnabled) {
+                    item {
+                        BroadcastMiniRouteMapCard(
+                            broadcast = broadcast,
+                            modifier = Modifier.fillMaxWidth(),
+                            renderMode = com.weelo.logistics.ui.transporter.BroadcastCardMapRenderMode.STATIC_OVERLAY,
+                            mapHeight = 200.dp
+                        )
+                    }
+                }
                 
                 // ========== DIRECTIONS BUTTONS - PROMINENT ==========
                 item {
@@ -1292,48 +1303,6 @@ private fun BroadcastOverlayContentNew(
                     }
                 }
 
-                item {
-                    val hasCoords = broadcast.pickupLocation.latitude != 0.0 &&
-                        broadcast.pickupLocation.longitude != 0.0 &&
-                        broadcast.dropLocation.latitude != 0.0 &&
-                        broadcast.dropLocation.longitude != 0.0
-                    val safeMapEnabled = BroadcastFeatureFlagsRegistry.current().captainOverlaySafeRenderEnabled
-
-                    if (safeMapEnabled && hasCoords) {
-                        BroadcastMiniRouteMapCard(
-                            broadcast = broadcast,
-                            title = "Route map",
-                            subtitle = "${broadcast.distance.toInt()} km",
-                            mapHeight = 200.dp,
-                            renderMode = BroadcastCardMapRenderMode.STATIC_OVERLAY
-                        )
-                    } else {
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            color = BroadcastUiTokens.CardMutedBackground,
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 16.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(
-                                    text = "Route map unavailable",
-                                    color = BroadcastUiTokens.SecondaryText,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    text = "${broadcast.pickupLocation.address} → ${broadcast.dropLocation.address}",
-                                    color = BroadcastUiTokens.TertiaryText,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-                }
                 
                 // ========== ROUTE (Compact) ==========
                 item {
