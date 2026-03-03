@@ -851,18 +851,7 @@ private fun BroadcastOverlayContent(
                         }
                     }
                 }
-                
-                // ========== EMBEDDED MAP (toggle-able via feature flag) ==========
-                if (BroadcastFeatureFlagsRegistry.current().broadcastOverlayMapEnabled) {
-                    item {
-                        BroadcastMiniRouteMapCard(
-                            broadcast = broadcast,
-                            modifier = Modifier.fillMaxWidth(),
-                            renderMode = com.weelo.logistics.ui.transporter.BroadcastCardMapRenderMode.STATIC_OVERLAY,
-                            mapHeight = 160.dp
-                        )
-                    }
-                }
+
                 
                 // ========== DIRECTIONS BUTTONS - PROMINENT ==========
                 item {
@@ -1315,7 +1304,7 @@ private fun BroadcastOverlayContentNew(
                             broadcast = broadcast,
                             title = "Route map",
                             subtitle = "${broadcast.distance.toInt()} km",
-                            mapHeight = 136.dp,
+                            mapHeight = 200.dp,
                             renderMode = BroadcastCardMapRenderMode.STATIC_OVERLAY
                         )
                     } else {

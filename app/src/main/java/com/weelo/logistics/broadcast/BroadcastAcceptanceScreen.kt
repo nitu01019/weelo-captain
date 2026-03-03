@@ -1296,7 +1296,7 @@ private fun BroadcastSummaryCard(broadcast: BroadcastTrip) {
                 broadcast = broadcast,
                 title = "Route map",
                 subtitle = "${broadcast.distance.toInt()} km",
-                mapHeight = 120.dp
+                mapHeight = 180.dp
             )
 
             // Route
