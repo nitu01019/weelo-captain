@@ -23,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -271,17 +272,23 @@ class MainActivity : ComponentActivity() {
                         
                         // ============================================
                         // LAYER 2: Broadcast Overlay (Rapido-style)
+                        // Suppressed when user is on Requests screen
+                        // (BroadcastListScreen handles display directly)
                         // ============================================
-                        BroadcastOverlayScreen(
-                            onAccept = { broadcast ->
-                                timber.log.Timber.i("🎯 User accepted broadcast: ${broadcast.broadcastId}")
-                                acceptedBroadcast = broadcast
-                                showAcceptanceScreen = true
-                            },
-                            onReject = { broadcast ->
-                                timber.log.Timber.i("❌ User rejected broadcast: ${broadcast.broadcastId}")
-                            }
-                        )
+                        val currentEntry by navController.currentBackStackEntryAsState()
+                        val isOnRequestsScreen = currentEntry?.destination?.route == Screen.BroadcastList.route
+                        if (!isOnRequestsScreen) {
+                            BroadcastOverlayScreen(
+                                onAccept = { broadcast ->
+                                    timber.log.Timber.i("🎯 User accepted broadcast: ${broadcast.broadcastId}")
+                                    acceptedBroadcast = broadcast
+                                    showAcceptanceScreen = true
+                                },
+                                onReject = { broadcast ->
+                                    timber.log.Timber.i("❌ User rejected broadcast: ${broadcast.broadcastId}")
+                                }
+                            )
+                        }
                         
                         // ============================================
                         // LAYER 3: Acceptance Screen (Truck + Driver)

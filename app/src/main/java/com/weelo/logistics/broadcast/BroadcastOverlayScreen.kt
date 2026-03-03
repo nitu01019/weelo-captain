@@ -155,23 +155,7 @@ fun BroadcastOverlayScreen(
         currentBroadcast?.broadcastId?.let(BroadcastOverlayManager::acknowledgeDisplayed)
     }
 
-    // Auto-dismiss overlay when broadcast is removed (cancelled/expired via socket event)
-    val feedState by BroadcastFlowCoordinator.feedState.collectAsState()
-    val previousBroadcastCount = remember { androidx.compose.runtime.mutableIntStateOf(-1) }
-    LaunchedEffect(feedState.broadcasts.size, currentBroadcast?.broadcastId) {
-        val bid = currentBroadcast?.broadcastId ?: return@LaunchedEffect
-        val currentCount = feedState.broadcasts.size
-        val prevCount = previousBroadcastCount.intValue
-        previousBroadcastCount.intValue = currentCount
-        // Only dismiss if we previously had broadcasts and ours was removed
-        if (prevCount > 0) {
-            val stillExists = feedState.broadcasts.any { it.broadcastId == bid }
-            if (!stillExists) {
-                android.widget.Toast.makeText(context, "This request was cancelled", android.widget.Toast.LENGTH_SHORT).show()
-                BroadcastOverlayManager.dismissOverlay()
-            }
-        }
-    }
+
     
     // Calculate accepted trucks for Submit button
     val acceptedTrucks = truckHoldStates.values.filter { it.status == TruckHoldStatus.ACCEPTED }
@@ -232,6 +216,10 @@ fun BroadcastOverlayScreen(
         dismissFlow.collectLatest { notification ->
             val current = BroadcastOverlayManager.currentBroadcast.value
             if (current == null || current.broadcastId != notification.broadcastId) return@collectLatest
+
+            // Only show dismiss overlay for genuine customer cancellation.
+            // Other reasons (expired, fully_filled) are handled by countdown timer.
+            if (notification.reason != "customer_cancelled") return@collectLatest
 
             // Current broadcast is being dismissed — show overlay
             dismissInfo = notification
