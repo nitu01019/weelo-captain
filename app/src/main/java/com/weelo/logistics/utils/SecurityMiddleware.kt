@@ -164,7 +164,7 @@ object SecurityMiddleware {
         identifier: String
     ): RateLimitResult {
         val limiter = when (action) {
-            "send_otp" -> GlobalRateLimiters.otp
+            // OTP rate limiting is server-side only (industry standard)
             "login" -> GlobalRateLimiters.login
             "create_trip" -> GlobalRateLimiters.tripCreation
             "broadcast" -> GlobalRateLimiters.broadcast

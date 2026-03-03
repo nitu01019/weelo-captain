@@ -14,7 +14,7 @@ import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.utils.AppSignatureHelper
 import com.weelo.logistics.utils.AuthOtpAutofillCoordinator
 import com.weelo.logistics.utils.AuthOtpAutofillCoordinator.OtpAutofillClearReason
-import com.weelo.logistics.utils.GlobalRateLimiters
+
 import com.weelo.logistics.utils.InputValidator
 import com.weelo.logistics.utils.RoleScopedLocalePolicy
 import kotlinx.coroutines.CancellationException
@@ -57,8 +57,6 @@ class AuthViewModel : ViewModel() {
     private val _authState = MutableStateFlow<AuthState>(AuthState.Idle)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
     
-    // Rate limiters
-    private val otpRateLimiter = GlobalRateLimiters.otp
     private var appHashLoggedForSession = false
 
     private val _uiEffects = MutableSharedFlow<AuthUiEffect>(extraBufferCapacity = 16)
@@ -130,9 +128,9 @@ class AuthViewModel : ViewModel() {
                 timber.log.Timber.w(e, "OTP autofill restart failed before resend; proceeding with manual OTP fallback")
             }
             if (role.equals("driver", ignoreCase = true)) {
-                sendDriverOTP(phone, skipLocalRateLimit = true)
+                sendDriverOTP(phone)
             } else {
-                sendTransporterOTP(phone, skipLocalRateLimit = true)
+                sendTransporterOTP(phone)
             }
         }
     }
@@ -154,7 +152,7 @@ class AuthViewModel : ViewModel() {
      * 
      * Calls: POST /api/v1/driver-auth/send-otp
      */
-    fun sendDriverOTP(driverPhone: String, skipLocalRateLimit: Boolean = false) {
+    fun sendDriverOTP(driverPhone: String) {
         viewModelScope.launch {
             // Step 1: Validate input
             val validation = InputValidator.validatePhoneNumber(driverPhone)
@@ -163,15 +161,8 @@ class AuthViewModel : ViewModel() {
                 return@launch
             }
             
-            // Step 2: Check rate limiting
-            if (!skipLocalRateLimit) {
-                val rateLimit = otpRateLimiter.tryAcquire(driverPhone)
-                if (!rateLimit) {
-                    val retryAfter = otpRateLimiter.getTimeUntilReset(driverPhone) / 1000
-                    _authState.value = AuthState.RateLimited(retryAfter)
-                    return@launch
-                }
-            }
+            // Rate limiting is enforced server-side only (industry standard: Uber/Ola pattern)
+            // Server returns 429 with retryAfterMs → parsed below into AuthState.RateLimited
             
             // Step 3: Show loading state
             _authState.value = AuthState.Loading
@@ -194,10 +185,8 @@ class AuthViewModel : ViewModel() {
                             driverName = data?.driverName
                         )
                     } else {
-                        val errorMsg = response.body()?.error?.message
-                            ?.takeIf { !it.startsWith("{") }
-                            ?: extractFriendlyError(response, "Failed to send OTP. Driver not found or not registered.")
-                        _authState.value = AuthState.Error(errorMsg)
+                        // Check for server-side rate limit (429)
+                        handleOtpErrorResponse(response, "Failed to send OTP. Driver not found or not registered.")
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
@@ -226,18 +215,14 @@ class AuthViewModel : ViewModel() {
      * Calls: POST /api/v1/auth/send-otp with role="transporter"
      */
     fun sendTransporterOTP(transporterPhone: String) {
-        sendTransporterOTP(transporterPhone, skipLocalRateLimit = false)
-    }
-
-    fun sendTransporterOTP(transporterPhone: String, skipLocalRateLimit: Boolean = false) {
-        sendOTP(transporterPhone, "transporter", skipLocalRateLimit)
+        sendOTP(transporterPhone, "transporter")
     }
     
     /**
      * Generic Send OTP function (for Customer/Transporter)
      * NOT used for Driver - drivers use sendDriverOTP()
      */
-    private fun sendOTP(phone: String, role: String, skipLocalRateLimit: Boolean = false) {
+    private fun sendOTP(phone: String, role: String) {
         viewModelScope.launch {
             // Step 1: Validate input
             val validation = InputValidator.validatePhoneNumber(phone)
@@ -246,15 +231,8 @@ class AuthViewModel : ViewModel() {
                 return@launch
             }
             
-            // Step 2: Check rate limiting
-            if (!skipLocalRateLimit) {
-                val rateLimit = otpRateLimiter.tryAcquire(phone)
-                if (!rateLimit) {
-                    val retryAfter = otpRateLimiter.getTimeUntilReset(phone) / 1000
-                    _authState.value = AuthState.RateLimited(retryAfter)
-                    return@launch
-                }
-            }
+            // Rate limiting is enforced server-side only (industry standard: Uber/Ola pattern)
+            // Server returns 429 with retryAfterMs → parsed below into AuthState.RateLimited
             
             // Step 3: Show loading state
             _authState.value = AuthState.Loading
@@ -273,10 +251,8 @@ class AuthViewModel : ViewModel() {
                             message = response.body()?.data?.message ?: "OTP sent successfully"
                         )
                     } else {
-                        val errorMsg = response.body()?.error?.message
-                            ?.takeIf { !it.startsWith("{") }
-                            ?: extractFriendlyError(response, "Failed to send OTP. Please try again.")
-                        _authState.value = AuthState.Error(errorMsg)
+                        // Check for server-side rate limit (429)
+                        handleOtpErrorResponse(response, "Failed to send OTP. Please try again.")
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
@@ -642,6 +618,42 @@ class AuthViewModel : ViewModel() {
                 }
             }
         }
+    }
+
+    /**
+     * Handle OTP send error — parses server 429 rate limit into AuthState.RateLimited
+     * with retryAfterMs from response body, or falls back to AuthState.Error.
+     *
+     * Industry standard: Server is the ONLY rate limit enforcer.
+     * Client just reflects server's Retry-After value in the UI countdown.
+     */
+    private fun handleOtpErrorResponse(response: retrofit2.Response<*>, defaultMsg: String) {
+        try {
+            val errorBodyStr = response.errorBody()?.string()
+            if (!errorBodyStr.isNullOrBlank()) {
+                val json = JSONObject(errorBodyStr)
+                val errorObj = json.optJSONObject("error")
+                val code = errorObj?.optString("code", "") ?: ""
+                val retryAfterMs = errorObj?.optLong("retryAfterMs", 0L) ?: 0L
+
+                if (code == "OTP_RATE_LIMIT_EXCEEDED" || response.code() == 429) {
+                    val retryAfterSec = if (retryAfterMs > 0) retryAfterMs / 1000 else 120L
+                    _authState.value = AuthState.RateLimited(retryAfterSec)
+                    return
+                }
+            }
+        } catch (_: Exception) { /* fall through to generic error */ }
+
+        val errorMsg = response.body()?.let {
+            // Try to get message from success=false body
+            try {
+                val method = it::class.java.getMethod("getError")
+                val errorField = method.invoke(it)
+                val msgMethod = errorField?.javaClass?.getMethod("getMessage")
+                (msgMethod?.invoke(errorField) as? String)?.takeIf { msg -> !msg.startsWith("{") }
+            } catch (_: Exception) { null }
+        } ?: extractFriendlyError(response, defaultMsg)
+        _authState.value = AuthState.Error(errorMsg)
     }
 
     /**

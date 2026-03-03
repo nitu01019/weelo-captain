@@ -86,6 +86,7 @@ fun LoginScreen(
     var inFlightOtpRequestPhone by remember { mutableStateOf<String?>(null) }
     var expectedOtpSuccessPhone by remember { mutableStateOf<String?>(null) }
     var handledOtpSuccessKey by remember { mutableStateOf<String?>(null) }
+    var rateLimitCountdown by remember { mutableIntStateOf(0) }
 
     val scope = rememberCoroutineScope()
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -159,8 +160,7 @@ fun LoginScreen(
                 isLoading = false
                 inFlightOtpRequestPhone = null
                 authViewModel.clearOtpAutofill(OtpAutofillClearReason.SEND_FAILED)
-                val retryAfter = state.retryAfterSeconds
-                errorMessage = context.getString(R.string.auth_otp_rate_limited_retry_format, retryAfter)
+                rateLimitCountdown = state.retryAfterSeconds.toInt().coerceAtLeast(1)
                 statusMessage = null
             }
             is AuthState.Error -> {
@@ -221,6 +221,23 @@ fun LoginScreen(
                     sendOtpNow(OtpSendTrigger.AUTO, value)
                 }
             }
+    }
+
+    // Server-driven rate limit countdown — auto-clears error when done
+    // Industry standard: Client reflects server's Retry-After, not its own timer
+    LaunchedEffect(rateLimitCountdown) {
+        if (rateLimitCountdown <= 0) return@LaunchedEffect
+        errorMessage = context.getString(R.string.auth_otp_rate_limited_retry_format, rateLimitCountdown)
+        while (rateLimitCountdown > 0) {
+            delay(1000)
+            rateLimitCountdown--
+            if (rateLimitCountdown > 0) {
+                errorMessage = context.getString(R.string.auth_otp_rate_limited_retry_format, rateLimitCountdown)
+            } else {
+                errorMessage = ""
+                authViewModel.resetState()
+            }
+        }
     }
 
     Column(
