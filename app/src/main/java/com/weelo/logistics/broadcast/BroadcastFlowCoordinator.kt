@@ -47,7 +47,8 @@ enum class BroadcastDropReason {
     DUPLICATE_ID,
     CAPACITY_LIMIT,
     TOMBSTONE_SUPPRESSED,
-    ROLE_NOT_TRANSPORTER
+    ROLE_NOT_TRANSPORTER,
+    STALE_PAYLOAD              // Phase 4: broadcast too old (serverTimeMs + freshnessMs)
 }
 
 enum class BroadcastDecision {
@@ -632,6 +633,41 @@ object BroadcastFlowCoordinator {
                 customerName = ""
             )
             return
+        }
+
+        // === PHASE 4: FRESHNESS CHECK (flag-gated) ===
+        // If broadcastFreshnessMs > 0, drop broadcasts older than threshold.
+        // Uses serverTimeMs from broadcast payload for accurate age calculation.
+        val freshnessMs = flags.broadcastFreshnessMs
+        if (freshnessMs > 0L && eventClass == BroadcastEventClass.NEW_BROADCAST) {
+            val serverTimeMs = envelope.broadcast?.serverTimeMs ?: 0L
+            if (serverTimeMs > 0L) {
+                val ageMs = System.currentTimeMillis() - serverTimeMs
+                if (ageMs > freshnessMs) {
+                    emitDrop(
+                        id = normalizedId,
+                        source = envelope.source,
+                        reason = BroadcastDropReason.STALE_PAYLOAD,
+                        additionalAttrs = mapOf(
+                            "eventClass" to eventClass.name,
+                            "ageMs" to ageMs.toString(),
+                            "freshnessMs" to freshnessMs.toString()
+                        )
+                    )
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.BROADCAST_GATED,
+                        status = BroadcastStatus.DROPPED,
+                        reason = "stale_payload",
+                        attrs = mapOf(
+                            "id" to normalizedId,
+                            "ageMs" to ageMs.toString(),
+                            "freshnessMs" to freshnessMs.toString(),
+                            "source" to envelope.source.name.lowercase(Locale.US)
+                        )
+                    )
+                    return
+                }
+            }
         }
 
         val trip = envelope.broadcast

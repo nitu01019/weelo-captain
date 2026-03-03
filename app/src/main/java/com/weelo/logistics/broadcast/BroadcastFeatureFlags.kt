@@ -24,6 +24,8 @@ interface BroadcastFeatureFlags {
     val captainOverlaySafeRenderEnabled: Boolean
     /** Enables deterministic burst queue policy for multiple concurrent broadcasts. */
     val captainBurstQueueModeEnabled: Boolean
+    /** Phase 4: Max age (ms) for broadcast freshness check. 0 = disabled. */
+    val broadcastFreshnessMs: Long
 }
 
 interface BroadcastFeatureFlagProvider {
@@ -43,7 +45,8 @@ data class DefaultBroadcastFeatureFlags(
     override val broadcastOverlayMapEnabled: Boolean = true,
     override val captainReconcileSnapshotEnabled: Boolean = true,
     override val captainOverlaySafeRenderEnabled: Boolean = true,
-    override val captainBurstQueueModeEnabled: Boolean = true
+    override val captainBurstQueueModeEnabled: Boolean = true,
+    override val broadcastFreshnessMs: Long = 0L
 ) : BroadcastFeatureFlags
 
 private class SharedPrefsBroadcastFeatureFlagProvider(
@@ -63,7 +66,8 @@ private class SharedPrefsBroadcastFeatureFlagProvider(
             broadcastOverlayMapEnabled = prefs.getBoolean(KEY_OVERLAY_MAP_ENABLED, true),
             captainReconcileSnapshotEnabled = prefs.getBoolean(KEY_CAPTAIN_RECONCILE_SNAPSHOT_ENABLED, true),
             captainOverlaySafeRenderEnabled = prefs.getBoolean(KEY_CAPTAIN_OVERLAY_SAFE_RENDER_ENABLED, true),
-            captainBurstQueueModeEnabled = prefs.getBoolean(KEY_CAPTAIN_BURST_QUEUE_MODE_ENABLED, true)
+            captainBurstQueueModeEnabled = prefs.getBoolean(KEY_CAPTAIN_BURST_QUEUE_MODE_ENABLED, true),
+            broadcastFreshnessMs = prefs.getLong(KEY_BROADCAST_FRESHNESS_MS, 0L)
         )
     }
 
@@ -81,6 +85,7 @@ private class SharedPrefsBroadcastFeatureFlagProvider(
         const val KEY_CAPTAIN_RECONCILE_SNAPSHOT_ENABLED = "captain_reconcile_snapshot_enabled"
         const val KEY_CAPTAIN_OVERLAY_SAFE_RENDER_ENABLED = "captain_overlay_safe_render_enabled"
         const val KEY_CAPTAIN_BURST_QUEUE_MODE_ENABLED = "captain_burst_queue_mode_enabled"
+        const val KEY_BROADCAST_FRESHNESS_MS = "broadcast_freshness_ms"
     }
 }
 
