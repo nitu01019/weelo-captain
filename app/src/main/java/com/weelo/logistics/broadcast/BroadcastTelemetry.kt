@@ -30,7 +30,11 @@ enum class BroadcastStage {
     BROADCAST_CONFIRM_ASSIGN_REQUESTED,
     BROADCAST_CONFIRM_SUCCESS,
     BROADCAST_CONFIRM_FAIL,
-    DRIVER_TRIP_ASSIGNED_EMIT_CONFIRMED
+    DRIVER_TRIP_ASSIGNED_EMIT_CONFIRMED,
+    // Phase 6: Delivery observability stages
+    DELIVERY_FRESHNESS_CHECK,
+    SOCKET_REPLAY_RECEIVED,
+    FCM_WAKE_RECEIVED
 }
 
 enum class BroadcastStatus {
@@ -38,7 +42,8 @@ enum class BroadcastStatus {
     BUFFERED,
     DROPPED,
     FAILED,
-    SKIPPED
+    SKIPPED,
+    PASSED  // Phase 6: Freshness check passed
 }
 
 interface BroadcastTelemetrySink {

@@ -654,8 +654,9 @@ object BroadcastFlowCoordinator {
                             "freshnessMs" to freshnessMs.toString()
                         )
                     )
+                    // Phase 6: Freshness check DROPPED
                     BroadcastTelemetry.record(
-                        stage = BroadcastStage.BROADCAST_GATED,
+                        stage = BroadcastStage.DELIVERY_FRESHNESS_CHECK,
                         status = BroadcastStatus.DROPPED,
                         reason = "stale_payload",
                         attrs = mapOf(
@@ -667,6 +668,16 @@ object BroadcastFlowCoordinator {
                     )
                     return
                 }
+                // Phase 6: Freshness check PASSED
+                BroadcastTelemetry.record(
+                    stage = BroadcastStage.DELIVERY_FRESHNESS_CHECK,
+                    status = BroadcastStatus.PASSED,
+                    attrs = mapOf(
+                        "id" to normalizedId,
+                        "ageMs" to ageMs.toString(),
+                        "source" to envelope.source.name.lowercase(Locale.US)
+                    )
+                )
             }
         }
 
