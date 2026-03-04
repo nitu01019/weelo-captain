@@ -144,6 +144,17 @@ object SocketIOService {
     @Volatile
     private var _isOnlineLocally = false  // Tracks driver's local online intent (accessed from Socket.IO + Main threads)
 
+    // ==========================================================================
+    // SEQUENCE TRACKING — Uber RAMEN-style at-least-once delivery
+    // ==========================================================================
+    // Tracks highest _seq number received from server.
+    // Sent as `lastSeq` in socket handshake on reconnect so server replays
+    // all unacked messages since last seen sequence.
+    // Thread-safe: only updated from the Socket.IO callback thread.
+    // ==========================================================================
+    @Volatile
+    private var lastAckedSeq: Long = 0L
+
     /**
      * Returns the current local online state (heartbeat running or not).
      * Used by DriverDashboardViewModel as fallback when availability API fails.
@@ -403,6 +414,14 @@ object SocketIOService {
                         attrs = mapOf("hasFcmToken" to "false")
                     )
                     timber.log.Timber.w("⚠️ Socket auth started without FCM token; push fallback may be delayed")
+                }
+                // RAMEN REPLAY: Send last seen sequence number so server can replay
+                // all unacked messages sent during disconnection window.
+                // If lastAckedSeq=0 (first connect), server skips replay — zero regression.
+                val currentLastSeq = lastAckedSeq
+                if (currentLastSeq > 0L) {
+                    authPayload["lastSeq"] = currentLastSeq.toString()
+                    timber.log.Timber.i("🔄 Reconnecting with lastSeq=$currentLastSeq — server will replay missed messages")
                 }
                 auth = authPayload
                 reconnection = true
@@ -1057,11 +1076,21 @@ object SocketIOService {
         val broadcastTrip = notification.toBroadcastTrip()
 
         // ACK delivery back to server (Uber RAMEN-style at-least-once guarantee)
-        // Server tracks pending ACKs in Redis SET → removes on ACK → retries unACKed via FCM
+        // Server tracks pending ACKs in Redis ZSET → removes on cumulative ACK(seq) → replays unACKed on reconnect
+        // Extract _seq from raw args — server attaches this to every sequenced payload
+        val rawSeq: Long = try {
+            val rawObj = args.firstOrNull() as? org.json.JSONObject
+            rawObj?.optLong("_seq", 0L) ?: 0L
+        } catch (_: Exception) { 0L }
+        // Update lastAckedSeq — used in next reconnect handshake to enable server replay
+        if (rawSeq > 0L && rawSeq > lastAckedSeq) {
+            lastAckedSeq = rawSeq
+        }
         val ackOrderId = broadcastTrip.broadcastId
         if (ackOrderId.isNotBlank()) {
             emitDispatchAck(
                 orderId = ackOrderId,
+                seq = rawSeq,
                 dispatchRevision = broadcastTrip.dispatchRevision,
                 source = "socket",
                 receivedAtMs = receivedAtMs
@@ -1510,6 +1539,7 @@ object SocketIOService {
 
     fun emitDispatchAck(
         orderId: String,
+        seq: Long = 0L,
         dispatchRevision: Long? = null,
         source: String,
         receivedAtMs: Long = System.currentTimeMillis()
@@ -1518,14 +1548,17 @@ object SocketIOService {
         if (normalizedOrderId.isEmpty()) return
 
         val ackPayload = JSONObject().apply {
-            put("orderId", normalizedOrderId)
+            // seq: N — server uses cumulative ACK to clear unacked ZSET (all msgs ≤ seq removed)
+            // When seq=0 (no _seq in payload), server ignores ACK — safe fallback
+            if (seq > 0L) put("seq", seq)
+            put("orderId", normalizedOrderId)  // retained for traceability
             dispatchRevision?.let { put("dispatchRevision", it) }
             put("receivedAt", receivedAtMs)
             put("source", source)
         }
 
         socket?.emit("dispatch_ack", ackPayload)
-        socket?.emit("broadcast_ack", ackPayload)
+        socket?.emit("broadcast_ack", ackPayload)  // server clears socket:unacked:{userId} ZSET
     }
     
     /**
