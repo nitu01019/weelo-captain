@@ -155,6 +155,17 @@ object SocketIOService {
     @Volatile
     private var lastAckedSeq: Long = 0L
 
+    // ==========================================================================
+    // BROADCAST DEDUP CACHE — Prevents duplicate overlay/request screen entries
+    // ==========================================================================
+    // With RAMEN replay, reconnect push, and FCM all active, the same broadcast
+    // can arrive 2-3 times via different paths. This LRU cache (2048 entries)
+    // ensures each broadcastId is processed exactly once within 1 hour.
+    // ==========================================================================
+    private val seenBroadcastIds = object : LinkedHashMap<String, Long>(256, 0.75f, true) {
+        override fun removeEldestEntry(eldest: Map.Entry<String, Long>): Boolean = size > 2048
+    }
+
     /**
      * Returns the current local online state (heartbeat running or not).
      * Used by DriverDashboardViewModel as fallback when availability API fails.
@@ -1066,6 +1077,28 @@ object SocketIOService {
                 "role" to (userRole ?: "unknown")
             )
         )
+
+        // DEDUP: Skip if we've already processed this broadcastId in the last hour
+        val dedupBroadcastId = try {
+            (args.firstOrNull() as? org.json.JSONObject)?.optString("broadcastId", "")
+                ?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) { null }
+
+        if (dedupBroadcastId != null) {
+            val now = System.currentTimeMillis()
+            val lastSeen = seenBroadcastIds[dedupBroadcastId]
+            if (lastSeen != null && (now - lastSeen) < 3_600_000L) {
+                timber.log.Timber.d("🔁 Dedup: skipping already-seen broadcast %s", dedupBroadcastId)
+                BroadcastTelemetry.record(
+                    stage = BroadcastStage.BROADCAST_GATED,
+                    status = BroadcastStatus.DROPPED,
+                    reason = "dedup_already_seen",
+                    attrs = mapOf("broadcastId" to dedupBroadcastId)
+                )
+                return
+            }
+            seenBroadcastIds[dedupBroadcastId] = now
+        }
 
         val envelope = parseIncomingBroadcastEnvelope(
             rawEventName = rawEventName,
