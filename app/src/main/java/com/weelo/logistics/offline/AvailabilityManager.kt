@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.utils.HeartbeatManager
+import com.weelo.logistics.utils.LocationSettingsWatcher
 import com.weelo.logistics.utils.TransporterOnlineService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -116,6 +117,8 @@ class AvailabilityManager private constructor(
     companion object {
         /** Frontend cooldown — minimum 2s between toggle presses */
         private const val FRONTEND_COOLDOWN_MS = 2000L
+        /** Grace period before forcing offline when GPS is disabled (handles tunnel/indoor) */
+        private const val GPS_OFF_GRACE_PERIOD_MS = 30_000L
         const val ERROR_CODE_LOCATION_PERMISSION_REQUIRED = "LOCATION_PERMISSION_REQUIRED"
 
         @Volatile
@@ -225,6 +228,33 @@ class AvailabilityManager private constructor(
                         timber.log.Timber.i("📶 Network available — syncing pending availability status")
                         syncWithBackend(_isAvailable.value)
                     }
+                }
+            }
+        }
+
+        // 4) Auto-force offline when GPS is disabled while ONLINE.
+        // 30s grace period to handle brief tunnel/indoor GPS loss.
+        scope.launch {
+            val watcher = LocationSettingsWatcher.getInstance(appContext)
+            var gpsOffSinceMs = 0L
+            watcher.isGpsEnabled.collect { gpsEnabled ->
+                if (!gpsEnabled && _isAvailable.value) {
+                    if (gpsOffSinceMs == 0L) gpsOffSinceMs = System.currentTimeMillis()
+                    val elapsed = System.currentTimeMillis() - gpsOffSinceMs
+                    if (elapsed >= GPS_OFF_GRACE_PERIOD_MS) {
+                        timber.log.Timber.w("⛔ GPS has been off for ${elapsed}ms while ONLINE — forcing offline")
+                        forceOfflineForMissingPermission("gps_disabled_auto_offline")
+                    } else {
+                        // Schedule a delayed check after the remaining grace period
+                        val remaining = GPS_OFF_GRACE_PERIOD_MS - elapsed
+                        kotlinx.coroutines.delay(remaining)
+                        if (!watcher.checkGpsEnabled() && _isAvailable.value) {
+                            timber.log.Timber.w("⛔ GPS still off after grace period — forcing offline")
+                            forceOfflineForMissingPermission("gps_disabled_grace_expired")
+                        }
+                    }
+                } else {
+                    gpsOffSinceMs = 0L  // Reset when GPS re-enabled or transporter is offline
                 }
             }
         }
@@ -463,8 +493,10 @@ class AvailabilityManager private constructor(
     }
 
     private fun updateHeartbeatForAvailability(available: Boolean) {
+        val watcher = LocationSettingsWatcher.getInstance(appContext)
         if (!available) {
             TransporterOnlineService.stop(appContext)
+            watcher.stop()
             return
         }
 
@@ -473,8 +505,12 @@ class AvailabilityManager private constructor(
             scope.launch {
                 forceOfflineForMissingPermission("heartbeat_update")
             }
+            watcher.stop()
             return
         }
+
+        // Start GPS watcher so we detect GPS toggle-off in real-time
+        watcher.start()
 
         val startResult = TransporterOnlineService.start(
             context = appContext,
@@ -492,7 +528,15 @@ class AvailabilityManager private constructor(
     }
 
     private fun hasLocationPermissionForOnline(): Boolean {
-        return HeartbeatManager.hasLocationPermission(appContext)
+        return HeartbeatManager.hasLocationPermission(appContext) && isGpsActuallyEnabled()
+    }
+
+    /**
+     * Check if GPS provider is actually enabled in system settings.
+     * Separate from permission grant — user may have permission but GPS toggled off.
+     */
+    private fun isGpsActuallyEnabled(): Boolean {
+        return LocationSettingsWatcher.getInstance(appContext).checkGpsEnabled()
     }
 
     private fun setLocationPermissionRequiredError(source: String) {

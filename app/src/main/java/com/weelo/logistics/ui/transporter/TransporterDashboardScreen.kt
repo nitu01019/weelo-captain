@@ -21,6 +21,8 @@ import com.weelo.logistics.ui.components.responsiveHorizontalPadding
 import com.weelo.logistics.ui.components.OfflineBanner
 import com.weelo.logistics.offline.NetworkMonitor
 import com.weelo.logistics.offline.AvailabilityManager
+import com.weelo.logistics.offline.AvailabilityState
+import com.weelo.logistics.utils.LocationSettingsWatcher
 import com.weelo.logistics.ui.theme.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -77,7 +79,12 @@ fun TransporterDashboardScreen(
     val availabilityManager = remember { AvailabilityManager.getInstance(context) }
     val isOnline by networkMonitor.isOnline.collectAsStateWithLifecycle()
     val availabilityToggleError by availabilityManager.toggleError.collectAsStateWithLifecycle()
+    val availabilityState by availabilityManager.availabilityState.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    // GPS state monitoring — shows warning when GPS disabled while ONLINE
+    val locationWatcher = remember { LocationSettingsWatcher.getInstance(context) }
+    val isGpsEnabled by locationWatcher.isGpsEnabled.collectAsStateWithLifecycle()
 
     val dashboardViewModel: TransporterDashboardViewModel = viewModel(
         factory = remember(context, mainViewModel) {
@@ -301,6 +308,46 @@ fun TransporterDashboardScreen(
                 isOffline = !isOnline,
                 onRetryClick = { dashboardViewModel.retryRefresh() }
             )
+
+            // GPS Disabled Warning — shows when GPS is off while transporter is ONLINE
+            if (!isGpsEnabled && availabilityState == AvailabilityState.ONLINE) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Warning.copy(alpha = 0.12f)
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Warning.copy(alpha = 0.25f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LocationOff,
+                            contentDescription = null,
+                            tint = Warning,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.gps_disabled_title),
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = stringResource(R.string.gps_disabled_message),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                }
+            }
             
             DashboardTopBar(
                 title = stringResource(R.string.dashboard),

@@ -201,6 +201,8 @@
     <string name="offline_banner_message">You\'re offline. Some features may not work.</string>
     <string name="no_network">No network</string>
     <string name="availability_location_permission_required">Allow location permission to go online and receive nearby broadcasts.</string>
+    <string name="gps_disabled_title">Location is turned off</string>
+    <string name="gps_disabled_message">Turn on GPS to receive orders. Your status will switch to offline if GPS remains off.</string>
     
     <!-- Map & Components -->
     <string name="pickup_label">Pickup</string>
