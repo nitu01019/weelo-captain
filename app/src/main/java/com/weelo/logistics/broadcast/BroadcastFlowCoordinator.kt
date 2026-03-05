@@ -904,6 +904,20 @@ object BroadcastFlowCoordinator {
                         "queueDepth" to pendingQueue.size().toString()
                     )
                 )
+                // ─────────────────────────────────────────────────────────
+                // FULL-SCREEN INTENT: If app is in background, wake device
+                // and show broadcast on lock screen (Uber-style).
+                // ─────────────────────────────────────────────────────────
+                if (!com.weelo.logistics.utils.AppLifecycleObserver.isAppInForeground) {
+                    com.weelo.logistics.WeeloApp.getInstance()?.let { app ->
+                        BroadcastFullScreenNotifier.showIncomingBroadcast(
+                            context = app,
+                            broadcastId = trip.broadcastId,
+                            title = "New Booking Request",
+                            body = "${trip.pickupLocation.city ?: trip.pickupLocation.address} → ${trip.dropLocation.city ?: trip.dropLocation.address}"
+                        )
+                    }
+                }
             }
 
             BroadcastOverlayManager.BroadcastIngressAction.BUFFERED -> {

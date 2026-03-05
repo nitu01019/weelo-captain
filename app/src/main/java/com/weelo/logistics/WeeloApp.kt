@@ -56,6 +56,10 @@ class WeeloApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+
+        // Initialize app lifecycle observer for foreground/background detection.
+        // Must be early — before socket connect — so broadcasts can check fg/bg state.
+        com.weelo.logistics.utils.AppLifecycleObserver.init(this)
         
         // Initialize Timber for production-safe logging
         // Debug builds: logs appear in logcat

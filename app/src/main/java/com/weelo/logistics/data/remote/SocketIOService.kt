@@ -1233,6 +1233,17 @@ object SocketIOService {
                         rawEventName = rawEventName,
                         ingressMode = "legacy_overlay_manager"
                     )
+                    // Full-screen intent for background (Uber-style)
+                    if (!com.weelo.logistics.utils.AppLifecycleObserver.isAppInForeground) {
+                        com.weelo.logistics.WeeloApp.getInstance()?.let { app ->
+                            com.weelo.logistics.broadcast.BroadcastFullScreenNotifier.showIncomingBroadcast(
+                                context = app,
+                                broadcastId = broadcastTrip.broadcastId,
+                                title = "New Booking Request",
+                                body = "${broadcastTrip.pickupLocation.city ?: broadcastTrip.pickupLocation.address} → ${broadcastTrip.dropLocation.city ?: broadcastTrip.dropLocation.address}"
+                            )
+                        }
+                    }
                 }
 
                 BroadcastOverlayManager.BroadcastIngressAction.BUFFERED -> {

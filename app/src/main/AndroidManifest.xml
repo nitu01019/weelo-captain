@@ -13,6 +13,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Full-screen intent for background broadcasts (incoming call style) -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     
     <!-- Camera permission for profile photo capture -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -50,6 +53,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Broadcast Incoming Activity - Full-screen intent for background broadcasts -->
+        <!-- Shows broadcast offer on lock screen, like an incoming phone call -->
+        <activity
+            android:name=".broadcast.BroadcastIncomingActivity"
+            android:exported="false"
+            android:showOnLockScreen="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.WeeloLogistics"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance" />
         
         <!-- GPS Tracking Service - Real-time location for trips -->
         <service
