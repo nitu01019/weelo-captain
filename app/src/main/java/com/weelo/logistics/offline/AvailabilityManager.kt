@@ -144,13 +144,21 @@ class AvailabilityManager private constructor(
         initAvailabilityResolved = false
 
         // 1) Load saved state for immediate UI continuity.
+        // CRITICAL: Also resolve availabilityState from DataStore on first read
+        // to eliminate the UNKNOWN window (was 500ms+, now ~5ms).
+        // Backend GET (step 2) still runs and corrects if DataStore is stale.
         scope.launch {
             dataStore.data.collect { prefs ->
                 val savedState = prefs[KEY_IS_AVAILABLE] ?: false
                 if (!_isToggling.value) {
                     val previous = _isAvailable.value
                     _isAvailable.value = savedState
-                    if (initAvailabilityResolved) {
+                    // Resolve from DataStore instantly on FIRST read (optimistic).
+                    // Backend GET corrects later if stale.
+                    if (!initAvailabilityResolved && _availabilityState.value == AvailabilityState.UNKNOWN) {
+                        updateAvailabilityState(savedState)
+                        timber.log.Timber.i("⚡ Instant DataStore resolve: ${if (savedState) "ONLINE" else "OFFLINE"} (no UNKNOWN window)")
+                    } else if (initAvailabilityResolved) {
                         updateAvailabilityState(savedState)
                         if (previous != savedState) {
                             updateHeartbeatForAvailability(savedState)

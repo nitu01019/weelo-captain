@@ -1216,7 +1216,7 @@ object SocketIOService {
         }
 
         serviceScope.launch {
-            val ingestResult = BroadcastOverlayManager.showBroadcast(broadcastTrip)
+            val ingestResult = BroadcastOverlayManager.showBroadcast(broadcastTrip, trustedSource = true)
             when (ingestResult.action) {
                 BroadcastOverlayManager.BroadcastIngressAction.SHOWN -> {
                     timber.log.Timber.i("✅ OVERLAY SHOWN for broadcast: ${broadcastTrip.broadcastId}")

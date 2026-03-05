@@ -133,7 +133,18 @@ object BroadcastOverlayManager {
         }
     }
 
-    fun showBroadcast(broadcast: BroadcastTrip): BroadcastIngressResult {
+    /**
+     * Show a broadcast in the overlay.
+     *
+     * @param trustedSource When true (SOCKET/BUFFER), skip availability check.
+     *   Socket connection = proof of online (server only sends to connected,
+     *   online transporters). When false (FCM/NOTIFICATION_OPEN), availability
+     *   guard is kept since these sources can deliver after offline toggle.
+     */
+    fun showBroadcast(
+        broadcast: BroadcastTrip,
+        trustedSource: Boolean = false
+    ): BroadcastIngressResult {
         val broadcastId = broadcast.broadcastId.trim()
         val receivedAt = System.currentTimeMillis()
 
@@ -154,6 +165,30 @@ object BroadcastOverlayManager {
                 attrs = mapOf("broadcastId" to broadcastId)
             )
             return BroadcastIngressResult(BroadcastIngressAction.DROPPED, reason = "duplicate_id")
+        }
+
+        // =================================================================
+        // SOURCE-AWARE AVAILABILITY GATE
+        //
+        // trustedSource = true  → socket/buffer → show immediately
+        // trustedSource = false → FCM/notification → check availability
+        // =================================================================
+        if (trustedSource) {
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.BROADCAST_GATED,
+                status = BroadcastStatus.SUCCESS,
+                attrs = mapOf("broadcastId" to broadcastId, "availability" to "trusted_source")
+            )
+            scope.launch {
+                mutex.withLock {
+                    showBroadcastOnlineLocked(
+                        broadcast = broadcast,
+                        receivedAtMs = receivedAt,
+                        forceImmediate = true
+                    )
+                }
+            }
+            return BroadcastIngressResult(BroadcastIngressAction.SHOWN)
         }
 
         val availabilityState = getAvailabilityState()

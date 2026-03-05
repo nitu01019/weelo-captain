@@ -705,54 +705,79 @@ object BroadcastFlowCoordinator {
             return
         }
 
-        when (_feedState.value.availabilityState) {
-            AvailabilityState.UNKNOWN -> {
-                pendingQueue.enqueue(PendingBroadcast(trip = trip, receivedAtMs = envelope.receivedAtMs))
-                publishState(
-                    pendingCount = pendingQueue.size(),
-                    availabilityState = _feedState.value.availabilityState,
-                    isReconciling = _feedState.value.isReconciling
-                )
-                _events.tryEmit(
-                    BroadcastCoordinatorEvent.IngressHandled(
+        // =====================================================================
+        // SOURCE-AWARE AVAILABILITY GATE (Uber-style)
+        //
+        // SOCKET / BUFFER → trusted. Socket connection = proof of online.
+        //   Server only emits new_broadcast to connected, online transporters.
+        //   Buffer source = buffered from startup when socket was connected.
+        //   Skip availability check → show overlay instantly.
+        //
+        // FCM / NOTIFICATION_OPEN → untrusted. FCM can arrive after transporter
+        //   toggled offline. Keep the availability guard for these sources.
+        // =====================================================================
+        val isTrustedSource = envelope.source == BroadcastIngressSource.SOCKET ||
+            envelope.source == BroadcastIngressSource.BUFFER
+
+        if (isTrustedSource) {
+            // Trusted: show immediately, no availability check
+            applyTripAndOverlay(
+                trip = trip,
+                envelope = envelope,
+                normalizedId = normalizedId,
+                eventClass = eventClass
+            )
+        } else {
+            // Untrusted (FCM, notification tap): keep availability guard
+            when (_feedState.value.availabilityState) {
+                AvailabilityState.UNKNOWN -> {
+                    pendingQueue.enqueue(PendingBroadcast(trip = trip, receivedAtMs = envelope.receivedAtMs))
+                    publishState(
+                        pendingCount = pendingQueue.size(),
+                        availabilityState = _feedState.value.availabilityState,
+                        isReconciling = _feedState.value.isReconciling
+                    )
+                    _events.tryEmit(
+                        BroadcastCoordinatorEvent.IngressHandled(
+                            id = normalizedId,
+                            source = envelope.source,
+                            decision = BroadcastDecision.BUFFER
+                        )
+                    )
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.BROADCAST_GATED,
+                        status = BroadcastStatus.BUFFERED,
+                        reason = "availability_unknown",
+                        attrs = mapOf(
+                            "id" to normalizedId,
+                            "eventClass" to eventClass.name,
+                            "source" to envelope.source.name.lowercase(Locale.US),
+                            "queueDepth" to pendingQueue.size().toString(),
+                            "ingressQueueDepth" to ingressQueueDepth.get().toString()
+                        )
+                    )
+                }
+
+                AvailabilityState.OFFLINE -> {
+                    emitDrop(
                         id = normalizedId,
                         source = envelope.source,
-                        decision = BroadcastDecision.BUFFER
+                        reason = BroadcastDropReason.AVAILABILITY_OFFLINE,
+                        additionalAttrs = mapOf(
+                            "eventClass" to eventClass.name,
+                            "event" to envelope.rawEventName
+                        )
                     )
-                )
-                BroadcastTelemetry.record(
-                    stage = BroadcastStage.BROADCAST_GATED,
-                    status = BroadcastStatus.BUFFERED,
-                    reason = "availability_unknown",
-                    attrs = mapOf(
-                        "id" to normalizedId,
-                        "eventClass" to eventClass.name,
-                        "source" to envelope.source.name.lowercase(Locale.US),
-                        "queueDepth" to pendingQueue.size().toString(),
-                        "ingressQueueDepth" to ingressQueueDepth.get().toString()
-                    )
-                )
-            }
+                }
 
-            AvailabilityState.OFFLINE -> {
-                emitDrop(
-                    id = normalizedId,
-                    source = envelope.source,
-                    reason = BroadcastDropReason.AVAILABILITY_OFFLINE,
-                    additionalAttrs = mapOf(
-                        "eventClass" to eventClass.name,
-                        "event" to envelope.rawEventName
+                AvailabilityState.ONLINE -> {
+                    applyTripAndOverlay(
+                        trip = trip,
+                        envelope = envelope,
+                        normalizedId = normalizedId,
+                        eventClass = eventClass
                     )
-                )
-            }
-
-            AvailabilityState.ONLINE -> {
-                applyTripAndOverlay(
-                    trip = trip,
-                    envelope = envelope,
-                    normalizedId = normalizedId,
-                    eventClass = eventClass
-                )
+                }
             }
         }
     }
@@ -863,7 +888,9 @@ object BroadcastFlowCoordinator {
             isReconciling = _feedState.value.isReconciling
         )
 
-        val ingress = BroadcastOverlayManager.showBroadcast(trip)
+        val isTrusted = envelope.source == BroadcastIngressSource.SOCKET ||
+            envelope.source == BroadcastIngressSource.BUFFER
+        val ingress = BroadcastOverlayManager.showBroadcast(trip, trustedSource = isTrusted)
         when (ingress.action) {
             BroadcastOverlayManager.BroadcastIngressAction.SHOWN -> {
                 _events.tryEmit(BroadcastCoordinatorEvent.OverlayShown(normalizedId))
