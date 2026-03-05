@@ -1,5 +1,6 @@
 package com.weelo.logistics.broadcast
 
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -95,15 +96,27 @@ class BroadcastIncomingActivity : ComponentActivity() {
         }
     }
 
+    // =========================================================================
+    // EDGE CASE: Second broadcast arrives while this Activity is already open.
+    // singleInstance reuses the same Activity — onNewIntent fires instead of
+    // a new onCreate. We just update the intent so the composable re-reads.
+    // =========================================================================
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val newBroadcastId = intent.getStringExtra("broadcast_id")
+        timber.log.Timber.i("📲 BroadcastIncomingActivity onNewIntent: broadcastId=%s", newBroadcastId)
+    }
+
     /**
      * Navigate to MainActivity with the accepted broadcast.
      * Uses FLAG_ACTIVITY_CLEAR_TOP to bring existing task to front.
      */
     private fun navigateToMainApp(broadcastId: String) {
-        val intent = android.content.Intent(this, com.weelo.logistics.MainActivity::class.java).apply {
+        val intent = Intent(this, com.weelo.logistics.MainActivity::class.java).apply {
             addFlags(
-                android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                    android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
             )
             putExtra("notification_type", "new_broadcast")
             putExtra("broadcast_id", broadcastId)

@@ -5,6 +5,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import java.util.concurrent.atomic.AtomicBoolean
+import java.lang.ref.WeakReference
 
 /**
  * App-level foreground/background detection using ProcessLifecycleOwner.
@@ -25,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 object AppLifecycleObserver : DefaultLifecycleObserver {
 
     private val _isForeground = AtomicBoolean(false)
+    private var appRef: WeakReference<Application>? = null
 
     /** True when at least one Activity is in STARTED state (visible to user). */
     val isAppInForeground: Boolean
@@ -35,6 +37,7 @@ object AppLifecycleObserver : DefaultLifecycleObserver {
      * Safe to call multiple times — ProcessLifecycleOwner deduplicates observers.
      */
     fun init(app: Application) {
+        appRef = WeakReference(app)
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
         timber.log.Timber.i("📱 AppLifecycleObserver initialized")
     }
@@ -42,6 +45,14 @@ object AppLifecycleObserver : DefaultLifecycleObserver {
     override fun onStart(owner: LifecycleOwner) {
         _isForeground.set(true)
         timber.log.Timber.d("📱 App → FOREGROUND")
+        // ─────────────────────────────────────────────────────────────────
+        // EDGE CASE: User opens app via launcher icon (not via notification).
+        // The full-screen notification is stale — overlay is now visible.
+        // Dismiss the notification so it doesn't linger.
+        // ─────────────────────────────────────────────────────────────────
+        appRef?.get()?.let { app ->
+            com.weelo.logistics.broadcast.BroadcastFullScreenNotifier.dismiss(app)
+        }
     }
 
     override fun onStop(owner: LifecycleOwner) {
