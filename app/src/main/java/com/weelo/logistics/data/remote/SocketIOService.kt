@@ -444,7 +444,7 @@ object SocketIOService {
                 reconnectionDelayMax = 30000
                 timeout = 20000
                 forceNew = true
-                transports = arrayOf("websocket", "polling")
+                transports = arrayOf("websocket")
             }
             
             socket = IO.socket(URI.create(url), options)
