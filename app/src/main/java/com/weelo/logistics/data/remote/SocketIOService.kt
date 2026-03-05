@@ -188,27 +188,38 @@ object SocketIOService {
     }
     
     /**
-     * Start heartbeat — sends {type: "heartbeat"} every 12 seconds
-     * Backend extends Redis presence TTL to 35s on each heartbeat.
+     * Start heartbeat — adaptive interval based on network quality.
+     * Backend extends Redis presence TTL to 60s on each heartbeat.
      * If heartbeat stops → TTL expires → driver auto-offline.
      *
-     * TTL DESIGN:
-     *   Heartbeat interval = 12 seconds
-     *   Redis TTL = 35 seconds
-     *   → 3 retry windows before auto-offline
-     *   → Handles 4G instability / network jitter
+     * ADAPTIVE INTERVAL (Uber-style):
+     *   WiFi / 4G (>5Mbps):   3s   — fast detection, good bandwidth
+     *   3G (1-5 Mbps):        5s   — moderate, save bandwidth
+     *   2G / EDGE (<1 Mbps):  10s  — survive poor network
+     *   No network:           15s  — queue locally, flush on reconnect
+     *
+     * LIGHTWEIGHT PAYLOAD:
+     *   Socket heartbeat sends only {t: "hb"} (2 bytes) to extend presence TTL.
+     *   Location updates flow via REST /transporter/heartbeat (separate path).
      */
     fun startHeartbeat() {
         // Cancel existing heartbeat if any
         heartbeatJob?.cancel()
         
         heartbeatJob = serviceScope.launch {
-            timber.log.Timber.i("💓 Heartbeat started (every 12s)")
+            timber.log.Timber.i("💓 Adaptive heartbeat started")
             while (isActive) {
                 try {
+                    // Lightweight heartbeat — just extend TTL, no location data
+                    // Location flows via REST /transporter/heartbeat separately
                     val heartbeatData = org.json.JSONObject().apply {
-                        put("type", "heartbeat")
-                        // Attach latest GPS so backend refreshes Redis GEO index
+                        put("t", "hb")
+                    }
+                    
+                    if (socket?.connected() == true) {
+                        socket?.emit(Events.HEARTBEAT, heartbeatData)
+                    } else {
+                        // Socket disconnected — queue last known location for batch flush on reconnect
                         try {
                             val ctx = WeeloApp.getInstance()?.applicationContext
                             if (ctx != null) {
@@ -222,24 +233,75 @@ object SocketIOService {
                                     android.location.LocationManager.NETWORK_PROVIDER
                                 )
                                 if (loc != null) {
-                                    put("lat", loc.latitude)
-                                    put("lng", loc.longitude)
-                                    put("speed", loc.speed.toDouble())
-                                    put("battery", getDeviceBatteryLevel(ctx))
+                                    queueOfflineLocation(loc.latitude, loc.longitude)
                                 }
                             }
-                        } catch (locErr: Exception) {
-                            // Non-critical — heartbeat still extends presence TTL
-                            timber.log.Timber.w("GPS unavailable for heartbeat: ${locErr.message}")
-                        }
+                        } catch (_: Exception) { /* best effort */ }
                     }
-                    socket?.emit(Events.HEARTBEAT, heartbeatData)
                 } catch (e: Exception) {
                     timber.log.Timber.w("💓 Heartbeat emit failed: ${e.message}")
                 }
-                kotlinx.coroutines.delay(12_000) // 12 seconds
+                
+                // Adaptive delay based on network quality
+                val intervalMs = getAdaptiveHeartbeatInterval()
+                kotlinx.coroutines.delay(intervalMs)
             }
         }
+    }
+    
+    /**
+     * Detect network quality and return optimal heartbeat interval.
+     * Uses Android ConnectivityManager to check downstream bandwidth.
+     */
+    private fun getAdaptiveHeartbeatInterval(): Long {
+        return try {
+            val ctx = WeeloApp.getInstance()?.applicationContext ?: return 10_000L
+            val cm = ctx.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) 
+                as? android.net.ConnectivityManager ?: return 10_000L
+            val nc = cm.getNetworkCapabilities(cm.activeNetwork)
+            
+            when {
+                nc == null -> 15_000L  // No network — slow heartbeat
+                nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> 3_000L
+                nc.linkDownstreamBandwidthKbps > 5000 -> 3_000L   // 4G+ (>5Mbps)
+                nc.linkDownstreamBandwidthKbps > 1000 -> 5_000L   // 3G  (1-5Mbps)
+                nc.linkDownstreamBandwidthKbps > 200 -> 10_000L   // 2G/EDGE
+                else -> 15_000L  // Very poor network
+            }
+        } catch (_: Exception) {
+            10_000L  // Default to moderate interval on any error
+        }
+    }
+    
+    // Offline location queue — max 50 entries, flush on reconnect
+    private val offlineLocationQueue = java.util.ArrayDeque<Pair<Double, Double>>(50)
+    
+    private fun queueOfflineLocation(lat: Double, lng: Double) {
+        synchronized(offlineLocationQueue) {
+            if (offlineLocationQueue.size >= 50) offlineLocationQueue.removeFirst()
+            offlineLocationQueue.addLast(Pair(lat, lng))
+        }
+    }
+    
+    /** Flush queued offline locations on reconnect (called from EVENT_CONNECT handler) */
+    internal fun flushOfflineLocationQueue() {
+        val batch = synchronized(offlineLocationQueue) {
+            val items = offlineLocationQueue.toList()
+            offlineLocationQueue.clear()
+            items
+        }
+        if (batch.isEmpty()) return
+        timber.log.Timber.i("📤 Flushing ${batch.size} offline location(s)")
+        // Send last known location only (most recent is most relevant)
+        val last = batch.last()
+        val locationData = org.json.JSONObject().apply {
+            put("type", "heartbeat")
+            put("lat", last.first)
+            put("lng", last.second)
+            put("_offlineFlush", true)
+            put("_queueSize", batch.size)
+        }
+        socket?.emit(Events.HEARTBEAT, locationData)
     }
     
     /**
@@ -484,6 +546,8 @@ object SocketIOService {
                 if (_isOnlineLocally) {
                     timber.log.Timber.i("💓 Auto-restarting heartbeat on reconnect (driver was online)")
                     startHeartbeat()
+                    // Flush any locations queued while offline
+                    flushOfflineLocationQueue()
                 }
                 
                 // Relay latest FCM token to backend on every connect/reconnect
