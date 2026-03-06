@@ -1514,6 +1514,8 @@ object SocketIOService {
                 yourTotalTrucks = yourTotalTrucks,
                 trucksStillNeeded = trucksStillNeeded,
                 isPersonalized = isPersonalized,
+                pickupDistanceKm = data.optDouble("pickupDistanceKm", 0.0),
+                pickupEtaMinutes = data.optInt("pickupEtaMinutes", 0),
                 eventId = resolveOptionalString(data, "eventId"),
                 dispatchRevision = resolveOptionalLong(data, "dispatchRevision"),
                 orderLifecycleVersion = resolveOptionalLong(data, "orderLifecycleVersion"),
@@ -2229,6 +2231,8 @@ data class BroadcastNotification(
     val yourTotalTrucks: Int = 0,              // How many they own total
     val trucksStillNeeded: Int = 0,            // How many order still needs
     val isPersonalized: Boolean = false,         // Is this a personalized broadcast?
+    val pickupDistanceKm: Double = 0.0,          // How far transporter is from pickup
+    val pickupEtaMinutes: Int = 0,               // ETA to reach pickup
     val eventId: String? = null,
     val dispatchRevision: Long? = null,
     val orderLifecycleVersion: Long? = null,
@@ -2320,6 +2324,8 @@ data class BroadcastNotification(
             yourTotalTrucks = yourTotalTrucks,
             trucksStillNeeded = trucksStillNeeded.takeIf { it > 0 } ?: (trucksNeeded - trucksFilled),
             isPersonalized = isPersonalized,
+            pickupDistanceKm = pickupDistanceKm,
+            pickupEtaMinutes = pickupEtaMinutes,
             eventId = eventId,
             dispatchRevision = dispatchRevision,
             orderLifecycleVersion = orderLifecycleVersion,

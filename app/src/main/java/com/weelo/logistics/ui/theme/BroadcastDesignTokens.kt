@@ -23,9 +23,23 @@ object BroadcastDesignTokens {
     val TextSecondary = Color(0xFF5B6473)
     val TextTertiary = Color(0xFF7E8899)
 
-    val RoutePickup = Color(0xFFF2D22E)
-    val RouteDrop = Color(0xFFE05858)
+    val RoutePickup = Color(0xFF2E8B57)        // Green dot for pickup
+    val RouteDrop = Color(0xFFE05858)          // Red dot for drop
+    val RouteLineGreen = Color(0xFF2E8B57)     // Green vertical route line
     val StatusWarning = Color(0xFFF0A345)
     val StatusError = Color(0xFFE05858)
     val AccentInfo = Color(0xFF2B7DE9)
+
+    // Timer ring tokens
+    val TimerRingActive = Color(0xFFF2D22E)    // Yellow timer ring (depleting)
+    val TimerRingTrack = Color(0xFFE8E8E8)     // Grey background track
+    val TimerRingUrgent = Color(0xFFE05858)    // Red when <15 seconds left
+
+    // Truck card tokens (white background, not dark)
+    val TruckCardBackground = Color(0xFFFFFFFF)
+    val TruckCardBorder = Color(0xFFE0E0E0)
+
+    // Pickup distance label
+    val PickupDistanceLabel = Color(0xFF2E8B57)  // Green for "Pickup" label
+    val DropDistanceLabel = Color(0xFFE05858)     // Red for "Drop" label
 }

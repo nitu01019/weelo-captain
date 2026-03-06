@@ -297,6 +297,14 @@ data class BroadcastTrip(
     /** Whether this is a personalized broadcast (true) or generic (false) */
     val isPersonalized: Boolean = false,
 
+    // =========================================================================
+    // PICKUP PROXIMITY - How far THIS transporter is from the pickup point
+    // =========================================================================
+    /** Distance from transporter's current location to pickup (e.g., 2.3 km) */
+    val pickupDistanceKm: Double = 0.0,
+    /** ETA from transporter's current location to pickup (e.g., 8 minutes) */
+    val pickupEtaMinutes: Int = 0,
+
     /** Lifecycle metadata used for strict dedupe/order/reconcile. */
     val eventId: String? = null,
     val dispatchRevision: Long? = null,

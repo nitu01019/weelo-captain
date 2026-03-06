@@ -1044,7 +1044,7 @@ private fun BroadcastOverlayContent(
  * =============================================================================
  */
 @Composable
-private fun BroadcastOverlayContentNew(
+internal fun BroadcastOverlayContentNew(
     broadcast: BroadcastTrip,
     remainingSeconds: Int,
     currentIndex: Int,
@@ -1095,25 +1095,34 @@ private fun BroadcastOverlayContentNew(
                         Icon(Icons.Default.Close, "Close", tint = RapidoWhite, modifier = Modifier.size(24.dp))
                     }
                     
-                    // Timer - Yellow text on dark
-                    Row(
-                        modifier = Modifier
-                            .background(RapidoYellow, RoundedCornerShape(20.dp))
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    // Timer - Circular progress ring that depletes
+                    val totalTimeSeconds = broadcast.expiryTime?.let {
+                        ((it - broadcast.broadcastTime) / 1000).toInt().coerceAtLeast(1)
+                    } ?: 120
+                    val timerProgress = remainingSeconds.toFloat() / totalTimeSeconds.toFloat()
+                    val timerColor = if (remainingSeconds <= 15) BroadcastDesignTokens.TimerRingUrgent else BroadcastDesignTokens.TimerRingActive
+                    
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.size(56.dp)
                     ) {
-                        Icon(
-                            Icons.Default.Timer,
-                            contentDescription = null,
-                            tint = RapidoBlack,
-                            modifier = Modifier.size(18.dp)
+                        CircularProgressIndicator(
+                            progress = { 1f },
+                            modifier = Modifier.fillMaxSize(),
+                            color = BroadcastDesignTokens.TimerRingTrack,
+                            strokeWidth = 4.dp
                         )
-                        Spacer(Modifier.width(6.dp))
+                        CircularProgressIndicator(
+                            progress = { timerProgress.coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxSize(),
+                            color = timerColor,
+                            strokeWidth = 4.dp
+                        )
                         Text(
                             formatTime(remainingSeconds),
-                            color = RapidoBlack,
+                            color = RapidoWhite,
                             fontWeight = FontWeight.Black,
-                            fontSize = 18.sp
+                            fontSize = 14.sp
                         )
                     }
                     
@@ -1290,14 +1299,14 @@ private fun BroadcastOverlayContentNew(
                             )
                         }
                         
-                        // Total Fare
+                        // Total Fare - Bold dark
                         Column(horizontalAlignment = Alignment.End) {
                             Text("TOTAL FARE", fontSize = 10.sp, color = RapidoMediumGray)
                             Text(
                                 "₹${"%,.0f".format(broadcast.totalFare)}",
-                                fontSize = 22.sp,
+                                fontSize = 24.sp,
                                 fontWeight = FontWeight.Black,
-                                color = RapidoYellow
+                                color = RapidoWhite
                             )
                         }
                     }
@@ -1314,65 +1323,94 @@ private fun BroadcastOverlayContentNew(
                     ) {
                         // Pickup
                         Row(verticalAlignment = Alignment.Top) {
-                            Box(
-                                modifier = Modifier
-                                    .size(10.dp)
-                                    .background(RapidoGreen, CircleShape)
-                            )
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.width(20.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .background(BroadcastDesignTokens.RoutePickup, CircleShape)
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .width(3.dp)
+                                        .height(40.dp)
+                                        .background(BroadcastDesignTokens.RouteLineGreen)
+                                )
+                            }
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
-                                Text("PICKUP", fontSize = 9.sp, color = RapidoGreen, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                Text("PICKUP", fontSize = 10.sp, color = BroadcastDesignTokens.PickupDistanceLabel, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                                 Text(
                                     broadcast.pickupLocation.address,
-                                    fontSize = 13.sp,
-                                    color = RapidoWhite,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = BroadcastDesignTokens.TextPrimary,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
-                        
-                        // Connector line
-                        Box(
-                            modifier = Modifier
-                                .padding(start = 4.dp)
-                                .width(2.dp)
-                                .height(20.dp)
-                                .background(RapidoGray)
-                        )
                         
                         // Drop
                         Row(verticalAlignment = Alignment.Top) {
                             Box(
                                 modifier = Modifier
-                                    .size(10.dp)
-                                    .background(RapidoRed, CircleShape)
+                                    .size(12.dp)
+                                    .background(BroadcastDesignTokens.RouteDrop, CircleShape),
                             )
-                            Spacer(Modifier.width(12.dp))
+                            Spacer(Modifier.width(20.dp))
                             Column(Modifier.weight(1f)) {
-                                Text("DROP", fontSize = 9.sp, color = RapidoRed, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                Text("DROP", fontSize = 10.sp, color = BroadcastDesignTokens.DropDistanceLabel, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                                 Text(
                                     broadcast.dropLocation.address,
-                                    fontSize = 13.sp,
-                                    color = RapidoWhite,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = BroadcastDesignTokens.TextPrimary,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
                         
-                        // Distance
-                        Spacer(Modifier.height(8.dp))
+                        // Pickup Distance + Drop Distance (Rapido-style side by side)
+                        Spacer(Modifier.height(12.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
+                            horizontalArrangement = Arrangement.SpaceEvenly
                         ) {
-                            Text(
-                                "${broadcast.distance} KM",
-                                fontSize = 12.sp,
-                                color = RapidoYellow,
-                                fontWeight = FontWeight.Bold
-                            )
+                            // Pickup distance (how far transporter is from pickup)
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("Pickup", fontSize = 11.sp, color = BroadcastDesignTokens.TextSecondary)
+                                Text(
+                                    if (broadcast.pickupDistanceKm > 0) "${"%,.1f".format(broadcast.pickupDistanceKm)} Km"
+                                    else "--",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = BroadcastDesignTokens.TextPrimary
+                                )
+                                if (broadcast.pickupEtaMinutes > 0) {
+                                    Text(
+                                        "~${broadcast.pickupEtaMinutes} min",
+                                        fontSize = 10.sp,
+                                        color = BroadcastDesignTokens.TextTertiary
+                                    )
+                                }
+                            }
+                            
+                            Box(Modifier.width(1.dp).height(40.dp).background(BroadcastDesignTokens.Border))
+                            
+                            // Drop distance (total route distance)
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("Drop", fontSize = 11.sp, color = BroadcastDesignTokens.TextSecondary)
+                                Text(
+                                    "${broadcast.distance.toInt()} Km",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = BroadcastDesignTokens.TextPrimary
+                                )
+                            }
                         }
                     }
                 }
@@ -1480,7 +1518,7 @@ private fun BroadcastOverlayContentNew(
  * =============================================================================
  */
 @Composable
-private fun TruckTypeCardNew(
+internal fun TruckTypeCardNew(
     vehicle: RequestedVehicle,
     maxQuantity: Int,
     holdState: TruckHoldState?,
@@ -1507,7 +1545,7 @@ private fun TruckTypeCardNew(
                 when {
                     isAccepted -> RapidoGreen.copy(alpha = 0.15f)
                     isFailed -> RapidoRed.copy(alpha = 0.15f)
-                    else -> RapidoBlack
+                    else -> BroadcastDesignTokens.TruckCardBackground
                 },
                 RoundedCornerShape(12.dp)
             )
@@ -1541,14 +1579,14 @@ private fun TruckTypeCardNew(
                         vehicle.vehicleType.uppercase(),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Black,
-                        color = RapidoWhite
+                        color = BroadcastDesignTokens.TextPrimary
                     )
                 }
                 if (vehicle.vehicleSubtype.isNotBlank()) {
                     Text(
                         vehicle.vehicleSubtype,
                         fontSize = 12.sp,
-                        color = RapidoLightGray,
+                        color = BroadcastDesignTokens.TextSecondary,
                         modifier = Modifier.padding(start = 28.dp)
                     )
                 }
@@ -1559,10 +1597,10 @@ private fun TruckTypeCardNew(
                 Text(
                     "₹${"%,.0f".format(vehicle.farePerTruck)}",
                     fontWeight = FontWeight.Black,
-                    color = RapidoYellow,
-                    fontSize = 18.sp
+                    color = BroadcastDesignTokens.TextPrimary,
+                    fontSize = 20.sp
                 )
-                Text("/truck", fontSize = 10.sp, color = RapidoMediumGray)
+                Text("/truck", fontSize = 10.sp, color = BroadcastDesignTokens.TextTertiary)
             }
         }
         
@@ -1654,7 +1692,7 @@ private fun TruckTypeCardNew(
  * Truck Controls Row - Quantity selector + Accept/Reject buttons
  */
 @Composable
-private fun TruckControlsRow(
+internal fun TruckControlsRow(
     selectedQuantity: Int,
     maxQuantity: Int,
     isHolding: Boolean,
