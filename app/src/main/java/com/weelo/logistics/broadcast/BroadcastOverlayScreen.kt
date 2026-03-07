@@ -1099,25 +1099,42 @@ internal fun BroadcastOverlayContentNew(
                     val totalTimeSeconds = broadcast.expiryTime?.let {
                         ((it - broadcast.broadcastTime) / 1000).toInt().coerceAtLeast(1)
                     } ?: 120
-                    val timerProgress = remainingSeconds.toFloat() / totalTimeSeconds.toFloat()
+                    val timerProgress = (remainingSeconds.toFloat() / totalTimeSeconds.toFloat()).coerceIn(0f, 1f)
                     val timerColor = if (remainingSeconds <= 15) BroadcastDesignTokens.TimerRingUrgent else BroadcastDesignTokens.TimerRingActive
+                    val trackColor = BroadcastDesignTokens.TimerRingTrack
                     
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier.size(56.dp)
                     ) {
-                        CircularProgressIndicator(
-                            progress = { 1f },
-                            modifier = Modifier.fillMaxSize(),
-                            color = BroadcastDesignTokens.TimerRingTrack,
-                            strokeWidth = 4.dp
-                        )
-                        CircularProgressIndicator(
-                            progress = { timerProgress.coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxSize(),
-                            color = timerColor,
-                            strokeWidth = 4.dp
-                        )
+                        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                            val strokeWidthPx = 4.dp.toPx()
+                            val inset = strokeWidthPx / 2
+                            val oval = androidx.compose.ui.geometry.Rect(inset, inset, size.width - inset, size.height - inset)
+                            // Track (full circle)
+                            drawArc(
+                                color = trackColor,
+                                startAngle = -90f,
+                                sweepAngle = 360f,
+                                useCenter = false,
+                                topLeft = oval.topLeft,
+                                size = oval.size,
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(strokeWidthPx)
+                            )
+                            // Progress arc (depletes over time)
+                            drawArc(
+                                color = timerColor,
+                                startAngle = -90f,
+                                sweepAngle = 360f * timerProgress,
+                                useCenter = false,
+                                topLeft = oval.topLeft,
+                                size = oval.size,
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                    width = strokeWidthPx,
+                                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                )
+                            )
+                        }
                         Text(
                             formatTime(remainingSeconds),
                             color = RapidoWhite,
