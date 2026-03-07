@@ -1560,18 +1560,22 @@ internal fun TruckTypeCardNew(
             .alpha(cardAlpha)
             .background(
                 when {
-                    isAccepted -> RapidoGreen.copy(alpha = 0.15f)
-                    isFailed -> RapidoRed.copy(alpha = 0.15f)
-                    else -> BroadcastDesignTokens.TruckCardBackground
+                    isAccepted -> Color.White
+                    isFailed -> Color(0xFFFFF5F5)
+                    else -> Color.White
                 },
                 RoundedCornerShape(12.dp)
             )
             .border(
-                width = if (isAccepted) 2.dp else 1.dp,
+                width = when {
+                    isAccepted -> 1.5.dp
+                    isFailed -> 1.5.dp
+                    else -> 1.dp
+                },
                 color = when {
-                    isAccepted -> RapidoGreen
-                    isFailed -> RapidoRed
-                    else -> RapidoGray
+                    isAccepted -> BroadcastDesignTokens.RoutePickup
+                    isFailed -> BroadcastDesignTokens.RouteDrop
+                    else -> BroadcastDesignTokens.TruckCardBorder
                 },
                 shape = RoundedCornerShape(12.dp)
             )
@@ -1636,24 +1640,35 @@ internal fun TruckTypeCardNew(
                 Text("SKIPPED", color = RapidoRed, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
             }
         } else if (isAccepted) {
-            // Accepted state
-            Box(
+            // Accepted state — clean confirmation with release option
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(RapidoGreen.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
-                    .padding(12.dp),
-                contentAlignment = Alignment.Center
+                    .background(BroadcastDesignTokens.RoutePickup.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.CheckCircle, null, tint = RapidoGreen, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.CheckCircle, null, tint = BroadcastDesignTokens.RoutePickup, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "${holdState?.quantity ?: 1} TRUCK${if ((holdState?.quantity ?: 1) > 1) "S" else ""} HELD",
-                        color = RapidoGreen,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
+                        "${holdState?.quantity ?: 1} Truck${if ((holdState?.quantity ?: 1) > 1) "s" else ""} Held",
+                        color = BroadcastDesignTokens.RoutePickup,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
                     )
                 }
+                // Release button
+                Text(
+                    "Release",
+                    color = BroadcastDesignTokens.RouteDrop,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .clickable { onReject() }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
             }
         } else if (isFailed) {
             // Failed state - allow retry
@@ -1694,10 +1709,10 @@ internal fun TruckTypeCardNew(
         if (!isRejected && !isAccepted && selectedQuantity > 1) {
             Spacer(Modifier.height(8.dp))
             Text(
-                "TOTAL: ₹${"%,.0f".format(vehicle.farePerTruck * selectedQuantity)}",
+                "Total: ₹${"%,.0f".format(vehicle.farePerTruck * selectedQuantity)}",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
-                color = RapidoYellow,
+                color = BroadcastDesignTokens.TextPrimary,
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.End
             )
@@ -1722,20 +1737,20 @@ internal fun TruckControlsRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Quantity Selector
+        // Quantity Selector — light background for white card
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .background(RapidoDarkGray, RoundedCornerShape(8.dp))
-                .border(1.dp, RapidoGray, RoundedCornerShape(8.dp))
+                .background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp))
+                .border(1.dp, BroadcastDesignTokens.TruckCardBorder, RoundedCornerShape(8.dp))
                 .padding(4.dp)
         ) {
             // Minus button
             Box(
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(36.dp)
                     .background(
-                        if (selectedQuantity > 1) RapidoYellow else RapidoGray,
+                        if (selectedQuantity > 1) BroadcastDesignTokens.RoutePickup else Color(0xFFE0E0E0),
                         RoundedCornerShape(6.dp)
                     )
                     .clickable(enabled = selectedQuantity > 1 && !isHolding) { 
@@ -1745,27 +1760,27 @@ internal fun TruckControlsRow(
             ) {
                 Text(
                     "−",
-                    fontSize = 22.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (selectedQuantity > 1) RapidoBlack else RapidoMediumGray
+                    color = if (selectedQuantity > 1) Color.White else Color(0xFF999999)
                 )
             }
             
             // Quantity display
             Text(
                 "$selectedQuantity",
-                modifier = Modifier.padding(horizontal = 20.dp),
+                modifier = Modifier.padding(horizontal = 18.dp),
                 fontWeight = FontWeight.Black,
-                fontSize = 20.sp,
-                color = RapidoWhite
+                fontSize = 18.sp,
+                color = BroadcastDesignTokens.TextPrimary
             )
             
             // Plus button
             Box(
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(36.dp)
                     .background(
-                        if (selectedQuantity < maxQuantity) RapidoYellow else RapidoGray,
+                        if (selectedQuantity < maxQuantity) BroadcastDesignTokens.RoutePickup else Color(0xFFE0E0E0),
                         RoundedCornerShape(6.dp)
                     )
                     .clickable(enabled = selectedQuantity < maxQuantity && !isHolding) { 
@@ -1775,9 +1790,9 @@ internal fun TruckControlsRow(
             ) {
                 Text(
                     "+",
-                    fontSize = 22.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (selectedQuantity < maxQuantity) RapidoBlack else RapidoMediumGray
+                    color = if (selectedQuantity < maxQuantity) Color.White else Color(0xFF999999)
                 )
             }
         }
@@ -1804,28 +1819,25 @@ internal fun TruckControlsRow(
             Box(
                 modifier = Modifier
                     .background(
-                        if (isHolding) RapidoGray else RapidoYellow,
+                        if (isHolding) Color(0xFFE8E8E8) else BroadcastDesignTokens.RoutePickup,
                         RoundedCornerShape(8.dp)
                     )
                     .clickable(enabled = !isHolding) { onAccept() }
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                contentAlignment = Alignment.Center
             ) {
                 if (isHolding) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            color = RapidoWhite,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text("HOLD", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = RapidoWhite)
-                    }
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        color = BroadcastDesignTokens.TextSecondary,
+                        strokeWidth = 2.dp
+                    )
                 } else {
                     Text(
                         "ACCEPT",
                         fontWeight = FontWeight.Black,
                         fontSize = 12.sp,
-                        color = RapidoBlack,
+                        color = Color.White,
                         letterSpacing = 1.sp
                     )
                 }

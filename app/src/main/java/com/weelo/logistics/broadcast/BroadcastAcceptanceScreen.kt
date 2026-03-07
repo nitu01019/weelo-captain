@@ -52,6 +52,7 @@ import com.weelo.logistics.ui.components.EmptyStateArtwork
 import com.weelo.logistics.ui.components.EmptyStateLayoutStyle
 import com.weelo.logistics.ui.components.IllustratedEmptyState
 import com.weelo.logistics.ui.theme.BroadcastUiTokens
+import com.weelo.logistics.ui.theme.BroadcastDesignTokens
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -966,13 +967,13 @@ private fun TruckSelectionContent(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(BoldBlack)
+            .background(BroadcastDesignTokens.ScreenBackground)
     ) {
         // ============== HEADER ==============
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(BoldBlack)
+                .background(BroadcastDesignTokens.ScreenBackground)
                 .padding(16.dp)
         ) {
             Row(
@@ -984,14 +985,14 @@ private fun TruckSelectionContent(
                 Box(
                     modifier = Modifier
                         .size(44.dp)
-                        .background(DarkGray, CircleShape)
+                        .background(Color(0xFFF0F2F5), CircleShape)
                         .clickable { onCancel() },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         Icons.Default.Close,
                         contentDescription = "Cancel",
-                        tint = PureWhite,
+                        tint = BroadcastDesignTokens.TextPrimary,
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -1000,14 +1001,14 @@ private fun TruckSelectionContent(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = "SELECT TRUCKS",
-                        color = PureWhite,
+                        color = BroadcastDesignTokens.TextPrimary,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 1.sp
                     )
                     Text(
                         text = "Choose which trucks to assign",
-                        color = MediumGray,
+                        color = BroadcastDesignTokens.TextSecondary,
                         fontSize = 12.sp
                     )
                 }
@@ -1016,7 +1017,7 @@ private fun TruckSelectionContent(
                 Box(
                     modifier = Modifier
                         .background(
-                            if (canProceed) SuccessGreen else AccentYellow,
+                            if (canProceed) BroadcastDesignTokens.RoutePickup else AccentYellow,
                             RoundedCornerShape(20.dp)
                         )
                         .padding(horizontal = 14.dp, vertical = 8.dp)
@@ -1038,8 +1039,8 @@ private fun TruckSelectionContent(
                     .fillMaxWidth()
                     .height(4.dp)
                     .clip(RoundedCornerShape(2.dp)),
-                color = if (canProceed) SuccessGreen else AccentYellow,
-                trackColor = DarkGray
+                color = if (canProceed) BroadcastDesignTokens.RoutePickup else AccentYellow,
+                trackColor = Color(0xFFE0E0E0)
             )
         }
         
@@ -1146,7 +1147,7 @@ private fun TruckSelectionContent(
                     ) {
                         Text(
                             text = "Selected: ${selectedVehicles.size} truck${if (selectedVehicles.size > 1) "s" else ""}",
-                            color = AccentYellow,
+                            color = BroadcastDesignTokens.RoutePickup,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -1192,10 +1193,10 @@ private fun TruckSelectionContent(
                             .weight(1.5f)
                             .height(52.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (canProceed) SuccessGreen else AccentYellow,
-                            contentColor = if (canProceed) OnSuccess else BroadcastUiTokens.OnPrimaryCta,
-                            disabledContainerColor = DarkGray,
-                            disabledContentColor = MediumGray
+                            containerColor = if (canProceed) BroadcastDesignTokens.RoutePickup else AccentYellow,
+                            contentColor = Color.White,
+                            disabledContainerColor = Color(0xFFE0E0E0),
+                            disabledContentColor = Color(0xFF999999)
                         ),
                         shape = RoundedCornerShape(12.dp)
                     ) {
@@ -1246,12 +1247,12 @@ private fun TruckGroupHeader(
             if (isRequestedType) {
                 Box(
                     modifier = Modifier
-                        .background(AccentYellow, RoundedCornerShape(4.dp))
+                        .background(BroadcastDesignTokens.RoutePickup, RoundedCornerShape(4.dp))
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
                         text = "REQUESTED",
-                            color = PureWhite,
+                            color = Color.White,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 0.5.sp
@@ -1261,7 +1262,7 @@ private fun TruckGroupHeader(
             
             Text(
                 text = title.uppercase(),
-                color = if (isRequestedType) AccentYellow else LightGray,
+                color = if (isRequestedType) BroadcastDesignTokens.RoutePickup else BroadcastDesignTokens.TextSecondary,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.sp
@@ -1271,7 +1272,7 @@ private fun TruckGroupHeader(
         // Count badge
         Text(
             text = if (selectedCount > 0) "$selectedCount/$count" else "$count available",
-            color = if (selectedCount > 0) SuccessGreen else MediumGray,
+            color = if (selectedCount > 0) BroadcastDesignTokens.RoutePickup else BroadcastDesignTokens.TextTertiary,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold
         )
@@ -1285,7 +1286,7 @@ private fun TruckGroupHeader(
 private fun BroadcastSummaryCard(broadcast: BroadcastTrip) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = DarkGray),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
         shape = RoundedCornerShape(12.dp)
     ) {
         Column(
@@ -1312,7 +1313,7 @@ private fun BroadcastSummaryCard(broadcast: BroadcastTrip) {
                 )
                 Text(
                     text = broadcast.pickupLocation.address.take(40) + if (broadcast.pickupLocation.address.length > 40) "..." else "",
-                    color = PureWhite,
+                    color = BroadcastDesignTokens.TextPrimary,
                     fontSize = 13.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1332,7 +1333,7 @@ private fun BroadcastSummaryCard(broadcast: BroadcastTrip) {
                 )
                 Text(
                     text = broadcast.dropLocation.address.take(40) + if (broadcast.dropLocation.address.length > 40) "..." else "",
-                    color = PureWhite,
+                    color = BroadcastDesignTokens.TextPrimary,
                     fontSize = 13.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1370,9 +1371,9 @@ private fun BroadcastSummaryCard(broadcast: BroadcastTrip) {
                 // Fare
                 Text(
                     text = "₹${broadcast.farePerTruck.toInt()}/truck",
-                    color = AccentYellow,
+                    color = BroadcastDesignTokens.TextPrimary,
                     fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Black
                 )
             }
         }
@@ -1390,13 +1391,13 @@ private fun VehicleSelectCard(
     canSelect: Boolean
 ) {
     val borderColor = animateColorAsState(
-        targetValue = if (isSelected) AccentYellow else MediumGray,
+        targetValue = if (isSelected) BroadcastDesignTokens.RoutePickup else BroadcastDesignTokens.TruckCardBorder,
         animationSpec = tween(200),
         label = "border"
     )
     
     val backgroundColor = animateColorAsState(
-        targetValue = if (isSelected) DarkGray else BoldBlack,
+        targetValue = if (isSelected) BroadcastDesignTokens.RoutePickup.copy(alpha = 0.05f) else Color.White,
         animationSpec = tween(200),
         label = "background"
     )
@@ -1429,7 +1430,7 @@ private fun VehicleSelectCard(
                     modifier = Modifier
                         .size(48.dp)
                         .background(
-                            if (isSelected) AccentYellow.copy(alpha = 0.2f) else MediumGray.copy(alpha = 0.3f),
+                            if (isSelected) BroadcastDesignTokens.RoutePickup.copy(alpha = 0.12f) else Color(0xFFF0F2F5),
                             CircleShape
                         ),
                     contentAlignment = Alignment.Center
@@ -1437,7 +1438,7 @@ private fun VehicleSelectCard(
                     Icon(
                         Icons.Default.LocalShipping,
                         contentDescription = null,
-                        tint = if (isSelected) AccentYellow else LightGray,
+                        tint = if (isSelected) BroadcastDesignTokens.RoutePickup else BroadcastDesignTokens.TextSecondary,
                         modifier = Modifier.size(28.dp)
                     )
                 }
@@ -1445,18 +1446,18 @@ private fun VehicleSelectCard(
                 Column {
                     Text(
                         text = vehicle.vehicleNumber,
-                        color = PureWhite,
+                        color = BroadcastDesignTokens.TextPrimary,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
                         text = "${vehicle.category.name} - ${vehicle.subtype.name}",
-                        color = LightGray,
+                        color = BroadcastDesignTokens.TextSecondary,
                         fontSize = 13.sp
                     )
                     Text(
                         text = "${vehicle.subtype.capacityTons} Ton capacity",
-                        color = MediumGray,
+                        color = BroadcastDesignTokens.TextTertiary,
                         fontSize = 12.sp
                     )
                 }
@@ -1467,12 +1468,12 @@ private fun VehicleSelectCard(
                 modifier = Modifier
                     .size(28.dp)
                     .background(
-                        if (isSelected) AccentYellow else Color.Transparent,
+                        if (isSelected) BroadcastDesignTokens.RoutePickup else Color.Transparent,
                         CircleShape
                     )
                     .border(
                         width = 2.dp,
-                        color = if (isSelected) AccentYellow else MediumGray,
+                        color = if (isSelected) BroadcastDesignTokens.RoutePickup else BroadcastDesignTokens.TruckCardBorder,
                         shape = CircleShape
                     ),
                 contentAlignment = Alignment.Center
@@ -1481,7 +1482,7 @@ private fun VehicleSelectCard(
                     Icon(
                         Icons.Default.Check,
                         contentDescription = "Selected",
-                        tint = PureWhite,
+                        tint = Color.White,
                         modifier = Modifier.size(18.dp)
                     )
                 }
