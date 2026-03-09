@@ -176,7 +176,8 @@ fun WeeloNavigation(
     navController: NavHostController = rememberNavController(),
     isLoggedIn: Boolean = false,
     userRole: String? = null,
-    mainViewModel: MainViewModel
+    mainViewModel: MainViewModel,
+    onAcceptFromList: (com.weelo.logistics.data.model.BroadcastTrip) -> Unit = {}
 ) {
     // Scoped coroutine for logout cleanup (prevents MainScope leak)
     val logoutScope = rememberCoroutineScope()
@@ -392,25 +393,9 @@ fun WeeloNavigation(
         composable(Screen.BroadcastList.route) {
             com.weelo.logistics.ui.transporter.BroadcastListScreen(
                 onNavigateBack = { navController.popBackStack() },
-                onNavigateToBroadcastDetails = { encoded ->
-                    val parts = encoded.split("|")
-                    val broadcastId = parts.getOrNull(0).orEmpty()
-                    val vehicleType = parts.getOrNull(1).orEmpty()
-                    val vehicleSubtype = parts.getOrNull(2).orEmpty()
-                    val quantity = parts.getOrNull(3)?.toIntOrNull() ?: 1
-
-                    if (broadcastId.isBlank() || vehicleType.isBlank()) {
-                        Timber.w("⚠️ Invalid broadcast navigation payload: %s", encoded)
-                    } else {
-                        navController.navigateSmooth(
-                            route = Screen.TruckHoldConfirm.createRoute(
-                                orderId = broadcastId,
-                                vehicleType = vehicleType,
-                                vehicleSubtype = vehicleSubtype,
-                                quantity = quantity
-                            )
-                        )
-                    }
+                onAccept = { broadcast ->
+                    timber.log.Timber.i("🎯 [List] User accepted broadcast: ${broadcast.broadcastId}")
+                    onAcceptFromList(broadcast)
                 },
                 onNavigateToSoundSettings = { navController.navigateSmooth(Screen.BroadcastSoundSettings.route) }
             )

@@ -8,6 +8,7 @@ import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
 import com.weelo.logistics.broadcast.BroadcastFlowCoordinator
 import com.weelo.logistics.broadcast.BroadcastStage
 import com.weelo.logistics.broadcast.BroadcastStatus as BroadcastTelemetryStatus
+import com.weelo.logistics.broadcast.BroadcastStateSync
 import com.weelo.logistics.broadcast.BroadcastTelemetry
 import com.weelo.logistics.broadcast.BroadcastUiTiming
 import com.weelo.logistics.data.model.BroadcastStatus
@@ -81,6 +82,7 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
     private var coordinatorFeedJob: Job? = null
     private var coordinatorEventsJob: Job? = null
     private var coordinatorDismissedJob: Job? = null
+    private var fullyAcceptedSyncJob: Job? = null
     private val ignoreInFlightIds = mutableSetOf<String>()
     private val ignoredRecentlyIds = mutableSetOf<String>()
     private var pendingRefreshForce = false
@@ -114,6 +116,9 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
     fun onScreenStarted() {
         if (isScreenActive) return
         isScreenActive = true
+
+        // Cross-screen sync: remove broadcasts that were fully accepted elsewhere
+        observeFullyAcceptedSync()
 
         if (isCoordinatorEnabled()) {
             BroadcastFlowCoordinator.start()
@@ -156,6 +161,8 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
         coordinatorFeedJob = null
         coordinatorEventsJob = null
         coordinatorDismissedJob = null
+        fullyAcceptedSyncJob?.cancel()
+        fullyAcceptedSyncJob = null
         activeFetchJob?.cancel()
         activeFetchJob = null
         queuedForceRefresh = false
@@ -300,8 +307,9 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
         coordinatorFeedJob?.cancel()
         coordinatorFeedJob = viewModelScope.launch {
             BroadcastFlowCoordinator.feedState.collect { feed ->
-                val sorted = applyIgnoredRecentlyFilter(sortBroadcasts(feed.broadcasts))
                 _uiState.update { current ->
+                    val merged = mergePerTransporterFields(current.broadcasts, feed.broadcasts)
+                    val sorted = applyIgnoredRecentlyFilter(sortBroadcasts(merged))
                     current.copy(
                         broadcasts = sorted,
                         visibleBroadcasts = filterBroadcasts(sorted, current.selectedTab),
@@ -351,6 +359,30 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
         coordinatorDismissedJob = viewModelScope.launch {
             BroadcastFlowCoordinator.dismissed.collect { notification ->
                 handleDismissedCard(notification)
+            }
+        }
+    }
+
+    /**
+     * Cross-screen sync: observe broadcasts fully accepted elsewhere (Overlay).
+     * When a broadcast is marked as fully accepted, remove it from this screen's list.
+     */
+    private fun observeFullyAcceptedSync() {
+        fullyAcceptedSyncJob?.cancel()
+        fullyAcceptedSyncJob = viewModelScope.launch {
+            BroadcastStateSync.fullyAccepted.collect { acceptedIds ->
+                if (acceptedIds.isEmpty()) return@collect
+                _uiState.update { current ->
+                    val hasMatch = current.broadcasts.any { it.broadcastId in acceptedIds }
+                    if (!hasMatch) return@update current
+                    val updated = current.broadcasts.filterNot { it.broadcastId in acceptedIds }
+                    current.copy(
+                        broadcasts = updated,
+                        visibleBroadcasts = filterBroadcasts(updated, current.selectedTab)
+                    )
+                }
+                // Clear consumed IDs
+                acceptedIds.forEach { BroadcastStateSync.clear(it) }
             }
         }
     }
@@ -569,8 +601,9 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
                 when (result) {
                     is BroadcastResult.Success -> {
                         consecutiveFetchErrors = 0
-                        val sorted = applyIgnoredRecentlyFilter(sortBroadcasts(result.data.broadcasts))
                         _uiState.update { current ->
+                            val merged = mergePerTransporterFields(current.broadcasts, result.data.broadcasts)
+                            val sorted = applyIgnoredRecentlyFilter(sortBroadcasts(merged))
                             current.copy(
                                 broadcasts = sorted,
                                 visibleBroadcasts = filterBroadcasts(sorted, current.selectedTab),
@@ -719,6 +752,38 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
     private fun applyIgnoredRecentlyFilter(broadcasts: List<BroadcastTrip>): List<BroadcastTrip> {
         if (ignoredRecentlyIds.isEmpty()) return broadcasts
         return broadcasts.filterNot { ignoredRecentlyIds.contains(it.broadcastId) }
+    }
+
+    /**
+     * Preserve per-transporter ephemeral fields (pickupDistanceKm, pickupEtaMinutes)
+     * through HTTP refresh cycles.
+     *
+     * WHY: Socket.IO sends per-transporter pickup distance, but the HTTP API
+     * (GET /bookings/requests/active) returns per-order data WITHOUT it.
+     * When fetchBroadcasts() replaces the list, these values reset to 0.
+     *
+     * HOW: For each fetched broadcast, if it has default pickup distance (0)
+     * and the existing list (from Socket.IO) has a real value, carry it forward.
+     * Keyed by broadcastId — each order keeps its own independent values.
+     */
+    private fun mergePerTransporterFields(
+        existing: List<BroadcastTrip>,
+        fetched: List<BroadcastTrip>
+    ): List<BroadcastTrip> {
+        if (existing.isEmpty()) return fetched
+        val existingById = existing.associateBy { it.broadcastId }
+        return fetched.map { trip ->
+            val prev = existingById[trip.broadcastId] ?: return@map trip
+            // Only carry forward if fetched has defaults AND existing has real values
+            if (trip.pickupDistanceKm <= 0.0 && prev.pickupDistanceKm > 0.0) {
+                trip.copy(
+                    pickupDistanceKm = prev.pickupDistanceKm,
+                    pickupEtaMinutes = prev.pickupEtaMinutes
+                )
+            } else {
+                trip
+            }
+        }
     }
 
     private fun rollbackIgnoredBroadcast(

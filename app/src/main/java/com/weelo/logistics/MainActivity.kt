@@ -37,6 +37,7 @@ import com.weelo.logistics.broadcast.BroadcastRecoveryTracker
 import com.weelo.logistics.broadcast.BroadcastRolePolicy
 import com.weelo.logistics.broadcast.BroadcastStage
 import com.weelo.logistics.broadcast.BroadcastStatus
+import com.weelo.logistics.broadcast.BroadcastStateSync
 import com.weelo.logistics.broadcast.BroadcastTelemetry
 import com.weelo.logistics.data.model.BroadcastTrip
 import com.weelo.logistics.data.remote.BroadcastNotification
@@ -267,7 +268,12 @@ class MainActivity : ComponentActivity() {
                             isLoggedIn = isLoggedIn,
                             userRole = userRole,
                             navController = navController,
-                            mainViewModel = mainViewModel
+                            mainViewModel = mainViewModel,
+                            onAcceptFromList = { broadcast ->
+                                timber.log.Timber.i("🎯 [List→Accept] broadcast: ${broadcast.broadcastId}")
+                                acceptedBroadcast = broadcast
+                                showAcceptanceScreen = true
+                            }
                         )
                         
                         // ============================================
@@ -304,6 +310,12 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onSuccess = {
                                     timber.log.Timber.i("✅ Assignment successful!")
+                                    // Cross-screen sync: mark as fully accepted so
+                                    // Request Screen removes it immediately
+                                    broadcast.broadcastId.let { id ->
+                                        BroadcastStateSync.markFullyAccepted(id)
+                                        BroadcastOverlayManager.removeEverywhere(id)
+                                    }
                                     showAcceptanceScreen = false
                                     acceptedBroadcast = null
                                 }

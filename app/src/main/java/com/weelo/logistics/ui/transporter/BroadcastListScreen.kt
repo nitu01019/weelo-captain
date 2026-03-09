@@ -1,15 +1,11 @@
 package com.weelo.logistics.ui.transporter
 
-import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,25 +19,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.LocalShipping
-import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -50,50 +35,65 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.weelo.logistics.broadcast.BroadcastOverlayContentNew
+import com.weelo.logistics.broadcast.BroadcastOverlayManager
 import com.weelo.logistics.broadcast.BroadcastStage
 import com.weelo.logistics.broadcast.BroadcastStatus
 import com.weelo.logistics.broadcast.BroadcastTelemetry
+import com.weelo.logistics.broadcast.BroadcastStateSync
 import com.weelo.logistics.broadcast.BroadcastUiTiming
+import com.weelo.logistics.broadcast.TruckHoldState
+import com.weelo.logistics.broadcast.TruckHoldStatus
 import com.weelo.logistics.core.notification.BroadcastSoundService
 import com.weelo.logistics.data.model.BroadcastTrip
-import com.weelo.logistics.data.model.RequestedVehicle
+import com.weelo.logistics.data.repository.BroadcastRepository
+import com.weelo.logistics.data.repository.BroadcastResult
 import com.weelo.logistics.ui.components.EmptyStateArtwork
 import com.weelo.logistics.ui.components.EmptyStateHost
 import com.weelo.logistics.ui.components.ProvideShimmerBrush
 import com.weelo.logistics.ui.components.SkeletonListCard
 import com.weelo.logistics.ui.components.allCaughtUpEmptyStateSpec
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
-private val BroadcastBase = Color(0xFFF7F7F7)
-private val BroadcastCardSurface = Color.White
-private val BroadcastAccent = Color(0xFFF2DD34)
-private val BroadcastTextPrimary = Color(0xFF121212)
-private val BroadcastTextSecondary = Color(0xFF6D6D6D)
-private val BroadcastBorder = Color(0xFFE9E9E9)
-private val BroadcastMapSurface = Color(0xFFF3F5FA)
-private const val LIVE_CARD_MAP_BUDGET = 2
+// Colors used in this screen
+private val BroadcastBase = Color(0xFF1A1A1A)           // Match overlay dark bg
 
+/**
+ * =============================================================================
+ * BROADCAST LIST SCREEN — UNIFIED WITH OVERLAY
+ * =============================================================================
+ *
+ * Each card = BroadcastOverlayContentNew (EXACT same as overlay).
+ * Card gets full screen height so fillMaxSize inside the composable works.
+ * Newest broadcast auto-scrolls to top.
+ * Ignore on this screen ALSO removes from Overlay (cross-screen sync).
+ * Fully accepted broadcasts are auto-removed via BroadcastStateSync.
+ * Only ONE navigation button exists — inside each card (DIRECTIONS).
+ * =============================================================================
+ */
 @Composable
 fun BroadcastListScreen(
     onNavigateBack: () -> Unit,
-    onNavigateToBroadcastDetails: (String) -> Unit,
+    onAccept: (BroadcastTrip) -> Unit,
     onNavigateToSoundSettings: () -> Unit = {}
 ) {
     val viewModel: BroadcastListViewModel = viewModel()
@@ -102,26 +102,24 @@ fun BroadcastListScreen(
     val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
     val listState = rememberLazyListState()
     val soundService = remember { BroadcastSoundService.getInstance(context) }
-    val snapshotCache = remember { RouteMapSnapshotCache(maxEntries = 256) }
 
+    // Screen height used to give each card a proper bounded height
+    val screenHeightDp = LocalConfiguration.current.screenHeightDp.dp
+    // Top bar is ~72dp, give cards the remaining space
+    val cardHeight = screenHeightDp - 72.dp
+
+    // ── Lifecycle: listen for events ──
     LaunchedEffect(lifecycleOwner) {
-        lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             viewModel.onScreenStarted()
             try {
                 viewModel.uiEvents.collect { event ->
                     when (event) {
-                        is BroadcastListUiEvent.ShowToast -> {
+                        is BroadcastListUiEvent.ShowToast ->
                             Toast.makeText(context, event.message, Toast.LENGTH_SHORT).show()
-                        }
-
-                        is BroadcastListUiEvent.PlaySound -> {
-                            if (event.urgent) {
-                                soundService.playUrgentSound()
-                            } else {
-                                soundService.playBroadcastSound()
-                            }
-                        }
-
+                        is BroadcastListUiEvent.PlaySound ->
+                            if (event.urgent) soundService.playUrgentSound()
+                            else soundService.playBroadcastSound()
                         BroadcastListUiEvent.NavigateBackWhenEmpty -> onNavigateBack()
                     }
                 }
@@ -131,37 +129,14 @@ fun BroadcastListScreen(
         }
     }
 
-    val liveMapIds by remember(uiState.visibleBroadcasts, listState.layoutInfo.visibleItemsInfo) {
-        derivedStateOf {
-            val visibleKeys = listState.layoutInfo.visibleItemsInfo
-                .mapNotNull { it.key as? String }
-                .take(LIVE_CARD_MAP_BUDGET)
-                .toSet()
-            if (visibleKeys.isNotEmpty()) {
-                visibleKeys
-            } else {
-                uiState.visibleBroadcasts.take(LIVE_CARD_MAP_BUDGET).map { it.broadcastId }.toSet()
-            }
+    // ── Auto-scroll to top when a new broadcast arrives ──
+    val prevCount = remember { mutableIntStateOf(0) }
+    LaunchedEffect(uiState.visibleBroadcasts.size) {
+        val currentCount = uiState.visibleBroadcasts.size
+        if (currentCount > prevCount.intValue && currentCount > 0) {
+            listState.animateScrollToItem(0)
         }
-    }
-
-    val focusBroadcast by remember(uiState.visibleBroadcasts, listState.firstVisibleItemIndex) {
-        derivedStateOf {
-            uiState.visibleBroadcasts.getOrNull(listState.firstVisibleItemIndex)
-                ?: uiState.visibleBroadcasts.firstOrNull()
-        }
-    }
-
-    LaunchedEffect(liveMapIds) {
-        BroadcastTelemetry.record(
-            stage = BroadcastStage.STATE_APPLIED,
-            status = BroadcastStatus.SUCCESS,
-            reason = "card_map_budget_applied",
-            attrs = mapOf(
-                "liveMapCount" to liveMapIds.size.toString(),
-                "liveMapBudget" to LIVE_CARD_MAP_BUDGET.toString()
-            )
-        )
+        prevCount.intValue = currentCount
     }
 
     Column(
@@ -169,14 +144,12 @@ fun BroadcastListScreen(
             .fillMaxSize()
             .background(BroadcastBase)
     ) {
+        // ── Top bar: back, title, online status, bell, refresh ──
         BroadcastTopBar(
             isConnected = uiState.isSocketConnected,
             requestCount = uiState.broadcasts.size,
             isRefreshing = uiState.isRefreshing,
             onBack = onNavigateBack,
-            onNavigate = {
-                focusBroadcast?.let { openNavigation(context, it) }
-            },
             onRefresh = { viewModel.onManualRefresh() },
             onSoundSettings = onNavigateToSoundSettings
         )
@@ -206,75 +179,13 @@ fun BroadcastListScreen(
             }
 
             else -> {
+                // ── Paged list: one card per screen, scroll to navigate ──
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                    contentPadding = PaddingValues(0.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
-                    item {
-                        BroadcastHeroPanel(
-                            broadcast = focusBroadcast,
-                            isConnected = uiState.isSocketConnected,
-                            totalCount = uiState.broadcasts.size,
-                            snapshotCache = snapshotCache
-                        )
-                    }
-
-                    item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Active Requests (${uiState.visibleBroadcasts.size})",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = BroadcastTextPrimary
-                            )
-                            Surface(
-                                color = BroadcastAccent.copy(alpha = 0.22f),
-                                shape = RoundedCornerShape(16.dp)
-                            ) {
-                                Text(
-                                    text = "Auto-accept Off",
-                                    color = BroadcastTextPrimary,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-
-                    item {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(BroadcastListFeedTab.entries) { tab ->
-                                FilterChip(
-                                    selected = uiState.selectedTab == tab,
-                                    onClick = { viewModel.onTabSelected(tab) },
-                                    label = {
-                                        Text(
-                                            text = tab.title,
-                                            fontWeight = if (uiState.selectedTab == tab) {
-                                                FontWeight.Bold
-                                            } else {
-                                                FontWeight.Medium
-                                            }
-                                        )
-                                    },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = BroadcastTextPrimary,
-                                        selectedLabelColor = Color.White,
-                                        containerColor = Color.White,
-                                        labelColor = BroadcastTextPrimary
-                                    )
-                                )
-                            }
-                        }
-                    }
-
                     itemsIndexed(
                         items = uiState.visibleBroadcasts,
                         key = { _, item -> item.broadcastId }
@@ -282,39 +193,24 @@ fun BroadcastListScreen(
                         LaunchedEffect(broadcast.broadcastId) {
                             viewModel.onBroadcastCardRendered(broadcast.broadcastId)
                         }
+
                         val dismissInfo = uiState.dismissedCards[broadcast.broadcastId]
                         val isDismissed = dismissInfo != null
 
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            BroadcastRequestCard(
+                        // ── KEY FIX: Give each card an explicit height so
+                        //    BroadcastOverlayContentNew's fillMaxSize has a real constraint ──
+                        Box(modifier = Modifier
+                            .fillMaxWidth()
+                            .height(cardHeight)
+                        ) {
+                            BroadcastListCard(
                                 broadcast = broadcast,
                                 isDismissed = isDismissed,
-                                mapRenderMode = BroadcastCardMapRenderMode.STATIC_CARD,
-                                snapshotCache = snapshotCache,
-                                onIgnore = {
-                                    viewModel.onIgnoreBroadcast(broadcast.broadcastId)
-                                },
-                                onAccept = { vehicleType, vehicleSubtype, quantity ->
-                                    onNavigateToBroadcastDetails(
-                                        "${broadcast.broadcastId}|$vehicleType|$vehicleSubtype|$quantity"
-                                    )
-                                }
+                                dismissReason = dismissInfo?.reason,
+                                dismissMessage = dismissInfo?.message,
+                                onAccept = onAccept,
+                                onIgnore = { viewModel.onIgnoreBroadcast(broadcast.broadcastId) }
                             )
-
-                            androidx.compose.animation.AnimatedVisibility(
-                                visible = isDismissed,
-                                enter = fadeIn(tween(BroadcastUiTiming.DISMISS_ENTER_MS)),
-                                exit = fadeOut(tween(BroadcastUiTiming.DISMISS_EXIT_MS))
-                            ) {
-                                DismissOverlay(
-                                    reasonTitle = when (dismissInfo?.reason) {
-                                        "customer_cancelled" -> "Order Cancelled"
-                                        "fully_filled" -> "Already Assigned"
-                                        else -> "Request Expired"
-                                    },
-                                    message = dismissInfo?.message ?: "This request is no longer active"
-                                )
-                            }
                         }
                     }
                 }
@@ -323,403 +219,276 @@ fun BroadcastListScreen(
     }
 }
 
+/**
+ * =============================================================================
+ * BROADCAST LIST CARD — EXACT same overlay composable
+ * =============================================================================
+ *
+ * Self-contained with own hold state + countdown.
+ * Ignore from Request Screen ALSO removes from Overlay (cross-screen sync).
+ * =============================================================================
+ */
+@Composable
+private fun BroadcastListCard(
+    broadcast: BroadcastTrip,
+    isDismissed: Boolean,
+    dismissReason: String?,
+    dismissMessage: String?,
+    onAccept: (BroadcastTrip) -> Unit,
+    onIgnore: () -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    val broadcastRepository = remember { BroadcastRepository.getInstance(context) }
+
+    // ── Per-card hold state ──
+    var truckHoldStates by remember(broadcast.broadcastId) {
+        mutableStateOf<Map<String, TruckHoldState>>(emptyMap())
+    }
+    val acceptedTrucks = truckHoldStates.values.filter { it.status == TruckHoldStatus.ACCEPTED }
+    val totalAcceptedQuantity = acceptedTrucks.sumOf { it.quantity }
+    val isSubmitEnabled = acceptedTrucks.isNotEmpty()
+    val hasAnyHolding = truckHoldStates.values.any { it.isHolding }
+
+    // ── Per-card countdown ──
+    val initialRemaining = remember(broadcast.broadcastId) {
+        val expiryMs = broadcast.expiryTime ?: (System.currentTimeMillis() + 120_000L)
+        ((expiryMs - System.currentTimeMillis()) / 1000).toInt().coerceAtLeast(0)
+    }
+    var remainingSeconds by remember(broadcast.broadcastId) { mutableIntStateOf(initialRemaining) }
+
+    LaunchedEffect(broadcast.broadcastId) {
+        while (remainingSeconds > 0) {
+            delay(1000L)
+            remainingSeconds--
+        }
+    }
+
+    // ── ACCEPT TRUCK (Redis hold — same logic as overlay) ──
+    fun handleAcceptTruck(vehicleType: String, vehicleSubtype: String, quantity: Int) {
+        val key = "$vehicleType|$vehicleSubtype"
+        truckHoldStates = truckHoldStates + (key to TruckHoldState(
+            vehicleType = vehicleType,
+            vehicleSubtype = vehicleSubtype,
+            quantity = quantity,
+            status = TruckHoldStatus.PENDING,
+            isHolding = true
+        ))
+        BroadcastTelemetry.record(
+            stage = BroadcastStage.BROADCAST_ACCEPT_HOLD_REQUESTED,
+            status = BroadcastStatus.SUCCESS,
+            attrs = mapOf(
+                "broadcastId" to broadcast.broadcastId,
+                "vehicleType" to vehicleType,
+                "vehicleSubtype" to vehicleSubtype,
+                "quantity" to quantity.toString(),
+                "source" to "request_screen"
+            )
+        )
+        scope.launch {
+            val result = broadcastRepository.holdTrucks(
+                orderId = broadcast.broadcastId,
+                vehicleType = vehicleType,
+                vehicleSubtype = vehicleSubtype,
+                quantity = quantity
+            )
+            when (result) {
+                is BroadcastResult.Success -> {
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.BROADCAST_HOLD_SUCCESS,
+                        status = BroadcastStatus.SUCCESS,
+                        attrs = mapOf("broadcastId" to broadcast.broadcastId, "holdId" to result.data.holdId)
+                    )
+                    truckHoldStates = truckHoldStates + (key to TruckHoldState(
+                        vehicleType = vehicleType,
+                        vehicleSubtype = vehicleSubtype,
+                        quantity = quantity,
+                        holdId = result.data.holdId,
+                        status = TruckHoldStatus.ACCEPTED,
+                        isHolding = false
+                    ))
+                    Toast.makeText(context, "✓ $quantity truck(s) reserved. Assign drivers to finalize.", Toast.LENGTH_SHORT).show()
+                }
+                is BroadcastResult.Error -> {
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.BROADCAST_HOLD_FAIL,
+                        status = BroadcastStatus.FAILED,
+                        reason = result.message,
+                        attrs = mapOf("broadcastId" to broadcast.broadcastId, "vehicleType" to vehicleType)
+                    )
+                    val isCancelled = result.message.contains("cancelled", ignoreCase = true)
+                        || result.message.contains("no longer exists", ignoreCase = true)
+                        || result.message.contains("expired", ignoreCase = true)
+                    if (isCancelled) {
+                        Toast.makeText(context, "This request was cancelled", Toast.LENGTH_SHORT).show()
+                        onIgnore() // Remove from this screen's list only
+                    } else {
+                        truckHoldStates = truckHoldStates + (key to TruckHoldState(
+                            vehicleType, vehicleSubtype, quantity,
+                            status = TruckHoldStatus.FAILED, isHolding = false
+                        ))
+                        Toast.makeText(context, "Failed: ${result.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+                is BroadcastResult.Loading -> { /* handled by isHolding */ }
+            }
+        }
+    }
+
+    // ── REJECT TRUCK (local only, same as overlay) ──
+    fun handleRejectTruck(vehicleType: String, vehicleSubtype: String) {
+        truckHoldStates = truckHoldStates + ("$vehicleType|$vehicleSubtype" to TruckHoldState(
+            vehicleType = vehicleType,
+            vehicleSubtype = vehicleSubtype,
+            quantity = 0,
+            status = TruckHoldStatus.REJECTED,
+            isHolding = false
+        ))
+    }
+
+    // ── SUBMIT: same pass-through as overlay ──
+    fun handleSubmit() {
+        val holdInfo = acceptedTrucks.joinToString(";") {
+            "${it.vehicleType}|${it.vehicleSubtype}|${it.quantity}|${it.holdId ?: ""}"
+        }
+        onAccept(broadcast.copy(notes = holdInfo))
+    }
+
+    // ── DISMISS: Removes from this screen's list AND from the Overlay.
+    //    Request Screen ignore = "I don't want this order" → remove everywhere.
+    fun handleDismiss() {
+        // Release any Redis holds this card had
+        scope.launch {
+            truckHoldStates.values
+                .filter { it.holdId != null && it.status == TruckHoldStatus.ACCEPTED }
+                .forEach { broadcastRepository.releaseHold(it.holdId!!) }
+        }
+
+        // Propagate to Overlay — remove from overlay queue too
+        BroadcastStateSync.markIgnoredByList(broadcast.broadcastId)
+        BroadcastOverlayManager.removeEverywhere(broadcast.broadcastId)
+
+        // Remove from this screen's list
+        onIgnore()
+    }
+
+    // ── RENDER ──
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Same overlay composable, full size within the card's bounded height
+        BroadcastOverlayContentNew(
+            broadcast = broadcast,
+            remainingSeconds = remainingSeconds,
+            currentIndex = 0,
+            totalCount = 1,
+            pendingQueueCount = 0,
+            truckHoldStates = truckHoldStates,
+            isSubmitEnabled = isSubmitEnabled && !isDismissed,
+            totalAcceptedQuantity = totalAcceptedQuantity,
+            hasAnyHolding = hasAnyHolding,
+            onAcceptTruck = ::handleAcceptTruck,
+            onRejectTruck = ::handleRejectTruck,
+            onSubmit = ::handleSubmit,
+            onDismiss = ::handleDismiss,
+            onPrevious = {},
+            onNext = {}
+        )
+
+        // Dismiss overlay when cancelled/expired server-side
+        AnimatedVisibility(
+            visible = isDismissed,
+            enter = fadeIn(tween(BroadcastUiTiming.DISMISS_ENTER_MS)),
+            exit = fadeOut(tween(BroadcastUiTiming.DISMISS_EXIT_MS))
+        ) {
+            DismissOverlay(
+                reasonTitle = when (dismissReason) {
+                    "customer_cancelled" -> "Order Cancelled"
+                    "fully_filled" -> "Already Assigned"
+                    else -> "Request Expired"
+                },
+                message = dismissMessage ?: "This request is no longer active"
+            )
+        }
+    }
+}
+
+// =============================================================================
+// TOP BAR — NO Navigate button (DIRECTIONS is inside each card)
+// =============================================================================
 @Composable
 private fun BroadcastTopBar(
     isConnected: Boolean,
     requestCount: Int,
     isRefreshing: Boolean,
     onBack: () -> Unit,
-    onNavigate: () -> Unit,
     onRefresh: () -> Unit,
     onSoundSettings: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = Color.White,
+        color = Color(0xFF1C1C1C),      // Dark to blend with overlay cards
         shadowElevation = 4.dp
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = BroadcastTextPrimary)
-                }
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Broadcast",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = BroadcastTextPrimary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(if (isConnected) BroadcastAccent else Color(0xFFB0B0B0))
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (isConnected) "Online" else "Offline",
-                            color = BroadcastTextSecondary,
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "$requestCount active",
-                            color = BroadcastTextSecondary,
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-                }
-
-                Button(
-                    onClick = onNavigate,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = BroadcastAccent,
-                        contentColor = BroadcastTextPrimary
-                    ),
-                    shape = RoundedCornerShape(20.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Navigation,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(text = "Navigate", fontWeight = FontWeight.Bold)
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                IconButton(onClick = onSoundSettings) {
-                    Icon(
-                        imageVector = Icons.Default.NotificationsActive,
-                        contentDescription = "Sound settings",
-                        tint = BroadcastTextPrimary
-                    )
-                }
-                IconButton(onClick = onRefresh, enabled = !isRefreshing) {
-                    if (isRefreshing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = BroadcastTextPrimary
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Refresh",
-                            tint = BroadcastTextPrimary
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun BroadcastHeroPanel(
-    broadcast: BroadcastTrip?,
-    isConnected: Boolean,
-    totalCount: Int,
-    snapshotCache: RouteMapSnapshotCache
-) {
-    val totalFare = remember(totalCount, broadcast?.broadcastId) {
-        broadcast?.totalFare ?: 0.0
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Card(
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = BroadcastCardSurface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            if (broadcast != null) {
-                val routeKey = remember(
-                    broadcast.broadcastId,
-                    broadcast.pickupLocation.latitude,
-                    broadcast.pickupLocation.longitude,
-                    broadcast.dropLocation.latitude,
-                    broadcast.dropLocation.longitude
-                ) {
-                    RoutePreviewKey(
-                        broadcastId = broadcast.broadcastId,
-                        pickupLat = broadcast.pickupLocation.latitude,
-                        pickupLng = broadcast.pickupLocation.longitude,
-                        dropLat = broadcast.dropLocation.latitude,
-                        dropLng = broadcast.dropLocation.longitude
-                    )
-                }
-                BroadcastCardMapRenderer(
-                    routeKey = routeKey,
-                    renderMode = BroadcastCardMapRenderMode.LIVE_HERO,
-                    snapshotCache = snapshotCache,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(170.dp)
-                        .background(BroadcastMapSurface)
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(170.dp)
-                        .background(BroadcastMapSurface)
-                )
-            }
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            StatChip(
-                modifier = Modifier.weight(1f),
-                title = "Potential",
-                value = if (totalFare > 0.0) {
-                    "₹${String.format("%,.0f", totalFare)}"
-                } else {
-                    "₹0"
-                }
-            )
-            StatChip(
-                modifier = Modifier.weight(1f),
-                title = "Requests",
-                value = totalCount.toString()
-            )
-            StatChip(
-                modifier = Modifier.weight(1f),
-                title = "Status",
-                value = if (isConnected) "Live" else "Offline"
-            )
-        }
-    }
-}
-
-@Composable
-private fun StatChip(
-    modifier: Modifier,
-    title: String,
-    value: String
-) {
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelMedium,
-                color = BroadcastTextSecondary
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = value,
-                style = MaterialTheme.typography.titleLarge,
-                color = BroadcastTextPrimary,
-                fontWeight = FontWeight.Black
-            )
-        }
-    }
-}
-
-@Composable
-private fun BroadcastRequestCard(
-    broadcast: BroadcastTrip,
-    isDismissed: Boolean,
-    mapRenderMode: BroadcastCardMapRenderMode,
-    snapshotCache: RouteMapSnapshotCache,
-    onIgnore: () -> Unit,
-    onAccept: (vehicleType: String, vehicleSubtype: String, quantity: Int) -> Unit
-) {
-    val requestVehicle = remember(broadcast.requestedVehicles, broadcast.broadcastId) {
-        broadcast.requestedVehicles
-            .firstOrNull { it.remainingCount > 0 }
-            ?: broadcast.requestedVehicles.firstOrNull()
-            ?: RequestedVehicle(
-                vehicleType = "truck",
-                vehicleSubtype = "",
-                count = broadcast.totalRemainingTrucks.coerceAtLeast(1),
-                filledCount = 0,
-                farePerTruck = broadcast.farePerTruck
-            )
-    }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .alpha(if (isDismissed) 0.22f else 1f),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = BroadcastCardSurface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = 4.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .background(BroadcastAccent.copy(alpha = 0.28f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.LocalShipping,
-                        contentDescription = null,
-                        tint = BroadcastTextPrimary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(10.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "₹${String.format("%,.0f", requestVehicle.farePerTruck)}",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Black,
-                        color = BroadcastTextPrimary
-                    )
-                    Text(
-                        text = if (broadcast.customerName.isNotBlank()) broadcast.customerName else "Cash Payment",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = BroadcastTextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "${broadcast.distance.toInt()} km",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = BroadcastTextPrimary
-                    )
-                    Text(
-                        text = "Total dist.",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = BroadcastTextSecondary
-                    )
-                }
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
 
-            val routeKey = remember(
-                broadcast.broadcastId,
-                broadcast.pickupLocation.latitude,
-                broadcast.pickupLocation.longitude,
-                broadcast.dropLocation.latitude,
-                broadcast.dropLocation.longitude
-            ) {
-                RoutePreviewKey(
-                    broadcastId = broadcast.broadcastId,
-                    pickupLat = broadcast.pickupLocation.latitude,
-                    pickupLng = broadcast.pickupLocation.longitude,
-                    dropLat = broadcast.dropLocation.latitude,
-                    dropLng = broadcast.dropLocation.longitude
-                )
-            }
-
-            BroadcastCardMapRenderer(
-                routeKey = routeKey,
-                renderMode = mapRenderMode,
-                snapshotCache = snapshotCache,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(142.dp)
-                    .background(BroadcastMapSurface)
-            )
-
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "PICKUP",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = BroadcastTextSecondary,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.8.sp
+                    text = "Broadcast",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
                 )
-                Text(
-                    text = broadcast.pickupLocation.address,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = BroadcastTextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "DROP",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = BroadcastTextSecondary,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.8.sp
-                )
-                Text(
-                    text = broadcast.dropLocation.address,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = BroadcastTextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Surface(
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp),
-                    color = Color(0xFFF0F0F0)
-                ) {
-                    Text(
-                        text = "Ignore",
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onIgnore() }
-                            .padding(vertical = 12.dp),
-                        textAlign = TextAlign.Center,
-                        color = BroadcastTextPrimary,
-                        fontWeight = FontWeight.SemiBold
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(if (isConnected) Color(0xFFF2DD34) else Color(0xFF666666))
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isConnected) "Online" else "Offline",
+                        color = Color(0xFFAAAAAA),
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "$requestCount active",
+                        color = Color(0xFFAAAAAA),
+                        style = MaterialTheme.typography.labelMedium
                     )
                 }
+            }
 
-                Button(
-                    onClick = {
-                        onAccept(
-                            requestVehicle.vehicleType,
-                            requestVehicle.vehicleSubtype,
-                            1
-                        )
-                    },
-                    modifier = Modifier.weight(1.8f),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = BroadcastAccent,
-                        contentColor = BroadcastTextPrimary
+            // Bell icon
+            IconButton(onClick = onSoundSettings) {
+                Icon(
+                    imageVector = Icons.Default.NotificationsActive,
+                    contentDescription = "Sound settings",
+                    tint = Color.White
+                )
+            }
+
+            // Refresh icon
+            IconButton(onClick = onRefresh, enabled = !isRefreshing) {
+                if (isRefreshing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.White
                     )
-                ) {
-                    Text(
-                        text = "Accept ${requestVehicle.vehicleType.replaceFirstChar { it.uppercase() }}",
-                        fontWeight = FontWeight.Black,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Refresh",
+                        tint = Color.White
                     )
                 }
             }
@@ -727,40 +496,41 @@ private fun BroadcastRequestCard(
     }
 }
 
+// =============================================================================
+// DISMISS OVERLAY
+// =============================================================================
 @Composable
-private fun DismissOverlay(
-    reasonTitle: String,
-    message: String
-) {
+private fun DismissOverlay(reasonTitle: String, message: String) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(20.dp))
-            .background(Color.White.copy(alpha = 0.95f))
-            .border(width = 1.dp, color = BroadcastBorder, shape = RoundedCornerShape(20.dp)),
+            .background(Color.White.copy(alpha = 0.95f)),
         contentAlignment = Alignment.Center
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 20.dp),
+            modifier = Modifier.padding(horizontal = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
                 text = reasonTitle,
                 style = MaterialTheme.typography.titleLarge,
-                color = BroadcastTextPrimary,
+                color = Color(0xFF121212),
                 fontWeight = FontWeight.Black
             )
             Text(
                 text = message,
                 style = MaterialTheme.typography.bodyMedium,
-                color = BroadcastTextSecondary,
+                color = Color(0xFF6D6D6D),
                 textAlign = TextAlign.Center
             )
         }
     }
 }
 
+// =============================================================================
+// LOADING STATE
+// =============================================================================
 @Composable
 private fun BroadcastLoadingState() {
     ProvideShimmerBrush {
@@ -770,18 +540,16 @@ private fun BroadcastLoadingState() {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            repeat(5) {
-                SkeletonListCard()
-            }
+            repeat(3) { SkeletonListCard() }
         }
     }
 }
 
+// =============================================================================
+// ERROR STATE
+// =============================================================================
 @Composable
-private fun BroadcastErrorState(
-    errorMessage: String?,
-    onRetry: () -> Unit
-) {
+private fun BroadcastErrorState(errorMessage: String?, onRetry: () -> Unit) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -790,36 +558,11 @@ private fun BroadcastErrorState(
         ) {
             Text(
                 text = errorMessage ?: "Unable to load broadcast requests",
-                color = BroadcastTextSecondary,
+                color = Color(0xFF6D6D6D),
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodyLarge
             )
-            OutlinedButton(onClick = onRetry) {
-                Text("Retry")
-            }
+            OutlinedButton(onClick = onRetry) { Text("Retry") }
         }
-    }
-}
-
-private fun openNavigation(context: android.content.Context, broadcast: BroadcastTrip) {
-    val pickup = broadcast.pickupLocation
-    val drop = broadcast.dropLocation
-    if (pickup.latitude == 0.0 || pickup.longitude == 0.0 || drop.latitude == 0.0 || drop.longitude == 0.0) {
-        Toast.makeText(context, "Location unavailable for navigation", Toast.LENGTH_SHORT).show()
-        return
-    }
-
-    val uri = Uri.parse(
-        "https://www.google.com/maps/dir/?api=1&origin=${pickup.latitude},${pickup.longitude}" +
-            "&destination=${drop.latitude},${drop.longitude}&travelmode=driving"
-    )
-    val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-        setPackage("com.google.android.apps.maps")
-    }
-
-    runCatching {
-        context.startActivity(intent)
-    }.onFailure {
-        context.startActivity(Intent(Intent.ACTION_VIEW, uri))
     }
 }
