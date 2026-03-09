@@ -1171,6 +1171,8 @@ object SocketIOService {
         )
         val notification = envelope.broadcast ?: return
         val broadcastTrip = notification.toBroadcastTrip()
+        // NOTE: Local pickup distance is computed in BroadcastStateStore.upsert()
+        // which covers ALL data paths (Socket.IO + HTTP reconciliation).
 
         // ACK delivery back to server (Uber RAMEN-style at-least-once guarantee)
         // Server tracks pending ACKs in Redis ZSET → removes on cumulative ACK(seq) → replays unACKed on reconnect

@@ -97,9 +97,83 @@ class BroadcastStateStore(
     private val lock = Any()
     private val byId = LinkedHashMap<String, BroadcastTrip>()
 
+    /**
+     * Compute pickup distance locally from driver GPS when backend doesn't provide it.
+     * Uses Android's Location.distanceBetween (Vincenty formula — more accurate than haversine).
+     */
+    companion object {
+        /** Max age for GPS fix — reject locations older than 5 minutes */
+        private const val MAX_LOCATION_AGE_MS = 5 * 60 * 1000L
+        /** Road distance multiplier (straight-line → road distance, same as backend) */
+        private const val ROAD_FACTOR = 1.4
+        /** Average trucking speed assumption (km/h) */
+        private const val AVG_SPEED_KMH = 30.0
+    }
+
+    private fun enrichWithLocalPickupDistance(trip: BroadcastTrip): BroadcastTrip {
+        if (trip.pickupDistanceKm > 0.0) return trip
+        if (trip.pickupLocation.latitude == 0.0 || trip.pickupLocation.longitude == 0.0) return trip
+        return try {
+            val ctx = com.weelo.logistics.WeeloApp.getInstance()?.applicationContext ?: return trip
+            val locationManager = ctx.getSystemService(
+                android.content.Context.LOCATION_SERVICE
+            ) as? android.location.LocationManager ?: return trip
+            @Suppress("MissingPermission")
+            val driverLoc = locationManager.getLastKnownLocation(
+                android.location.LocationManager.GPS_PROVIDER
+            ) ?: locationManager.getLastKnownLocation(
+                android.location.LocationManager.NETWORK_PROVIDER
+            ) ?: return trip
+
+            // Staleness guard: reject GPS fixes older than 5 minutes
+            if (System.currentTimeMillis() - driverLoc.time > MAX_LOCATION_AGE_MS) {
+                timber.log.Timber.d("📍 Skipping stale GPS fix (%d seconds old) for %s",
+                    (System.currentTimeMillis() - driverLoc.time) / 1000, trip.broadcastId)
+                return trip
+            }
+
+            val results = FloatArray(1)
+            android.location.Location.distanceBetween(
+                driverLoc.latitude, driverLoc.longitude,
+                trip.pickupLocation.latitude, trip.pickupLocation.longitude,
+                results
+            )
+            val distKm = results[0] / 1000.0
+            val roundedDist = Math.round(distKm * 10.0) / 10.0
+            // Apply 1.4x road factor (same as backend) then estimate at 30 km/h
+            val roadDistKm = distKm * ROAD_FACTOR
+            val etaMinutes = ((roadDistKm / AVG_SPEED_KMH) * 60).toInt().coerceAtLeast(1)
+            timber.log.Timber.d(
+                "📍 StateStore computed local pickup: id=%s, dist=%.1fkm, eta=%dmin",
+                trip.broadcastId, roundedDist, etaMinutes
+            )
+            trip.copy(pickupDistanceKm = roundedDist, pickupEtaMinutes = etaMinutes)
+        } catch (e: Exception) {
+            timber.log.Timber.w(e, "Failed to compute local pickup distance for %s", trip.broadcastId)
+            trip
+        }
+    }
+
     fun upsert(trip: BroadcastTrip): BroadcastTrip? {
+        // Compute local pickup distance OUTSIDE the lock (GPS IPC should never be inside a lock)
+        val enriched = enrichWithLocalPickupDistance(trip)
         synchronized(lock) {
-            val previous = byId.put(trip.broadcastId, trip)
+            val previous = byId[trip.broadcastId]
+            // Preserve existing computed distance through HTTP refresh cycles
+            val merged = if (previous != null &&
+                enriched.pickupDistanceKm <= 0.0 &&
+                previous.pickupDistanceKm > 0.0
+            ) {
+                timber.log.Timber.d("🔒 StateStore PRESERVE pickupDistanceKm: id=%s, keeping=%.1f",
+                    enriched.broadcastId, previous.pickupDistanceKm)
+                enriched.copy(
+                    pickupDistanceKm = previous.pickupDistanceKm,
+                    pickupEtaMinutes = previous.pickupEtaMinutes
+                )
+            } else {
+                enriched
+            }
+            byId[merged.broadcastId] = merged
             trimIfNeededLocked()
             return previous
         }
