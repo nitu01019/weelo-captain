@@ -319,6 +319,10 @@ object BroadcastOverlayManager {
 
     /**
      * Patch current/queued broadcast payload with newer canonical snapshot.
+     *
+     * IMPORTANT: Preserve per-transporter fields (pickupDistanceKm, pickupEtaMinutes)
+     * from the existing Socket.IO data when the incoming HTTP snapshot has zero values.
+     * The HTTP API does not include per-transporter pickup distance — only Socket.IO does.
      */
     fun upsertBroadcastData(broadcast: BroadcastTrip) {
         val id = broadcast.broadcastId.trim()
@@ -327,22 +331,25 @@ object BroadcastOverlayManager {
             mutex.withLock {
                 val current = _currentBroadcast.value
                 if (current?.broadcastId == id) {
-                    _currentBroadcast.value = broadcast
-                    val queued = createQueuedBroadcast(broadcast, receivedAtMs = current.broadcastTime)
+                    val merged = mergePickupFields(broadcast, current)
+                    _currentBroadcast.value = merged
+                    val queued = createQueuedBroadcast(merged, receivedAtMs = current.broadcastTime)
                     _remainingTimeSeconds.value = (queued.remainingTimeMs() / 1000).toInt()
                     startCountdownTimer(queued)
                 }
 
                 val allIndex = _allBroadcasts.indexOfFirst { it.broadcastId == id }
                 if (allIndex >= 0) {
-                    _allBroadcasts[allIndex] = broadcast
+                    val existing = _allBroadcasts[allIndex]
+                    _allBroadcasts[allIndex] = mergePickupFields(broadcast, existing)
                 }
 
                 for (index in broadcastQueue.indices) {
                     val queued = broadcastQueue[index]
                     if (queued.broadcast.broadcastId == id) {
+                        val merged = mergePickupFields(broadcast, queued.broadcast)
                         broadcastQueue[index] = createQueuedBroadcast(
-                            broadcast = broadcast,
+                            broadcast = merged,
                             receivedAtMs = queued.receivedAtMs
                         )
                     }
@@ -352,6 +359,20 @@ object BroadcastOverlayManager {
                 updateQueueSizeLocked()
             }
         }
+    }
+
+    /**
+     * Preserve pickupDistanceKm and pickupEtaMinutes from existing Socket.IO data
+     * when the incoming HTTP data has zero values (HTTP API doesn't include these).
+     */
+    private fun mergePickupFields(incoming: BroadcastTrip, existing: BroadcastTrip): BroadcastTrip {
+        if (incoming.pickupDistanceKm > 0.0 || existing.pickupDistanceKm <= 0.0) {
+            return incoming // Incoming has valid data, or existing has nothing to preserve
+        }
+        return incoming.copy(
+            pickupDistanceKm = existing.pickupDistanceKm,
+            pickupEtaMinutes = existing.pickupEtaMinutes
+        )
     }
 
     fun showPreviousBroadcast() {

@@ -297,13 +297,19 @@ class WeeloFirebaseService : FirebaseMessagingService() {
                 enableLights(true)
             }
             
-            // Trips channel - Default importance for trip updates
+            // Trips channel - HIGH importance for trip assignments and status updates
+            // Industry standard (Uber, Rapido): incoming job alerts MUST be heads-up
+            // IMPORTANCE_HIGH → shows as heads-up popup with sound on Android 8+
+            // IMPORTANCE_DEFAULT was wrong — driver saw silent notification in shade
             val tripsChannel = NotificationChannel(
                 CHANNEL_TRIPS,
                 "Trip Updates",
-                NotificationManager.IMPORTANCE_DEFAULT
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Notifications for trip status changes"
+                description = "Notifications for trip assignments and status changes"
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 500, 200, 500)
+                enableLights(true)
             }
             
             // Payments channel - High importance for payment updates

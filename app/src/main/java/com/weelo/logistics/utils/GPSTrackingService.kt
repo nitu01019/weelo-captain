@@ -505,8 +505,10 @@ class GPSTrackingService : Service() {
                 } else {
                     val code = response.code()
                     if (code == 401 || code == 403) {
-                        // Auth error — do NOT retry with stale token; discard batch
-                        timber.log.Timber.w("⚠️ Batch upload auth error $code — discarding batch (stale token)")
+                        // Auth error — tokenRefreshInterceptor handles refresh automatically
+                        // Buffer points for next flush cycle in case direct HTTP (non-Retrofit) is used
+                        timber.log.Timber.w("⚠️ Batch upload auth error $code — buffering for retry")
+                        retryBatch(batchToSend)
                     } else {
                         timber.log.Timber.w("⚠️ Batch upload failed: $code — will retry")
                         retryBatch(batchToSend)

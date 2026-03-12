@@ -582,6 +582,7 @@ object RetrofitClient {
             // Interceptors (order matters!)
             .addInterceptor(offlineCacheInterceptor)  // Handle offline first
             .addInterceptor(authInterceptor)          // Add auth header
+            .addInterceptor(tokenRefreshInterceptor)  // Auto-refresh on 401 (was missing!)
             .addInterceptor(retryInterceptor)         // Retry on failure (SCALABILITY: handles transient errors)
             .addNetworkInterceptor(cacheInterceptor)        // Cache responses (SCALABILITY: HTTP cache)
             .addInterceptor(responseSanitizerInterceptor)   // Strip PII from responses BEFORE logging

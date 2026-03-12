@@ -198,9 +198,11 @@ object SocketIOService {
      *   2G / EDGE (<1 Mbps):  10s  — survive poor network
      *   No network:           15s  — queue locally, flush on reconnect
      *
-     * LIGHTWEIGHT PAYLOAD:
-     *   Socket heartbeat sends only {t: "hb"} (2 bytes) to extend presence TTL.
-     *   Location updates flow via REST /transporter/heartbeat (separate path).
+     * PAYLOAD:
+     *   Socket heartbeat sends {t: "hb"} to extend presence TTL.
+     *   Also includes lat/lng/speed/bearing/battery (best-effort) when available —
+     *   enables transporter to see driver location even when driver is off-trip.
+     *   Location updates during active trip flow via GPSTrackingService (separate path).
      */
     fun startHeartbeat() {
         // Cancel existing heartbeat if any
@@ -210,11 +212,33 @@ object SocketIOService {
             timber.log.Timber.i("💓 Adaptive heartbeat started")
             while (isActive) {
                 try {
-                    // Lightweight heartbeat — just extend TTL, no location data
-                    // Location flows via REST /transporter/heartbeat separately
+                    // Lightweight heartbeat — extend TTL + include last known location
+                    // Location enables transporter to see driver position even when off-trip
                     val heartbeatData = org.json.JSONObject().apply {
                         put("t", "hb")
                     }
+                    
+                    // Best-effort location enrichment — heartbeat works even without location
+                    try {
+                        val ctx = WeeloApp.getInstance()?.applicationContext
+                        if (ctx != null) {
+                            val lm = ctx.getSystemService(android.content.Context.LOCATION_SERVICE) 
+                                as? android.location.LocationManager
+                            @Suppress("MissingPermission")
+                            val loc = lm?.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+                                ?: lm?.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+                            // FRESHNESS CHECK — GPS industry standard (Digital Matter, Gojek)
+                            // getLastKnownLocation() can return hours-old cached position
+                            val MAX_LOC_AGE_MS = 5 * 60 * 1000L  // 5 minutes
+                            if (loc != null && (System.currentTimeMillis() - loc.time) < MAX_LOC_AGE_MS) {
+                                heartbeatData.put("lat", loc.latitude)
+                                heartbeatData.put("lng", loc.longitude)
+                                heartbeatData.put("speed", loc.speed.toDouble())
+                                heartbeatData.put("bearing", loc.bearing.toDouble())
+                                heartbeatData.put("battery", getDeviceBatteryLevel(ctx))
+                            }
+                        }
+                    } catch (_: Exception) { /* best effort — heartbeat still works without location */ }
                     
                     if (socket?.connected() == true) {
                         socket?.emit(Events.HEARTBEAT, heartbeatData)
@@ -232,7 +256,9 @@ object SocketIOService {
                                 ) ?: locationManager?.getLastKnownLocation(
                                     android.location.LocationManager.NETWORK_PROVIDER
                                 )
-                                if (loc != null) {
+                                // FRESHNESS CHECK — discard stale cached positions
+                                val MAX_LOC_AGE_MS = 5 * 60 * 1000L
+                                if (loc != null && (System.currentTimeMillis() - loc.time) < MAX_LOC_AGE_MS) {
                                     queueOfflineLocation(loc.latitude, loc.longitude)
                                 }
                             }
