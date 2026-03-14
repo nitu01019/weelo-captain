@@ -616,7 +616,23 @@ fun BroadcastAcceptanceScreen(
                 onSuccess()
             } else {
                 currentStep = AcceptanceStep.ASSIGN_DRIVERS
-                val retryMessage = if (successCount > 0) {
+                // FIX: Collect actual error messages from failed submissions
+                val failedErrorMessages = updatedSubmissionResults
+                    .filterValues { it is AssignmentSubmissionResult.Failed }
+                    .mapValues { (it.value as AssignmentSubmissionResult.Failed).message }
+                    .values
+                    .filterNot { it.isBlank() }
+                    .distinct()
+                    .take(3) // Show top 3 errors to avoid overwhelming user
+
+                val retryMessage = if (failedErrorMessages.isNotEmpty()) {
+                    // Show actual error details instead of generic message
+                    if (failedErrorMessages.size == 1) {
+                        failedErrorMessages.first()
+                    } else {
+                        "${failedErrorMessages.size} error(s): ${failedErrorMessages.first()}"
+                    }
+                } else if (successCount > 0) {
                     "$successCount assignment(s) sent, $failedCount failed. Retry failed trucks."
                 } else {
                     "Failed to submit assignments. Fix errors and retry."

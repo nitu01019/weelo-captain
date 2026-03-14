@@ -162,6 +162,7 @@ fun LiveTrackingScreen(
     onNavigateBack: () -> Unit,
     onNavigateToComplete: () -> Unit
 ) {
+    @Suppress("UNUSED_VARIABLE")
     val context = LocalContext.current
 
     // Trip metadata

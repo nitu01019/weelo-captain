@@ -1013,7 +1013,7 @@ object BroadcastFlowCoordinator {
                     )
                 )
 
-                var replayHandled = false
+                var replayHandled: Boolean
                 var snapshotFallbackRequired = forceRefresh
                 var replayFailureReason: String? = null
                 var replayCursorCandidate: Long? = null
