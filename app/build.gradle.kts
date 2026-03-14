@@ -6,9 +6,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization") version "1.9.22"
     // Firebase
     id("com.google.gms.google-services")
-    // Hilt temporarily disabled for build
-    // id("com.google.dagger.hilt.android") version "2.48"
-    // kotlin("kapt")
+    // Hilt for dependency injection
+    id("com.google.dagger.hilt.android") version "2.48"
+    kotlin("kapt")
 }
 
 android {
@@ -156,15 +156,17 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.6.2")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     
-    // Hilt for Dependency Injection - Temporarily disabled
-    // implementation("com.google.dagger:hilt-android:2.48")
-    // kapt("com.google.dagger:hilt-android-compiler:2.48")
-    // implementation("androidx.hilt:hilt-navigation-compose:1.1.0")
+    // Hilt for Dependency Injection
+    implementation("com.google.dagger:hilt-android:2.48")
+    kapt("com.google.dagger:hilt-android-compiler:2.48")
+    implementation("androidx.hilt:hilt-navigation-compose:1.1.0")
+    implementation("androidx.hilt:hilt-work:1.1.0")
+    kapt("androidx.hilt:hilt-compiler:1.1.0")
     
-    // Room Database (Disabled - using mock data for now)
-    // implementation("androidx.room:room-runtime:2.6.1")
-    // implementation("androidx.room:room-ktx:2.6.1")
-    // kapt("androidx.room:room-compiler:2.6.1")
+    // Room Database
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    kapt("androidx.room:room-compiler:2.6.1")
     
     // DataStore
     implementation("androidx.datastore:datastore-preferences:1.0.0")
@@ -233,6 +235,6 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
-// kapt {
-//     correctErrorTypes = true
-// }
+kapt {
+    correctErrorTypes = true
+}

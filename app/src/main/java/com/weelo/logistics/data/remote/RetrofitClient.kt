@@ -727,6 +727,16 @@ object RetrofitClient {
         retrofit.create(AssignmentApiService::class.java)
     }
     
+    /**
+     * Active Trip Recovery API - Driver crash recovery
+     * 
+     * Endpoint:
+     * - GET /tracking/active-trip → Get driver's active trip for crash recovery
+     */
+    val activeTripApi: ActiveTripApiService by lazy {
+        retrofit.create(ActiveTripApiService::class.java)
+    }
+    
     // ============== Token Management ==============
     
     /**
