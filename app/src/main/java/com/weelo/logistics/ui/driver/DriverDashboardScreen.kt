@@ -26,6 +26,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.weelo.logistics.data.remote.SocketIOService
+import com.weelo.logistics.data.remote.WeeloFirebaseService
 import com.weelo.logistics.data.model.*
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.components.rememberScreenConfig
@@ -223,7 +224,96 @@ fun DriverDashboardScreen(
             }
         }
     }
-    
+
+    // =========================================================================
+    // TRIP ASSIGNED — Show overlay popup with countdown timer
+    // =========================================================================
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            SocketIOService.tripAssigned.collect { notification ->
+                val dedupeKey = "${notification.assignmentId}|${notification.assignedAt}"
+                if (!socketEventDeduper.shouldHandle(dedupeKey)) {
+                    timber.log.Timber.d("⏭️ Skipping replayed trip_assigned event: $dedupeKey")
+                    return@collect
+                }
+
+                timber.log.Timber.i(
+                    "🚛 Trip assigned: ${notification.assignmentId} " +
+                    "(${notification.vehicleNumber}) - Expires in ${notification.remainingSeconds}s"
+                )
+
+                // Add request to manager (shows overlay or queues)
+                DriverTripRequestManager.addRequest(notification)
+            }
+        }
+    }
+
+    // =========================================================================
+    // FCM PUSH NOTIFICATIONS — Backup for trip requests when Socket.IO down
+    // =========================================================================
+    // CRITICAL: When app is in background/killed, Socket.IO disconnects.
+    // Backend sends FCM push as fallback. This ensures drivers NEVER miss trips.
+    // UBER/LYFT STANDARD: Dual delivery (Socket + FCM) with deduplication.
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            WeeloFirebaseService.foregroundNotifications.collect { fcmNotification ->
+                if (fcmNotification.type == WeeloFirebaseService.TYPE_TRIP_ASSIGNED) {
+                    val assignmentId = fcmNotification.assignmentId ?: ""
+                    if (assignmentId.isBlank()) {
+                        timber.log.Timber.w("⚠️ FCM trip_assigned has no assignmentId, skipping")
+                        return@collect
+                    }
+
+                    // Dedupe: Check if we already handled this via Socket.IO
+                    val assignedAt = fcmNotification.data["assignedAt"] ?: ""
+                    val dedupeKey = "$assignmentId|$assignedAt"
+                    if (!socketEventDeduper.shouldHandle(dedupeKey)) {
+                        timber.log.Timber.d("⏭️ Skipping duplicate FCM event: $dedupeKey")
+                        return@collect
+                    }
+
+                    timber.log.Timber.i(
+                        "📱 FCM Trip assigned: $assignmentId " +
+                        "(${fcmNotification.data["vehicleNumber"]}) - Expires in ${fcmNotification.data["remainingSeconds"] ?: "N/A"}s"
+                    )
+
+                    // Convert FCM data to TripAssignedNotification
+                    val tripAssigned = TripAssignedNotification(
+                        assignmentId = assignmentId,
+                        tripId = fcmNotification.tripId ?: fcmNotification.data["tripId"] ?: "",
+                        orderId = fcmNotification.data["orderId"] ?: "",
+                        truckRequestId = fcmNotification.data["truckRequestId"] ?: "",
+                        pickup = TripLocationInfo(
+                            address = fcmNotification.data["pickupAddress"] ?: "",
+                            city = fcmNotification.data["pickupCity"] ?: "",
+                            latitude = fcmNotification.data["pickupLat"]?.toDoubleOrNull() ?: 0.0,
+                            longitude = fcmNotification.data["pickupLng"]?.toDoubleOrNull() ?: 0.0
+                        ),
+                        drop = TripLocationInfo(
+                            address = fcmNotification.data["dropAddress"] ?: "",
+                            city = fcmNotification.data["dropCity"] ?: "",
+                            latitude = fcmNotification.data["dropLat"]?.toDoubleOrNull() ?: 0.0,
+                            longitude = fcmNotification.data["dropLng"]?.toDoubleOrNull() ?: 0.0
+                        ),
+                        vehicleNumber = fcmNotification.data["vehicleNumber"] ?: "",
+                        farePerTruck = fcmNotification.data["fare"]?.toDoubleOrNull()
+                            ?: fcmNotification.amount ?: 0.0,
+                        distanceKm = fcmNotification.data["distanceKm"]?.toDoubleOrNull() ?: 0.0,
+                        customerName = fcmNotification.data["customerName"] ?: "",
+                        customerPhone = fcmNotification.data["customerPhone"] ?: "",
+                        assignedAt = assignedAt,
+                        expiresAt = fcmNotification.data["expiresAt"],
+                        routePoints = null, // FCM payload limited - fetch full data if needed
+                        message = fcmNotification.body
+                    )
+
+                    // Add request to manager (shows overlay or queues)
+                    DriverTripRequestManager.addRequest(tripAssigned)
+                }
+            }
+        }
+    }
+
     // BACK BUTTON DISABLED - User must explicitly logout from profile
     // Back press is consumed but does nothing
     androidx.activity.compose.BackHandler {

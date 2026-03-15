@@ -4,10 +4,13 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -23,6 +26,10 @@ import timber.log.Timber
 import com.weelo.logistics.ui.auth.*
 import com.weelo.logistics.ui.driver.DriverProfileViewModel
 import com.weelo.logistics.ui.driver.DriverProfileScreenWithPhotos
+import com.weelo.logistics.ui.driver.DriverTripRequestOverlay
+import com.weelo.logistics.ui.driver.DriverTripRequestManager
+import com.weelo.logistics.ui.driver.ActionState
+import com.weelo.logistics.ui.driver.DriverTripNavigationScreen
 import com.weelo.logistics.ui.viewmodel.MainViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 
@@ -183,7 +190,15 @@ fun WeeloNavigation(
     val logoutScope = rememberCoroutineScope()
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = currentBackStackEntry?.destination?.route
-    
+
+    // =========================================================================
+    // DRIVER TRIP REQUEST OVERLAY — Show when driver receives trip assignment
+    // =========================================================================
+    val isDriver = userRole?.uppercase() == "DRIVER"
+    val isOverlayVisible by DriverTripRequestManager.isOverlayVisible.collectAsState()
+    val currentRequest by DriverTripRequestManager.currentRequest.collectAsState()
+    val actionState by DriverTripRequestManager.actionState.collectAsState()
+
     // Determine start destination based on login status
     // CRITICAL: Drivers ALWAYS go through onboarding check first
     // to ensure language is selected. Never skip to dashboard directly.
@@ -219,8 +234,13 @@ fun WeeloNavigation(
             }
         }
     }
-    
-    NavHost(
+
+    // =========================================================================
+    // LAYERED CONTENT — Overlay sits on top of all navigation
+    // =========================================================================
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Main navigation (bottom layer)
+        NavHost(
         navController = navController,
         startDestination = startDestination,
         // Route-aware transitions reduce jank on heavy realtime/map screens
@@ -764,7 +784,28 @@ fun WeeloNavigation(
                 }
             )
         }
-        
+
+        // Driver Trip Navigation (after accepting trip)
+        // Shows live tracking with Google Map
+        composable(
+            route = Screen.DriverTripNavigation.route,
+            arguments = listOf(navArgument("tripId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val tripId = backStackEntry.arguments?.getString("tripId") ?: ""
+            DriverTripNavigationScreen(
+                tripId = tripId,
+                onNavigateBack = { navController.popBackStack() },
+                onTripCompleted = {
+                    // Navigate back to dashboard after trip completion
+                    navController.navigateSmooth(
+                        route = Screen.DriverDashboard.route,
+                        popUpToRoute = Screen.DriverDashboard.route,
+                        inclusive = true
+                    )
+                }
+            )
+        }
+
         // Driver Profile Screen (with photo display and update)
         // Uses viewModel() factory for proper lifecycle management (survives config changes)
         composable("driver_profile") {
@@ -866,5 +907,122 @@ fun WeeloNavigation(
         //
         // Uses MainActivity.updateLocale() for instant locale switch.
         // =====================================================================
+        }
+
+        // =========================================================================
+        // DRIVER TRIP REQUEST OVERLAY (Top Layer)
+        // =========================================================================
+        if (isDriver && isOverlayVisible && currentRequest != null) {
+            val overlayContext = LocalContext.current
+            DriverTripRequestOverlay(
+                notification = currentRequest!!,
+                onAccept = { assignmentId ->
+                    logoutScope.launch {
+                        // Set loading state BEFORE API call — spinner shows immediately
+                        DriverTripRequestManager.setActionState(ActionState.ACCEPTING)
+                        try {
+                            val result = com.weelo.logistics.data.remote.retryWithBackoff(
+                                maxRetries = 3,
+                                initialDelayMs = 1000
+                            ) {
+                                com.weelo.logistics.data.repository.AssignmentRepository
+                                    .getInstance(overlayContext).acceptAssignment(assignmentId)
+                            }
+                            when (result) {
+                                is com.weelo.logistics.data.repository.BroadcastResult.Success -> {
+                                    DriverTripRequestManager.onAccept(assignmentId)
+                                    // Navigate to trip tracking screen
+                                    navController.navigate("driver/trip_navigation/${result.data.tripId}")
+                                }
+                                is com.weelo.logistics.data.repository.BroadcastResult.Error -> {
+                                    DriverTripRequestManager.setActionState(ActionState.IDLE)
+                                    android.widget.Toast.makeText(
+                                        overlayContext,
+                                        "Failed to accept: ${result.message}",
+                                        android.widget.Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                                is com.weelo.logistics.data.repository.BroadcastResult.Loading -> {}
+                            }
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            DriverTripRequestManager.setActionState(ActionState.IDLE)
+                            android.widget.Toast.makeText(
+                                overlayContext,
+                                "Network error. Please try again.",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                },
+                onDecline = { assignmentId ->
+                    logoutScope.launch {
+                        // Set loading state BEFORE API call
+                        DriverTripRequestManager.setActionState(ActionState.DECLINING)
+                        try {
+                            val result = com.weelo.logistics.data.remote.retryWithBackoff(
+                                maxRetries = 3,
+                                initialDelayMs = 1000
+                            ) {
+                                com.weelo.logistics.data.repository.AssignmentRepository
+                                    .getInstance(overlayContext).declineAssignment(assignmentId, "")
+                            }
+                            when (result) {
+                                is com.weelo.logistics.data.repository.BroadcastResult.Success -> {
+                                    DriverTripRequestManager.onDecline(assignmentId)
+                                }
+                                is com.weelo.logistics.data.repository.BroadcastResult.Error -> {
+                                    DriverTripRequestManager.setActionState(ActionState.IDLE)
+                                    android.widget.Toast.makeText(
+                                        overlayContext,
+                                        "Failed to decline: ${result.message}",
+                                        android.widget.Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                                is com.weelo.logistics.data.repository.BroadcastResult.Loading -> {}
+                            }
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            DriverTripRequestManager.setActionState(ActionState.IDLE)
+                            android.widget.Toast.makeText(
+                                overlayContext,
+                                "Network error. Please try again.",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                },
+                onDismiss = {
+                    logoutScope.launch {
+                        DriverTripRequestManager.onDismiss()
+                    }
+                },
+                onNavigate = {
+                    // Open Google Maps to navigate to pickup
+                    val pickupLat = currentRequest!!.pickup.latitude
+                    val pickupLng = currentRequest!!.pickup.longitude
+                    if (pickupLat != 0.0 && pickupLng != 0.0) {
+                        val uri = android.net.Uri.parse("google.navigation:q=$pickupLat,$pickupLng")
+                        val intent = android.content.Intent(
+                            android.content.Intent.ACTION_VIEW, uri
+                        ).apply {
+                            setPackage("com.google.android.apps.maps")
+                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        try {
+                            overlayContext.startActivity(intent)
+                        } catch (e: Exception) {
+                            // Fallback to web Google Maps
+                            val webIntent = android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse("https://maps.google.com/?q=$pickupLat,$pickupLng")
+                            )
+                            overlayContext.startActivity(webIntent)
+                        }
+                    }
+                },
+                actionState = actionState
+            )
+        }
     }
 }

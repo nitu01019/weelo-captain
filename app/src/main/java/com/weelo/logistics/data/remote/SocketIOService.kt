@@ -12,6 +12,10 @@ import com.weelo.logistics.broadcast.BroadcastStage
 import com.weelo.logistics.broadcast.BroadcastStatus
 import com.weelo.logistics.broadcast.BroadcastTelemetry
 import com.weelo.logistics.broadcast.BroadcastUiTiming
+import com.weelo.logistics.data.model.RoutePoint
+import com.weelo.logistics.data.model.RoutePointType
+import com.weelo.logistics.data.model.TripAssignedNotification
+import com.weelo.logistics.data.model.TripLocationInfo
 import io.socket.client.IO
 import io.socket.client.Socket
 import io.socket.emitter.Emitter
@@ -1014,7 +1018,35 @@ object SocketIOService {
                 latitude = dropObj?.optDouble("lat", 0.0) ?: 0.0,
                 longitude = dropObj?.optDouble("lng", 0.0) ?: 0.0
             )
-            
+
+            // Parse routePoints (multi-stop routes)
+            val routePointsArray = data.optJSONArray("routePoints")
+            val routePoints = mutableListOf<RoutePoint>()
+            if (routePointsArray != null) {
+                for (i in 0 until routePointsArray.length()) {
+                    val pointObj = routePointsArray.optJSONObject(i)
+                    val typeStr = pointObj?.optString("type", "PICKUP") ?: "PICKUP"
+                    val pointType = when (typeStr.uppercase()) {
+                        "PICKUP" -> RoutePointType.PICKUP
+                        "STOP" -> RoutePointType.STOP
+                        "DROP" -> RoutePointType.DROP
+                        else -> RoutePointType.PICKUP
+                    }
+                    routePoints.add(
+                        RoutePoint(
+                            type = pointType,
+                            latitude = pointObj?.optDouble("latitude", 0.0) ?: 0.0,
+                            longitude = pointObj?.optDouble("longitude", 0.0) ?: 0.0,
+                            address = pointObj?.optString("address", "") ?: "",
+                            city = pointObj?.optString("city", ""),
+                            stopIndex = i
+                        )
+                    )
+                }
+            }
+
+            val expiresAt = data.optString("expiresAt", "").takeIf { it.isNotEmpty() }
+
             val notification = TripAssignedNotification(
                 assignmentId = data.optString("assignmentId", ""),
                 tripId = data.optString("tripId", ""),
@@ -1028,6 +1060,8 @@ object SocketIOService {
                 customerName = data.optString("customerName", ""),
                 customerPhone = data.optString("customerPhone", ""),
                 assignedAt = data.optString("assignedAt", ""),
+                expiresAt = expiresAt,
+                routePoints = routePoints.ifEmpty { null },
                 message = data.optString("message", "New trip assigned!")
             )
             
@@ -2478,55 +2512,8 @@ data class DriversUpdatedNotification(
     val onTripCount: Int
 )
 
-// =============================================================================
-// TRIP ASSIGNMENT NOTIFICATION DATA CLASSES
-// =============================================================================
-
 /**
- * Location info for pickup/drop in trip assignment
- * 
- * Matches backend payload structure:
- *   pickup: { address, city, lat, lng }
- *   drop: { address, city, lat, lng }
- */
-data class TripLocationInfo(
-    val address: String,
-    val city: String,
-    val latitude: Double,
-    val longitude: Double
-)
 
-/**
- * Trip Assigned Notification — sent to driver when transporter assigns them
- * 
- * Backend emits from: truck-hold.service.ts → confirmHoldWithAssignments()
- * Event name: "trip_assigned"
- * Target: Driver's personal room (user:{driverId})
- * 
- * FLOW:
- *   Backend emits → SocketIOService receives → _tripAssigned flow →
- *   UI collects → Navigate to TripAcceptDeclineScreen
- * 
- * This data class matches the backend's driverNotification object exactly.
- * Any field changes in backend must be reflected here.
- */
-data class TripAssignedNotification(
-    val assignmentId: String,        // Unique assignment ID (UUID)
-    val tripId: String,              // Trip ID for tracking (UUID)
-    val orderId: String,             // Original customer order ID
-    val truckRequestId: String,      // Which truck request this fulfills
-    val pickup: TripLocationInfo,    // Pickup location with lat/lng
-    val drop: TripLocationInfo,      // Drop location with lat/lng
-    val vehicleNumber: String,       // e.g., "KA-01-AB-1234"
-    val farePerTruck: Double,        // Price in ₹ for this trip
-    val distanceKm: Double,          // Distance in km
-    val customerName: String,        // Customer name for display
-    val customerPhone: String,       // Customer phone for calling
-    val assignedAt: String,          // ISO timestamp of assignment
-    val message: String              // Human-readable message
-)
-
-/**
  * Driver Timeout Notification — sent when driver doesn't respond in time
  * 
  * Backend emits when assignment timeout expires (e.g., 60 seconds).
