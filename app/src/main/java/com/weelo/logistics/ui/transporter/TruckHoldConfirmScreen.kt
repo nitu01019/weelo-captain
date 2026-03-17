@@ -35,7 +35,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val TAG = "TruckHoldConfirm"
-private const val HOLD_DURATION_SECONDS = 15
+private const val HOLD_DURATION_SECONDS = 90
 
 /**
  * =============================================================================
