@@ -133,7 +133,7 @@ object DriverTripRequestSoundService {
         try {
             // Get Vibrator instance (platform-specific)
             val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val vm = context.getSystemService(Context.VIBRATOR_SERVICE) as VibratorManager
+                val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
                 vm.defaultVibrator
             } else {
                 @Suppress("DEPRECATION")

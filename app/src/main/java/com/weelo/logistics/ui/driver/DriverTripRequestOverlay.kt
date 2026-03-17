@@ -81,8 +81,6 @@ fun DriverTripRequestOverlay(
 
     // Sync with external actionState (from manager)
     val isProcessing = actionState != ActionState.IDLE
-    val isAcceptingExternal = actionState == ActionState.ACCEPTING
-    val isDecliningExternal = actionState == ActionState.DECLINING
 
     val swipeThresholdPx = with(density) { SWIPE_THRESHOLD_DP.dp.toPx() }
 
@@ -134,7 +132,7 @@ fun DriverTripRequestOverlay(
         )
     ) {
         Box(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxSize()
                 .background(Color.Black.copy(alpha = 0.6f))
                 .clickable(onClick = { if (!isProcessing) onDismiss() })
@@ -149,7 +147,7 @@ fun DriverTripRequestOverlay(
                 isProcessing = isProcessing,
                 actionState = actionState,
                 onNavigate = onNavigate,
-                modifier = Modifier
+                cardModifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(16.dp)
             )
@@ -171,7 +169,7 @@ private fun SwipeableCard(
     isProcessing: Boolean = false,
     actionState: ActionState = ActionState.IDLE,
     onNavigate: () -> Unit,
-    modifier: Modifier = Modifier
+    cardModifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
     val swipeThresholdPx = with(density) { SWIPE_THRESHOLD_DP.dp.toPx() }
@@ -200,7 +198,7 @@ private fun SwipeableCard(
     }
 
     Card(
-        modifier = modifier
+        modifier = cardModifier
             .fillMaxWidth()
             .offset { IntOffset(offsetAnimation.roundToInt(), 0) }
             .pointerInput(Unit) {
