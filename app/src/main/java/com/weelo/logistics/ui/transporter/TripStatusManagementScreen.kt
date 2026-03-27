@@ -103,6 +103,8 @@ fun TripStatusManagementScreen(
                                     com.weelo.logistics.data.model.DriverResponseStatus.DECLINED
                                 else -> com.weelo.logistics.data.model.DriverResponseStatus.PENDING
                             }
+
+
                             val driverAssignment = com.weelo.logistics.data.model.DriverTruckAssignment(
                                 driverId = data.driverId,
                                 driverName = data.driverName,
@@ -561,10 +563,11 @@ fun DriverAssignmentStatusCard(
                         }
                     ) {
                         Text(
+                            // Industry Standard: "Awaiting Driver" shows more clarity than "Waiting..."
                             when (assignment.status) {
                                 DriverResponseStatus.ACCEPTED -> "ACCEPTED"
                                 DriverResponseStatus.DECLINED -> "DECLINED"
-                                DriverResponseStatus.PENDING -> "WAITING..."
+                                DriverResponseStatus.PENDING -> "⏳ AWAITING DRIVER"
                                 DriverResponseStatus.EXPIRED -> "NO RESPONSE"
                                 DriverResponseStatus.REASSIGNED -> "REASSIGNED"
                             },

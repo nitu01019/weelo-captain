@@ -82,10 +82,20 @@ fun DriverTripRequestOverlay(
     // Sync with external actionState (from manager)
     val isProcessing = actionState != ActionState.IDLE
 
+    // Industry Standard: Grab Mobile/Google - Block timer immediately on swipe
+    // When driver swipes accept/decline, set this flag BEFORE API call
+    // LaunchedEffect key includes it -> effect restarts -> early return blocks timer
+    var isSwipeComplete by remember { mutableStateOf(false) }
+
     val swipeThresholdPx = with(density) { SWIPE_THRESHOLD_DP.dp.toPx() }
 
     // Countdown timer
-    LaunchedEffect(notification.assignmentId) {
+    // Industry Standard: Grab Mobile/Google - State-aware timer
+    // Includes isSwipeComplete in key -> restarts when swipe completes -> early return blocks timer
+    LaunchedEffect(notification.assignmentId, isProcessing, isSwipeComplete) {
+        // Block immediately if processing started OR swipe completed
+        if (isProcessing || isSwipeComplete) return@LaunchedEffect
+
         while (remainingSeconds > 0) {
             delay(COUNTDOWN_INTERVAL)
             remainingSeconds--
@@ -110,12 +120,16 @@ fun DriverTripRequestOverlay(
             swipeOffset > swipeThresholdPx -> {
                 if (!isAccepting) {
                     isAccepting = true
+                    // Industry Standard: Set flag IMMEDIATELY to block timer (before API)
+                    isSwipeComplete = true
                     onAccept(notification.assignmentId)
                 }
             }
             swipeOffset < -swipeThresholdPx -> {
                 if (!isDeclining) {
                     isDeclining = true
+                    // Industry Standard: Set flag IMMEDIATELY to block timer (before API)
+                    isSwipeComplete = true
                     onDecline(notification.assignmentId)
                 }
             }

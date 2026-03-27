@@ -363,22 +363,22 @@ object SocketIOService {
     private const val BROADCAST_OVERLAY_WATCHDOG_MS = 2_500L
     private val directBroadcastSocketEvents = setOf("new_broadcast", "new_order_alert", "new_truck_request")
     private val directCancellationSocketEvents = setOf(
-        "order_cancelled",
-        "booking_cancelled",
-        "broadcast_dismissed",
-        "broadcast_expired",
-        "booking_expired",
-        "order_expired"
+        Events.ORDER_CANCELLED,
+        Events.BOOKING_CANCELLED,
+        Events.BROADCAST_DISMISSED,
+        Events.BROADCAST_EXPIRED,
+        Events.BOOKING_EXPIRED,
+        Events.ORDER_EXPIRED
     )
     private val fallbackBroadcastSocketEvents = setOf("message", "new_booking_request", "broadcast_request", "broadcast_available")
     private val broadcastPayloadTypes = setOf("new_broadcast", "new_truck_request")
     private val cancellationPayloadTypes = setOf(
-        "order_cancelled",
-        "booking_cancelled",
-        "broadcast_dismissed",
-        "broadcast_expired",
-        "booking_expired",
-        "order_expired"
+        Events.ORDER_CANCELLED,
+        Events.BOOKING_CANCELLED,
+        Events.BROADCAST_DISMISSED,
+        Events.BROADCAST_EXPIRED,
+        Events.BOOKING_EXPIRED,
+        Events.ORDER_EXPIRED
     )
 
     private fun <T> emitHot(flow: MutableSharedFlow<T>, value: T) {
@@ -407,6 +407,7 @@ object SocketIOService {
         const val BOOKING_CANCELLED = "booking_cancelled"
         const val BOOKING_FULLY_FILLED = "booking_fully_filled"
         const val BROADCAST_DISMISSED = "broadcast_dismissed"
+        const val BROADCAST_EXPIRED = "broadcast_expired"
         const val NEW_ORDER_ALERT = "new_order_alert"
         const val ACCEPT_CONFIRMATION = "accept_confirmation"
         const val ERROR = "error"
@@ -685,7 +686,7 @@ object SocketIOService {
             
             // Broadcast expired (NEW - backend sends this for timeout/cancellation)
             // This is the primary event for removing broadcasts from overlay
-            on("broadcast_expired") { args ->
+            on(Events.BROADCAST_EXPIRED) { args ->
                 handleBookingExpired(args)
             }
 
@@ -1393,8 +1394,8 @@ object SocketIOService {
                     Events.BOOKING_CANCELLED.lowercase(Locale.US) -> handleOrderCancelled(payloadArgs)
                     Events.ORDER_EXPIRED.lowercase(Locale.US) -> handleOrderExpired(payloadArgs)
                     Events.BROADCAST_DISMISSED.lowercase(Locale.US),
-                    Events.BOOKING_EXPIRED.lowercase(Locale.US),
-                    "broadcast_expired" -> handleBookingExpired(payloadArgs)
+                    Events.BROADCAST_EXPIRED.lowercase(Locale.US),
+                    Events.BOOKING_EXPIRED.lowercase(Locale.US) -> handleBookingExpired(payloadArgs)
                 }
             }
             BroadcastFallbackRoute.BROADCAST -> {

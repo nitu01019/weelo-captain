@@ -490,10 +490,10 @@ fun WeeloNavigation(
                 requiredQuantity = quantity,
                 preselectedVehicleIds = vehicleIds,
                 onNavigateBack = { navController.popBackStack() },
-                onNavigateToTracking = {
-                    // Navigate back to dashboard after successful assignment
+                onNavigateToTracking = { assignmentId ->
+                    // Navigate to real-time driver response tracking screen
                     navController.navigateSmooth(
-                        route = Screen.TransporterDashboard.route,
+                        route = Screen.TripStatusManagement.createRoute(assignmentId),
                         popUpToRoute = Screen.TransporterDashboard.route,
                         inclusive = false
                     )
@@ -501,6 +501,24 @@ fun WeeloNavigation(
             )
         }
         
+        // Trip Status Management - Shows driver acceptance status in real-time
+        composable(
+            route = Screen.TripStatusManagement.route,
+            arguments = listOf(navArgument("assignmentId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val assignmentId = backStackEntry.arguments?.getString("assignmentId") ?: ""
+            com.weelo.logistics.ui.transporter.TripStatusManagementScreen(
+                assignmentId = assignmentId,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToReassign = { _, _ ->
+                    navController.popBackStack()
+                },
+                onNavigateToTracking = { _ ->
+                    navController.navigateSmooth(Screen.TransporterDashboard.route)
+                }
+            )
+        }
+
         // Fleet Management
         composable(Screen.FleetList.route) {
             com.weelo.logistics.ui.transporter.FleetListScreen(

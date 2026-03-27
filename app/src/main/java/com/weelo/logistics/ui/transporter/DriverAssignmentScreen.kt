@@ -71,7 +71,7 @@ fun DriverAssignmentScreen(
     requiredQuantity: Int,
     preselectedVehicleIds: List<String> = emptyList(),
     onNavigateBack: () -> Unit,
-    onNavigateToTracking: () -> Unit
+    onNavigateToTracking: (assignmentId: String) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -89,12 +89,58 @@ fun DriverAssignmentScreen(
     var showDriverPicker by remember { mutableStateOf<String?>(null) } // vehicleId being assigned
     var isLoading by remember { mutableStateOf(true) }
     var isSubmitting by remember { mutableStateOf(false) }
-    var showSuccessDialog by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var successCount by remember { mutableStateOf(0) }
     val fleetDriversById = remember(fleetDrivers) { fleetDrivers.associateBy { it.id } }
     
     val resolvedHoldId = remember(holdId) { holdId.trim().takeUnless { it.isBlank() } }
+
+    // ── Hold expiry countdown (Phase 2 timer) ──
+    // Backend hold is 180s total. Phase 1 (TruckHoldConfirmScreen) used some of that.
+    // Here we show remaining time so transporter knows how long they have to assign drivers.
+    var holdRemainingSeconds by remember { mutableStateOf(-1) } // -1 = not loaded yet
+    var holdExpired by remember { mutableStateOf(false) }
+
+    LaunchedEffect(resolvedHoldId) {
+        if (resolvedHoldId == null) return@LaunchedEffect
+        try {
+            val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.weelo.logistics.data.remote.RetrofitClient.truckHoldApi.getMyActiveHold(
+                    orderId = broadcastId,
+                    vehicleType = requiredVehicleType,
+                    vehicleSubtype = requiredVehicleSubtype
+                )
+            }
+            val expiresAtStr = response.body()?.data?.expiresAt
+            if (expiresAtStr != null) {
+                val expiresAtMs = try {
+                    java.time.Instant.parse(expiresAtStr).toEpochMilli()
+                } catch (_: Exception) { 0L }
+                if (expiresAtMs > 0) {
+                    var remaining = ((expiresAtMs - System.currentTimeMillis()) / 1000).toInt().coerceAtLeast(0)
+                    holdRemainingSeconds = remaining
+                    while (remaining > 0 && !isSubmitting) {
+                        kotlinx.coroutines.delay(1000)
+                        remaining--
+                        holdRemainingSeconds = remaining
+                    }
+                    if (remaining <= 0 && !isSubmitting) {
+                        holdExpired = true
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            timber.log.Timber.w(e, "Failed to fetch hold expiry — timer hidden")
+        }
+    }
+
+    // Auto-navigate back when hold expires
+    LaunchedEffect(holdExpired) {
+        if (holdExpired && !isSubmitting) {
+            android.widget.Toast.makeText(context, "Hold expired. Trucks released.", android.widget.Toast.LENGTH_LONG).show()
+            onNavigateBack()
+        }
+    }
+
 
     // Fetch data from real backend
     LaunchedEffect(broadcastId, holdId, requiredVehicleType, requiredVehicleSubtype, requiredQuantity, preselectedVehicleIds) {
@@ -273,6 +319,44 @@ fun DriverAssignmentScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                // Hold Expiry Timer (visible during Phase 2)
+                if (holdRemainingSeconds >= 0) {
+                    item {
+                        val timerColor = when {
+                            holdRemainingSeconds > 30 -> Success
+                            holdRemainingSeconds > 10 -> Warning
+                            else -> Error
+                        }
+                        val minutes = holdRemainingSeconds / 60
+                        val seconds = holdRemainingSeconds % 60
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(timerColor.copy(alpha = 0.1f))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Timer,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = timerColor
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "Hold expires in ${minutes}:${"%02d".format(seconds)}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = timerColor
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Instructions Card
                 item {
                     Card(
@@ -431,7 +515,6 @@ fun DriverAssignmentScreen(
                             }
 
                             isSubmitting = true
-                            successCount = submissionAssignments.size
                             
                             scope.launch {
                                 when (
@@ -447,7 +530,19 @@ fun DriverAssignmentScreen(
                                             result.assignmentIds.size,
                                             result.tripIds.size
                                         )
-                                        showSuccessDialog = true
+                                        Toast.makeText(
+                                            context,
+                                            "✅ ${result.assignmentIds.size} driver(s) assigned successfully",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        // Navigate directly to real-time driver response tracking
+                                        val targetAssignmentId = result.assignmentIds.firstOrNull()
+                                        if (targetAssignmentId != null) {
+                                            onNavigateToTracking(targetAssignmentId)
+                                        } else {
+                                            timber.log.Timber.w("⚠️ No assignmentId returned — navigating back")
+                                            onNavigateBack()
+                                        }
                                     }
 
                                     is BroadcastAssignmentResult.Error -> {
@@ -505,52 +600,7 @@ fun DriverAssignmentScreen(
         )
     }
     
-    // Success Dialog
-    if (showSuccessDialog) {
-        AlertDialog(
-            onDismissRequest = { },
-            icon = { 
-                Icon(
-                    Icons.Default.CheckCircle,
-                    null,
-                    modifier = Modifier.size(64.dp),
-                    tint = Success
-                )
-            },
-            title = { 
-                Text(
-                    "Assignments Sent!",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Column {
-                    Text("${readyAssignments.size} drivers have been notified")
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Drivers will receive notifications on their devices and can accept or decline the trip.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "You can track their responses in the Trip Details screen.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = { onNavigateToTracking() },
-                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
-                ) {
-                    Text("View Trip Status")
-                }
-            }
-        )
-    }
+
 }
 
 /**

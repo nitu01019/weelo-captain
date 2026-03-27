@@ -95,7 +95,7 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
     private val periodicRefreshJitterMs = (((System.identityHashCode(this) and Int.MAX_VALUE) % 3000) + 500).toLong()
 
     companion object {
-        private const val PERIODIC_REFRESH_CONNECTED_MS = 60_000L
+        private const val PERIODIC_REFRESH_CONNECTED_MS = 15_000L
         private const val PERIODIC_REFRESH_RECONNECTING_MS = 20_000L
         private const val PERIODIC_REFRESH_ERROR_MAX_MS = 120_000L
         private const val SOCKET_REFRESH_DEBOUNCE_MS = 350L
@@ -125,6 +125,12 @@ class BroadcastListViewModel(application: Application) : AndroidViewModel(applic
             observeCoordinatorFeed()
             observeCoordinatorEvents()
             observeCoordinatorDismissed()
+            // Always observe socket state: reconnect events must trigger a force-reconcile,
+            // and isSocketConnected must be kept current for the top-bar indicator.
+            observeSocketState()
+            // Always run a periodic fallback reconcile even in coordinator mode.
+            // This covers the case where a socket event is missed (network blip, dedup drop).
+            startPeriodicRefresh()
             BroadcastFlowCoordinator.requestReconcile(force = true)
             return
         }

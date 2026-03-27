@@ -33,7 +33,8 @@ data class TripAssignedNotification(
     val assignedAt: String,          // ISO timestamp of assignment
     val expiresAt: String?,         // ISO timestamp when offer expires (60s from assignment)
     val routePoints: List<RoutePoint>?,  // Full route for multi-stop trips
-    val message: String              // Human-readable message
+    val message: String,             // Human-readable message
+    val dismissedAt: Long? = null    // When driver dismissed (timestamp, null if not dismissed)
 ) {
     /**
      * Get remaining seconds for countdown timer

@@ -168,16 +168,22 @@ object DriverTripRequestManager {
 
     /**
      * Called when overlay is dismissed (without action)
-     * Moves current request to requests list for later access
+     * Queues current request for later access - prevents job loss from accidental dismissal
+     *
+     * Industry Standard: Drivers can return to dismissed jobs instead of losing them
      *
      * Thread-safe: Uses mutex for state mutation
      */
     suspend fun onDismiss() = mutex.withLock {
         val current = _currentRequest.value
         if (current != null) {
-            Timber.tag(TAG).i("👋 Dismissing: ${current.assignmentId}")
-            // Dismissed requests are removed from queue
-            // Future enhancement: Save to historical requests list for later access
+            Timber.tag(TAG).i("👋 Dismissing: ${current.assignmentId} - queuing for later access")
+
+            // Add to dismissed requests list instead of dropping
+            val queue = ArrayDeque(_requestQueue.value)
+            queue.addLast(current.copy(dismissedAt = System.currentTimeMillis()))
+            _requestQueue.value = queue
+
             completeCurrentRequest()
         }
     }
@@ -295,6 +301,17 @@ object DriverTripRequestManager {
      */
     suspend fun getQueue(): List<TripAssignedNotification> = mutex.withLock {
         _requestQueue.value.toList()
+    }
+
+    /**
+     * Get dismissed requests (for recovery - drivers can see jobs they accidentally dismissed)
+     *
+     * Industry Standard: Prevents job loss from accidental overlay dismissal
+     *
+     * Thread-safe: Returns a copy filtered by dismissed status
+     */
+    suspend fun getDismissedRequests(): List<TripAssignedNotification> = mutex.withLock {
+        _requestQueue.value.filter { it.dismissedAt != null }
     }
 }
 
