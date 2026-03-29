@@ -168,6 +168,9 @@ class BroadcastSoundService private constructor(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private var mediaPlayer: MediaPlayer? = null
     
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val autoStopRunnable = Runnable { stopSound() }
+    
     private val _selectedSound = MutableStateFlow(loadSelectedSound())
     val selectedSound: StateFlow<SoundOption> = _selectedSound
     
@@ -216,10 +219,11 @@ class BroadcastSoundService private constructor(private val context: Context) {
                     setOnCompletionListener { release() }
                     setOnErrorListener { mp, _, _ -> 
                         mp.release()
+                        if (mediaPlayer == mp) mediaPlayer = null
                         true 
                     }
-                    prepare()
-                    start()
+                    setOnPreparedListener { it.start() }
+                    prepareAsync()
                 }
             }
             
@@ -257,8 +261,13 @@ class BroadcastSoundService private constructor(private val context: Context) {
                     setDataSource(context, uri)
                     setVolume(1f, 1f)  // Max volume for urgent
                     setOnCompletionListener { release() }
-                    prepare()
-                    start()
+                    setOnErrorListener { mp, _, _ -> 
+                        mp.release()
+                        if (mediaPlayer == mp) mediaPlayer = null
+                        true 
+                    }
+                    setOnPreparedListener { it.start() }
+                    prepareAsync()
                 }
             }
             
@@ -273,19 +282,73 @@ class BroadcastSoundService private constructor(private val context: Context) {
     }
     
     /**
+     * Play a continuous looping sound (like an incoming call).
+     * Automatically stops after 120 seconds.
+     */
+    fun playLoopingSound(isUrgent: Boolean = false) {
+        if (!_soundEnabled.value) return
+        
+        try {
+            stopSound()
+            
+            val soundOption = if (isUrgent) SoundOption.ALARM else _selectedSound.value
+            val uri = getSoundUri(soundOption) ?: getSoundUri(SoundOption.DEFAULT)
+            
+            if (uri != null) {
+                mediaPlayer = MediaPlayer().apply {
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(if (isUrgent) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                    isLooping = true
+                    setDataSource(context, uri)
+                    val vol = if (isUrgent) 1f else _volume.value
+                    setVolume(vol, vol)
+                    setOnPreparedListener { 
+                        it.start() 
+                        handler.postDelayed(autoStopRunnable, 120_000L)
+                    }
+                    setOnErrorListener { mp, _, _ -> 
+                        mp.release()
+                        if (mediaPlayer == mp) mediaPlayer = null
+                        true 
+                    }
+                    prepareAsync()
+                }
+            }
+            
+            if (_vibrationEnabled.value) {
+                vibrate(if (isUrgent) VibrationPattern.URGENT else VibrationPattern.LONG)
+            }
+            
+        } catch (e: Exception) {
+            timber.log.Timber.e(e, "Error playing looping sound")
+            playFallbackSound()
+        }
+    }
+
+    /**
      * Stop currently playing sound
      */
     fun stopSound() {
+        handler.removeCallbacks(autoStopRunnable)
         try {
-            mediaPlayer?.let {
-                if (it.isPlaying) {
-                    it.stop()
+            val player = mediaPlayer
+            mediaPlayer = null // prevent race conditions
+            if (player != null) {
+                try {
+                    if (player.isPlaying) {
+                        player.stop()
+                    }
+                } catch (e: Exception) {
+                    timber.log.Timber.e(e, "Error checking isPlaying or stopping")
                 }
-                it.release()
+                player.release()
             }
-            mediaPlayer = null
         } catch (e: Exception) {
-            timber.log.Timber.e(e, "Error stopping sound")
+            timber.log.Timber.e(e, "Error releasing sound")
         }
     }
     
@@ -308,8 +371,13 @@ class BroadcastSoundService private constructor(private val context: Context) {
                     setDataSource(context, uri)
                     setVolume(_volume.value, _volume.value)
                     setOnCompletionListener { release() }
-                    prepare()
-                    start()
+                    setOnErrorListener { mp, _, _ -> 
+                        mp.release()
+                        if (mediaPlayer == mp) mediaPlayer = null
+                        true 
+                    }
+                    setOnPreparedListener { it.start() }
+                    prepareAsync()
                 }
             }
         } catch (e: Exception) {
@@ -389,15 +457,10 @@ class BroadcastSoundService private constructor(private val context: Context) {
         return if (option.isSystemSound && option.systemSoundType != null) {
             RingtoneManager.getDefaultUri(option.systemSoundType)
         } else {
-            // For custom sounds, use system sounds as fallback
-            // TODO: Add custom sound files in res/raw/ folder later
+            // Provide our app-specific professional tone for all custom options
             when (option) {
-                SoundOption.ALERT_1 -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-                SoundOption.ALERT_2 -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
                 SoundOption.URGENT -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                SoundOption.CASH_REGISTER -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-                SoundOption.TRUCK_HORN -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                else -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                else -> getResourceUri(com.weelo.logistics.R.raw.broadcast_ringtone)
             }
         }
     }

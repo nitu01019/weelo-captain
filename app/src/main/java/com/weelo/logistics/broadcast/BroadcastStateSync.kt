@@ -1,5 +1,6 @@
 package com.weelo.logistics.broadcast
 
+import com.weelo.logistics.data.model.BroadcastTrip
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,6 +49,32 @@ object BroadcastStateSync {
         if (broadcastId.isBlank()) return
         timber.log.Timber.i("🔄 [StateSync] Marked fully accepted: $broadcastId")
         _fullyAccepted.update { it + broadcastId }
+    }
+
+    // =========================================================================
+    // PENDING ACCEPT — Cross-activity handoff from BroadcastIncomingActivity
+    //
+    // When the transporter accepts from the full-screen incoming overlay, the
+    // BroadcastIncomingActivity stores the accepted BroadcastTrip here BEFORE
+    // calling finish(). MainActivity reads it when it gets the accept_broadcast
+    // intent and immediately opens the BroadcastAcceptanceScreen.
+    //
+    // WHY: finish() → onDestroy() clears BroadcastOverlayManager. Without this,
+    // MainActivity cannot retrieve the broadcast to show the acceptance screen.
+    // =========================================================================
+    private val _pendingAccept = MutableStateFlow<BroadcastTrip?>(null)
+    val pendingAccept: StateFlow<BroadcastTrip?> = _pendingAccept.asStateFlow()
+
+    fun setPendingAccept(broadcast: BroadcastTrip) {
+        timber.log.Timber.i("🔄 [StateSync] Pending accept queued: ${broadcast.broadcastId}")
+        _pendingAccept.value = broadcast
+    }
+
+    fun consumePendingAccept(): BroadcastTrip? {
+        val broadcast = _pendingAccept.value ?: return null
+        _pendingAccept.value = null
+        timber.log.Timber.i("🔄 [StateSync] Pending accept consumed: ${broadcast.broadcastId}")
+        return broadcast
     }
 
     /**

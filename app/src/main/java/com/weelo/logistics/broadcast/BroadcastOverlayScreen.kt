@@ -164,13 +164,12 @@ fun BroadcastOverlayScreen(
     val hasAnyHolding = truckHoldStates.values.any { it.isHolding }
     
     // Play sound when new broadcast appears
-    LaunchedEffect(currentBroadcast) {
+    DisposableEffect(currentBroadcast?.broadcastId) {
         currentBroadcast?.let { broadcast ->
-            if (broadcast.isUrgent) {
-                soundService.playUrgentSound()
-            } else {
-                soundService.playBroadcastSound()
-            }
+            soundService.playLoopingSound(isUrgent = broadcast.isUrgent)
+        }
+        onDispose {
+            soundService.stopSound()
         }
     }
 
@@ -353,20 +352,36 @@ fun BroadcastOverlayScreen(
     
     // =========================================================================
     // SUBMIT - Proceed with accepted trucks only
+    //
+    // CRITICAL: Call onAccept() BEFORE acceptCurrentBroadcast().
+    // acceptCurrentBroadcast() posts a coroutine that clears _currentBroadcast
+    // and _isOverlayVisible. Although it runs on Dispatchers.Main (deferred),
+    // calling onAccept first guarantees the acceptance screen state is set
+    // before any recomposition teardown can interfere.
     // =========================================================================
     fun handleSubmit() {
-        currentBroadcast?.let { broadcast ->
-            timber.log.Timber.i("📤 Submit: ${acceptedTrucks.size} types, $totalAcceptedQuantity trucks")
-            
-            BroadcastOverlayManager.acceptCurrentBroadcast()
-            
-            // Pass hold info to next screen via notes field
-            val holdInfo = acceptedTrucks.joinToString(";") { 
-                "${it.vehicleType}|${it.vehicleSubtype}|${it.quantity}|${it.holdId ?: ""}" 
-            }
-            
-            onAccept(broadcast.copy(notes = holdInfo))
+        // Capture broadcast reference BEFORE any async operations.
+        // currentBroadcast is a Compose state from BroadcastOverlayManager.currentBroadcast.
+        // It can become null if: timer expires, dismiss notification arrives, or
+        // showNextBroadcast() runs between the user tap and this handler executing.
+        val broadcast = currentBroadcast
+        if (broadcast == null) {
+            timber.log.Timber.w("⚠️ handleSubmit: currentBroadcast is null — race condition, skipping")
+            return
         }
+
+        timber.log.Timber.i("📤 Submit: ${acceptedTrucks.size} types, $totalAcceptedQuantity trucks")
+
+        // Build hold info BEFORE triggering acceptance (which will clear overlay state)
+        val holdInfo = acceptedTrucks.joinToString(";") {
+            "${it.vehicleType}|${it.vehicleSubtype}|${it.quantity}|${it.holdId ?: ""}"
+        }
+
+        // 1. Call onAccept FIRST — sets showAcceptanceScreen = true in MainActivity
+        onAccept(broadcast.copy(notes = holdInfo))
+
+        // 2. THEN tell BroadcastOverlayManager to clean up (clear current, advance queue)
+        BroadcastOverlayManager.acceptCurrentBroadcast()
     }
     
     // =========================================================================

@@ -231,7 +231,7 @@ class MainActivity : ComponentActivity() {
                 // ================================================================
                 var acceptedBroadcast by remember { mutableStateOf<BroadcastTrip?>(null) }
                 var showAcceptanceScreen by remember { mutableStateOf(false) }
-                
+
                 // Listen for broadcast events to handle navigation
                 LaunchedEffect(lifecycleOwner) {
                     lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
@@ -250,6 +250,30 @@ class MainActivity : ComponentActivity() {
                                 }
                                 is BroadcastOverlayManager.BroadcastEvent.NewBroadcast -> {
                                     timber.log.Timber.i("📢 New broadcast queued: ${event.broadcast.broadcastId} (position: ${event.queuePosition})")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ================================================================
+                // CROSS-ACTIVITY ACCEPT HANDOFF (BroadcastIncomingActivity → here)
+                //
+                // When the transporter accepts from the full-screen incoming overlay,
+                // BroadcastIncomingActivity stores the broadcast in BroadcastStateSync
+                // BEFORE calling finish(). We observe that here and immediately open
+                // the acceptance screen — without going through the overlay/event path
+                // that gets cleared by BroadcastOverlayManager.clearAll().
+                // ================================================================
+                LaunchedEffect(lifecycleOwner) {
+                    lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                        BroadcastStateSync.pendingAccept.collect { pending ->
+                            if (pending != null && !showAcceptanceScreen) {
+                                timber.log.Timber.i("🎯 [PendingAccept] Opening acceptance screen for: ${pending.broadcastId}")
+                                val consumed = BroadcastStateSync.consumePendingAccept()
+                                if (consumed != null) {
+                                    acceptedBroadcast = consumed
+                                    showAcceptanceScreen = true
                                 }
                             }
                         }
@@ -308,8 +332,8 @@ class MainActivity : ComponentActivity() {
                                     showAcceptanceScreen = false
                                     acceptedBroadcast = null
                                 },
-                                onSuccess = {
-                                    timber.log.Timber.i("✅ Assignment successful!")
+                                onSuccess = { assignmentId ->
+                                    timber.log.Timber.i("✅ Assignment successful! assignmentId=$assignmentId")
                                     // Cross-screen sync: mark as fully accepted so
                                     // Request Screen removes it immediately
                                     broadcast.broadcastId.let { id ->
@@ -318,6 +342,18 @@ class MainActivity : ComponentActivity() {
                                     }
                                     showAcceptanceScreen = false
                                     acceptedBroadcast = null
+                                    
+                                    // FIX: Navigate to TripStatusManagement ("Waiting for driver" screen)
+                                    // BEFORE: Just closed dialog → user had no visibility into driver response
+                                    // NOW: Shows real-time driver acceptance status
+                                    if (assignmentId != null) {
+                                        navController.navigate(
+                                            Screen.TripStatusManagement.createRoute(assignmentId)
+                                        ) {
+                                            popUpTo(Screen.TransporterDashboard.route) { inclusive = false }
+                                            launchSingleTop = true
+                                        }
+                                    }
                                 }
                             )
                         }
@@ -358,13 +394,29 @@ class MainActivity : ComponentActivity() {
     private fun handleNotificationIntent(incomingIntent: Intent?) {
         if (incomingIntent == null) return
         val rawType = incomingIntent.getStringExtra("notification_type") ?: return
+        val broadcastId = incomingIntent.getStringExtra("broadcast_id") ?: return
+        if (broadcastId.isBlank()) return
+        if (!BroadcastRolePolicy.canHandleBroadcastIngress(RetrofitClient.getUserRole())) return
+
         val type = when (rawType.trim().lowercase()) {
             WeeloFirebaseService.TYPE_NEW_TRUCK_REQUEST -> WeeloFirebaseService.TYPE_NEW_BROADCAST
             else -> rawType.trim().lowercase()
         }
-        val broadcastId = incomingIntent.getStringExtra("broadcast_id") ?: return
-        if (type != WeeloFirebaseService.TYPE_NEW_BROADCAST || broadcastId.isBlank()) return
-        if (!BroadcastRolePolicy.canHandleBroadcastIngress(RetrofitClient.getUserRole())) return
+
+        // =====================================================================
+        // ACCEPT_BROADCAST: User already accepted from BroadcastIncomingActivity.
+        // The broadcast is stored in BroadcastStateSync.pendingAccept.
+        // The Compose LaunchedEffect above observes it and opens the acceptance
+        // screen. No need to fetch from API or re-show the overlay.
+        // =====================================================================
+        if (type == "accept_broadcast") {
+            timber.log.Timber.i("🎯 [MainActivity] accept_broadcast intent received: id=%s", broadcastId)
+            // Compose observer on BroadcastStateSync.pendingAccept handles the rest.
+            // Just log — no action needed here.
+            return
+        }
+
+        if (type != WeeloFirebaseService.TYPE_NEW_BROADCAST) return
 
         val key = "$type|$broadcastId"
         if (lastHandledNotificationKey == key) return

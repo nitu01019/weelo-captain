@@ -61,7 +61,7 @@ class WeeloFirebaseService : FirebaseMessagingService() {
         private const val KEY_FCM_TOKEN = "fcm_token"
         
         // Notification channels
-        const val CHANNEL_BROADCASTS = "broadcasts"
+        const val CHANNEL_BROADCASTS = "broadcasts_v2"
         const val CHANNEL_TRIPS = "trips"
         const val CHANNEL_PAYMENTS = "payments"
         const val CHANNEL_GENERAL = "general"
@@ -295,6 +295,12 @@ class WeeloFirebaseService : FirebaseMessagingService() {
                 description = "Notifications for new booking requests"
                 enableVibration(true)
                 enableLights(true)
+                val soundUri = android.net.Uri.parse("android.resource://${packageName}/${com.weelo.logistics.R.raw.broadcast_ringtone}")
+                val audioAttributes = android.media.AudioAttributes.Builder()
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .build()
+                setSound(soundUri, audioAttributes)
             }
             
             // Trips channel - HIGH importance for trip assignments and status updates
@@ -382,14 +388,18 @@ class WeeloFirebaseService : FirebaseMessagingService() {
         )
         
         // Build notification
-        val defaultSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val soundUri = if (channelId == CHANNEL_BROADCASTS) {
+            android.net.Uri.parse("android.resource://${packageName}/${com.weelo.logistics.R.raw.broadcast_ringtone}")
+        } else {
+            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        }
         
         val notificationBuilder = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(notification.title)
             .setContentText(notification.body)
             .setAutoCancel(true)
-            .setSound(defaultSoundUri)
+            .setSound(soundUri)
             .setContentIntent(pendingIntent)
             .setPriority(
                 when (notification.type) {

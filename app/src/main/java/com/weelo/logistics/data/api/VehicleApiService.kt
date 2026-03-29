@@ -151,6 +151,7 @@ data class VehicleListData(
     val vehicles: List<VehicleData> = emptyList(),
     val total: Int = 0,
     val available: Int = 0,
+    val onHold: Int = 0,
     val inTransit: Int = 0,
     val maintenance: Int = 0
 )

@@ -90,6 +90,7 @@ fun FleetListScreen(
                             stats = VehicleStats(
                                 total = body.data.total,
                                 available = body.data.available,
+                                onHold = body.data.onHold,
                                 inTransit = body.data.inTransit,
                                 maintenance = body.data.maintenance
                             )
@@ -127,6 +128,7 @@ fun FleetListScreen(
     val filteredVehicles = remember(vehicles, selectedFilter) {
         when (selectedFilter) {
             "Available" -> vehicles.filter { it.status == "available" }
+            "On Hold" -> vehicles.filter { it.status == "on_hold" }
             "In Transit" -> vehicles.filter { it.status == "in_transit" }
             "Maintenance" -> vehicles.filter { it.status == "maintenance" }
             else -> vehicles
@@ -161,6 +163,11 @@ fun FleetListScreen(
                         color = Success
                     )
                     StatChip(
+                        label = "On Hold",
+                        count = stats.onHold,
+                        color = Warning
+                    )
+                    StatChip(
                         label = "In Transit",
                         count = stats.inTransit,
                         color = Primary
@@ -168,7 +175,7 @@ fun FleetListScreen(
                     StatChip(
                         label = "Maintenance",
                         count = stats.maintenance,
-                        color = Warning
+                        color = Error
                     )
                 }
             }
@@ -182,7 +189,7 @@ fun FleetListScreen(
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    listOf("All", "Available", "In Transit", "Maintenance").forEach { filter ->
+                    listOf("All", "Available", "On Hold", "In Transit", "Maintenance").forEach { filter ->
                         FilterChip(
                             selected = selectedFilter == filter,
                             onClick = { selectedFilter = filter },
@@ -349,8 +356,9 @@ fun FleetVehicleCard(
     val (statusText, statusColor) = remember(vehicle.status) {
         when (vehicle.status) {
             "available" -> "Available" to Success
+            "on_hold" -> "On Hold" to Warning
             "in_transit" -> "In Transit" to Primary
-            "maintenance" -> "Maintenance" to Warning
+            "maintenance" -> "Maintenance" to Error
             else -> "Inactive" to TextDisabled
         }
     }

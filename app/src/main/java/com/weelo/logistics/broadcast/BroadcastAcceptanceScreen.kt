@@ -195,7 +195,7 @@ fun BroadcastAcceptanceScreen(
     broadcast: BroadcastTrip,
     isVisible: Boolean,
     onDismiss: () -> Unit,
-    onSuccess: () -> Unit
+    onSuccess: (assignmentId: String?) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -491,6 +491,7 @@ fun BroadcastAcceptanceScreen(
             val updatedSubmissionResults = submissionResults.toMutableMap()
             var successCount = 0
             var failedCount = 0
+            var firstAssignmentId: String? = null  // Track first successful assignmentId for navigation
 
             try {
                 if (hasHeldSelections) {
@@ -514,7 +515,7 @@ fun BroadcastAcceptanceScreen(
                     if (pendingHolds.isEmpty()) {
                         currentStep = AcceptanceStep.SUCCESS
                         kotlinx.coroutines.delay(1200)
-                        onSuccess()
+                        onSuccess(firstAssignmentId)
                         return@launch
                     }
 
@@ -560,6 +561,9 @@ fun BroadcastAcceptanceScreen(
                         ) {
                             is BroadcastAssignmentResult.Success -> {
                                 newlyConfirmed.add(hold.holdId)
+                                if (firstAssignmentId == null && result.assignmentIds.isNotEmpty()) {
+                                    firstAssignmentId = result.assignmentIds.first()
+                                }
                                 holdAssignments.forEach { (vehicleId, _) ->
                                     successCount++
                                     updatedSubmissionResults[vehicleId] = AssignmentSubmissionResult.Success
@@ -613,7 +617,7 @@ fun BroadcastAcceptanceScreen(
                 timber.log.Timber.i("✅ Successfully submitted $successCount assignment(s)")
                 currentStep = AcceptanceStep.SUCCESS
                 kotlinx.coroutines.delay(1500)
-                onSuccess()
+                onSuccess(firstAssignmentId)
             } else {
                 currentStep = AcceptanceStep.ASSIGN_DRIVERS
                 // FIX: Collect actual error messages from failed submissions

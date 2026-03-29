@@ -81,6 +81,9 @@ class BroadcastIncomingActivity : ComponentActivity() {
                 BroadcastOverlayScreen(
                     onAccept = { broadcast ->
                         timber.log.Timber.i("🎯 Broadcast accepted from incoming screen: ${broadcast.broadcastId}")
+                        // Store broadcast BEFORE finish() so MainActivity can open acceptance screen
+                        // even after BroadcastOverlayManager.clearAll() runs in onDestroy().
+                        BroadcastStateSync.setPendingAccept(broadcast)
                         BroadcastFullScreenNotifier.dismiss(this@BroadcastIncomingActivity)
                         // Open main app for the acceptance flow (truck + driver selection)
                         navigateToMainApp(broadcast.broadcastId)
@@ -109,16 +112,19 @@ class BroadcastIncomingActivity : ComponentActivity() {
     }
 
     /**
-     * Navigate to MainActivity with the accepted broadcast.
-     * Uses FLAG_ACTIVITY_CLEAR_TOP to bring existing task to front.
+     * Navigate to MainActivity for the acceptance flow (truck + driver selection).
+     *
+     * Uses a dedicated intent type "accept_broadcast" so MainActivity knows to open
+     * the BroadcastAcceptanceScreen directly — NOT re-show the overlay.
      */
     private fun navigateToMainApp(broadcastId: String) {
         val intent = Intent(this, com.weelo.logistics.MainActivity::class.java).apply {
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
             )
-            putExtra("notification_type", "new_broadcast")
+            putExtra("notification_type", "accept_broadcast")
             putExtra("broadcast_id", broadcastId)
         }
         startActivity(intent)

@@ -90,7 +90,7 @@ object BroadcastFullScreenNotifier {
             .setContentIntent(contentIntent)
             .setAutoCancel(true)
             .setOngoing(true)
-            .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
+            .setSound(android.net.Uri.parse("android.resource://${appContext.packageName}/${com.weelo.logistics.R.raw.broadcast_ringtone}"))
             .setVibrate(longArrayOf(0, 500, 200, 500, 200, 500))
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
