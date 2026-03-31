@@ -21,31 +21,22 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.weelo.logistics.ui.components.CardArtwork
-import com.weelo.logistics.ui.components.CardArtworkPlacement
-import com.weelo.logistics.ui.components.CardMediaSpec
 import com.weelo.logistics.ui.components.InlineInfoBannerCard
-import com.weelo.logistics.ui.components.MediaHeaderCard
 import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.ui.components.rememberScreenConfig
 import com.weelo.logistics.utils.InputValidator
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import com.weelo.logistics.utils.AuthOtpAutofillCoordinator
 import com.weelo.logistics.utils.AuthOtpAutofillCoordinator.OtpAutofillClearReason
 import com.weelo.logistics.R
 import kotlinx.coroutines.delay
@@ -106,7 +97,7 @@ fun OTPVerificationScreen(
     val isLoading = authState is AuthState.Loading
     val latestAuthState by rememberUpdatedState(authState)
     // Get real MainActivity via LocalView (LocalContext is locale-wrapped, can't cast directly)
-    val otpView = androidx.compose.ui.platform.LocalView.current
+    val otpView = LocalView.current
     val otpMainActivity = remember {
         var ctx: android.content.Context = otpView.context
         while (ctx is android.content.ContextWrapper) {
@@ -132,6 +123,7 @@ fun OTPVerificationScreen(
         )
     }
 
+    @Suppress("KotlinConstantConditions")
     LaunchedEffect(autoReadOtp, otpAutofillSessionId, isLoading) {
         val latestOtp = autoReadOtp?.takeIf { it.length == 6 }
         if (latestOtp != null) {

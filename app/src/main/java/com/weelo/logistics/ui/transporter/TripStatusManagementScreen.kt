@@ -217,7 +217,7 @@ fun TripStatusManagementScreen(
         }
     }
     
-    // Listen for driver timeout events (driver didn't respond in 60s)
+    // Listen for driver timeout events (driver didn't respond in time)
     LaunchedEffect(Unit) {
         SocketIOService.driverTimeout.collect { notification ->
             Timber.w("⏰ Driver timeout: ${notification.driverName} (${notification.vehicleNumber})")

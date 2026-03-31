@@ -74,6 +74,7 @@ fun DriverTripRequestOverlay(
     val context = LocalContext.current
     val density = LocalDensity.current
 
+    val totalSeconds = remember { notification.remainingSeconds }
     var remainingSeconds by remember { mutableStateOf(notification.remainingSeconds) }
     var swipeOffset by remember { mutableStateOf(0f) }
     var isAccepting by remember { mutableStateOf(false) }
@@ -153,6 +154,7 @@ fun DriverTripRequestOverlay(
         ) {
             SwipeableCard(
                 notification = notification,
+                totalSeconds = totalSeconds,
                 remainingSeconds = remainingSeconds,
                 swipeOffset = swipeOffset,
                 onSwipeChange = { newOffset -> if (!isProcessing) swipeOffset = newOffset },
@@ -175,6 +177,7 @@ fun DriverTripRequestOverlay(
 @Composable
 private fun SwipeableCard(
     notification: TripAssignedNotification,
+    totalSeconds: Int,
     remainingSeconds: Int,
     swipeOffset: Float,
     onSwipeChange: (Float) -> Unit,
@@ -244,7 +247,7 @@ private fun SwipeableCard(
                     .padding(20.dp)
                     .then(if (isProcessing) Modifier.alpha(0.3f) else Modifier)
             ) {
-                HeaderRow(remainingSeconds, countdownColor, scale)
+                HeaderRow(totalSeconds, remainingSeconds, countdownColor, scale)
 
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -313,6 +316,7 @@ private fun SwipeableCard(
  */
 @Composable
 private fun HeaderRow(
+    totalSeconds: Int,
     remainingSeconds: Int,
     countdownColor: Color,
     scale: Float
@@ -346,7 +350,7 @@ private fun HeaderRow(
                 },
             contentAlignment = Alignment.Center
         ) {
-            val progress = (remainingSeconds.toFloat() / 60f).coerceIn(0f, 1f)
+            val progress = (remainingSeconds.toFloat() / totalSeconds.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
             CircularProgressIndicator(
                 progress = progress,
                 modifier = Modifier.fillMaxSize(),

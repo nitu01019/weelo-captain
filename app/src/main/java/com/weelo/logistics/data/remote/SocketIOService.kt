@@ -106,7 +106,7 @@ object SocketIOService {
     // This flow delivers the notification to the UI for showing Accept/Decline screen.
     // replay = 0 prevents stale one-shot events from re-triggering UI flows.
     // ==========================================================================
-    private val _tripAssigned = MutableSharedFlow<TripAssignedNotification>(replay = 0, extraBufferCapacity = 10)
+    private val _tripAssigned = MutableSharedFlow<TripAssignedNotification>(replay = 1, extraBufferCapacity = 10)
     val tripAssigned: SharedFlow<TripAssignedNotification> = _tripAssigned.asSharedFlow()
     
     private val _driverTimeout = MutableSharedFlow<DriverTimeoutNotification>(replay = 0, extraBufferCapacity = 10)
@@ -1082,7 +1082,7 @@ object SocketIOService {
      * Handle driver_timeout event from backend
      * 
      * Called when a driver doesn't respond to a trip assignment within the
-     * timeout period (e.g., 60 seconds). Backend cancels the assignment
+     * ASSIGNMENT_TIMEOUT_MS window (default 30 seconds). Backend cancels the assignment
      * and notifies the transporter to reassign.
      * 
      * For TRANSPORTER view: Shows "Driver X didn't respond — [Reassign]" banner

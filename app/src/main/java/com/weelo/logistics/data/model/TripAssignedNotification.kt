@@ -31,7 +31,7 @@ data class TripAssignedNotification(
     val customerName: String,        // Customer name for display
     val customerPhone: String,       // Customer phone for calling
     val assignedAt: String,          // ISO timestamp of assignment
-    val expiresAt: String?,         // ISO timestamp when offer expires (60s from assignment)
+    val expiresAt: String?,         // ISO timestamp when offer expires (ASSIGNMENT_TIMEOUT_MS from assignment, default 30s)
     val routePoints: List<RoutePoint>?,  // Full route for multi-stop trips
     val message: String,             // Human-readable message
     val dismissedAt: Long? = null    // When driver dismissed (timestamp, null if not dismissed)
@@ -42,7 +42,7 @@ data class TripAssignedNotification(
      */
     val remainingSeconds: Int
         get() {
-            val expiryTime = expiresAt?.let { parseIso8601(it) } ?: return 60
+            val expiryTime = expiresAt?.let { parseIso8601(it) } ?: return 30
             val now = System.currentTimeMillis()
             val remaining = (expiryTime - now) / 1000
             return if (remaining > 0) remaining.toInt() else 0

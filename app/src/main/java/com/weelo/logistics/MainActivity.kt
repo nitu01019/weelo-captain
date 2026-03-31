@@ -239,8 +239,17 @@ class MainActivity : ComponentActivity() {
                             when (event) {
                                 is BroadcastOverlayManager.BroadcastEvent.Accepted -> {
                                     timber.log.Timber.i("✅ Broadcast accepted: ${event.broadcast.broadcastId}")
-                                    acceptedBroadcast = event.broadcast
-                                    showAcceptanceScreen = true
+                                    // Guard: The overlay's onAccept callback already set
+                                    // acceptedBroadcast WITH holdInfo notes. This event
+                                    // carries the ORIGINAL broadcast WITHOUT notes.
+                                    // Without this guard, it overwrites the correct data
+                                    // causing "Legacy assignment path disabled" error.
+                                    val alreadyHandled = showAcceptanceScreen &&
+                                        acceptedBroadcast?.broadcastId == event.broadcast.broadcastId
+                                    if (!alreadyHandled) {
+                                        acceptedBroadcast = event.broadcast
+                                        showAcceptanceScreen = true
+                                    }
                                 }
                                 is BroadcastOverlayManager.BroadcastEvent.Rejected -> {
                                     timber.log.Timber.i("❌ Broadcast rejected: ${event.broadcast.broadcastId}")

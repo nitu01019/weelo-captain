@@ -590,7 +590,11 @@ fun DriverAssignmentScreen(
     showDriverPicker?.let { vehicleId ->
         DriverPickerBottomSheet(
             drivers = fleetDrivers.filter { driver ->
-                !driverAssignments.values.contains(driver.id) // Don't show already assigned drivers
+                // Industry standard: show ONLY online + available drivers.
+                // Offline and on-trip drivers are hidden — not selectable at backend level anyway.
+                // The real-time driverStatusChanged listener (above) keeps this list fresh.
+                !driverAssignments.values.contains(driver.id) &&
+                driver.assignmentAvailability() == DriverAssignmentAvailability.ACTIVE
             },
             onDriverSelected = { driver ->
                 driverAssignments = driverAssignments + (vehicleId to driver.id)
@@ -811,7 +815,7 @@ fun DriverPickerBottomSheet(
                 Spacer(Modifier.height(8.dp))
                 
                 Text(
-                    "${drivers.size} drivers shown",
+                    "${drivers.size} available driver(s)",
                     style = MaterialTheme.typography.bodyMedium,
                     color = TextSecondary
                 )
@@ -868,6 +872,10 @@ fun DriverSelectCard(
 ) {
     val driverStatus = driver.assignmentAvailability()
     val isSelectable = driverStatus.isSelectableForAssignment()
+    // NOTE: This card's disabled/offline styling is a safety-net only.
+    // The picker filters to ACTIVE drivers before passing them here,
+    // so isSelectable should always be true in normal usage.
+    // Keeping the guard in case the filter is ever bypassed.
 
     Card(
         modifier = Modifier.fillMaxWidth(),

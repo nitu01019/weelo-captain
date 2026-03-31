@@ -35,7 +35,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val TAG = "TruckHoldConfirm"
-private const val HOLD_DURATION_SECONDS = 90
+// Fallback duration if server doesn't return expiresAt (should never happen)
+private const val HOLD_DURATION_FALLBACK_SECONDS = 180
 
 /**
  * =============================================================================
@@ -72,20 +73,23 @@ fun TruckHoldConfirmScreen(
     
     // State
     var holdId by remember { mutableStateOf<String?>(null) }
-    var remainingSeconds by remember { mutableStateOf(HOLD_DURATION_SECONDS) }
+    // Total seconds for progress ring calculation (set from server expiresAt)
+    var totalSeconds by remember { mutableStateOf(HOLD_DURATION_FALLBACK_SECONDS) }
+    var remainingSeconds by remember { mutableStateOf(HOLD_DURATION_FALLBACK_SECONDS) }
     var isLoading by remember { mutableStateOf(true) }
     var isConfirming by remember { mutableStateOf(false) }
     var isFinalizing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var holdSuccess by remember { mutableStateOf(false) }
     
-    // Circular progress for countdown
-    val progress = remainingSeconds.toFloat() / HOLD_DURATION_SECONDS
+    // Circular progress for countdown — scales to actual server duration
+    val progress = if (totalSeconds > 0) remainingSeconds.toFloat() / totalSeconds else 0f
     
-    // Color changes as time runs out
+    // Dynamic color thresholds — scale with server duration
+    // >20% green, >10% yellow, else red
     val timerColor = when {
-        remainingSeconds > 10 -> Success
-        remainingSeconds > 5 -> Warning
+        remainingSeconds > (totalSeconds * 0.20).toInt() -> Success
+        remainingSeconds > (totalSeconds * 0.10).toInt() -> Warning
         else -> Error
     }
     
@@ -107,6 +111,21 @@ fun TruckHoldConfirmScreen(
             
             if (response.isSuccessful && response.body()?.success == true) {
                 holdId = response.body()?.data?.holdId
+                // Use server-provided expiresAt for timer synchronization
+                val expiresAtStr = response.body()?.data?.expiresAt
+                if (expiresAtStr != null) {
+                    try {
+                        val expiresAtMs = java.time.Instant.parse(expiresAtStr).toEpochMilli()
+                        val nowMs = System.currentTimeMillis()
+                        val serverRemaining = ((expiresAtMs - nowMs) / 1000).toInt().coerceAtLeast(0)
+                        totalSeconds = serverRemaining
+                        remainingSeconds = serverRemaining
+                        timber.log.Timber.d("Timer synced from server expiresAt: ${serverRemaining}s")
+                    } catch (e: Exception) {
+                        timber.log.Timber.w(e, "Failed to parse expiresAt, using fallback")
+                        // Keep fallback values
+                    }
+                }
                 holdSuccess = true
                 timber.log.Timber.d("Hold success: $holdId")
             } else {
