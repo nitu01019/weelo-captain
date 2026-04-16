@@ -18,7 +18,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.LinkedHashMap
 import kotlin.math.abs
 
 /**
@@ -33,7 +32,12 @@ object BroadcastOverlayManager {
     private const val MAX_STARTUP_BUFFER_SIZE = 50
     private const val STARTUP_BUFFER_TTL_MS = 90_000L
     private const val DEFAULT_BROADCAST_TIMEOUT_MS = 60_000L
-    private const val DEDUPE_LRU_SIZE = 2_000
+    // F-C-02: Dedup now delegated to BroadcastFlowCoordinator (single LRU+TTL).
+    // The inner seenBroadcastIds LinkedHashMap (2k entries, no TTL) was removed
+    // to eliminate drift vs. BroadcastDedup (500 FIFO) and BroadcastFlowCoordinator
+    // (10k LRU). All four dedup entry points now funnel into one store.
+    private const val OVERLAY_EVENT_CLASS = "overlay"
+    private const val OVERLAY_PAYLOAD_VERSION = 1
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val mutex = Mutex()
@@ -43,13 +47,6 @@ object BroadcastOverlayManager {
 
     private val broadcastQueue = mutableListOf<QueuedBroadcast>()
     private val startupBufferQueue = ArrayDeque<BufferedBroadcast>()
-
-    private val dedupeLock = Any()
-    private val seenBroadcastIds = object : LinkedHashMap<String, Long>(DEDUPE_LRU_SIZE, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean {
-            return size > DEDUPE_LRU_SIZE
-        }
-    }
 
     private val _currentBroadcast = MutableStateFlow<BroadcastTrip?>(null)
     val currentBroadcast: StateFlow<BroadcastTrip?> = _currentBroadcast.asStateFlow()
@@ -296,9 +293,8 @@ object BroadcastOverlayManager {
                 _queueSize.value = 0
                 _currentIndex.value = 0
                 _totalBroadcastCount.value = 0
-                synchronized(dedupeLock) {
-                    seenBroadcastIds.clear()
-                }
+                // F-C-02: dedup state is coordinator-owned; clear via delegate.
+                BroadcastFlowCoordinator.dedupeIdsClear()
                 timber.log.Timber.i("🗑️ All broadcasts cleared")
             }
         }
@@ -440,18 +436,19 @@ object BroadcastOverlayManager {
         return AvailabilityManager.getInstance(context).availabilityState.value
     }
 
+    private fun overlayDedupKey(broadcastId: String): String =
+        normalizeDedupKey(OVERLAY_EVENT_CLASS, broadcastId, OVERLAY_PAYLOAD_VERSION)
+
     private fun registerBroadcastIdIfNew(broadcastId: String): Boolean {
-        synchronized(dedupeLock) {
-            if (seenBroadcastIds.containsKey(broadcastId)) return false
-            seenBroadcastIds[broadcastId] = System.currentTimeMillis()
-            return true
-        }
+        if (broadcastId.isBlank()) return false
+        // F-C-02: delegate to coordinator-owned LRU+TTL. Preserves "first-arrival
+        // wins" semantics and still allows rollback via unregisterBroadcastId.
+        return BroadcastFlowCoordinator.dedupeIdsIsNew(overlayDedupKey(broadcastId))
     }
 
     private fun unregisterBroadcastId(broadcastId: String) {
-        synchronized(dedupeLock) {
-            seenBroadcastIds.remove(broadcastId)
-        }
+        if (broadcastId.isBlank()) return
+        BroadcastFlowCoordinator.dedupeIdsRemove(overlayDedupKey(broadcastId))
     }
 
     private fun createQueuedBroadcast(broadcast: BroadcastTrip, receivedAtMs: Long = System.currentTimeMillis()): QueuedBroadcast {

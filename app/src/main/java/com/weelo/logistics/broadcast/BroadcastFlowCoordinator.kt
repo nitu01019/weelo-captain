@@ -115,6 +115,7 @@ sealed interface BroadcastCoordinatorEvent {
  */
 object BroadcastFlowCoordinator {
     private const val DEDUPE_LRU_SIZE = 10_000
+    private const val DEDUPE_TTL_MS = 10L * 60L * 1000L // 10 minutes (industry-standard dedup window)
     private const val PENDING_QUEUE_MAX = 50
     private const val STARTUP_BUFFER_TTL_MS = 90_000L
     private const val MAX_RENDERABLE_BROADCASTS = 250
@@ -136,7 +137,7 @@ object BroadcastFlowCoordinator {
 
     private val started = AtomicBoolean(false)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val dedupeIds = LruIdSet(DEDUPE_LRU_SIZE)
+    private val dedupeIds = LruIdSet(DEDUPE_LRU_SIZE, DEDUPE_TTL_MS)
     private val pendingQueue = PendingBroadcastQueue(
         maxSize = PENDING_QUEUE_MAX,
         ttlMs = STARTUP_BUFFER_TTL_MS
@@ -1258,6 +1259,35 @@ object BroadcastFlowCoordinator {
         val semanticVersion = envelope.payloadVersion?.takeIf { it.isNotBlank() } ?: "v0"
         return "${eventClass.name}|$normalizedId|$semanticVersion"
     }
+
+    /**
+     * Public cross-channel dedup entry point used by thin delegates
+     * (`BroadcastDedup`, `BroadcastOverlayManager`) so that every ingestion
+     * surface funnels into the same coordinator-owned LRU+TTL store.
+     *
+     * Returns `true` when [compoundKey] has NOT been seen inside the TTL
+     * window (first arrival), `false` when it is a duplicate and should be
+     * dropped.
+     *
+     * Callers SHOULD pass a compound key built with [normalizeDedupKey]:
+     *   eventClass|broadcastId|payloadVersion
+     */
+    fun dedupeIdsIsNew(compoundKey: String): Boolean = dedupeIds.add(compoundKey)
+
+    /**
+     * Explicit rollback — used when a caller (e.g. [BroadcastOverlayManager])
+     * provisionally marked a key as seen but later decided to drop the event
+     * (offline transition, buffer eviction, etc.) and wants a later retry to
+     * be treated as new.
+     */
+    fun dedupeIdsRemove(compoundKey: String) = dedupeIds.remove(compoundKey)
+
+    /**
+     * Clear the entire cross-channel dedup store. Used on logout and from
+     * [stop] — exposed so thin delegates can route their `clear()` to the
+     * single source of truth.
+     */
+    fun dedupeIdsClear() = dedupeIds.clear()
 
     private fun markSeenInRecoveryStore(broadcastId: String) {
         val context = appContext ?: return

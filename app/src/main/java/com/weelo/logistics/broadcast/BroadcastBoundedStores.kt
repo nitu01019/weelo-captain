@@ -4,23 +4,48 @@ import com.weelo.logistics.data.model.BroadcastStatus
 import com.weelo.logistics.data.model.BroadcastTrip
 import java.util.LinkedHashMap
 
+/**
+ * Bounded LRU id set with optional TTL. Used as the single coordinator-owned
+ * cross-channel dedup store (Socket.IO + FCM + overlay + notification-open).
+ *
+ * Industry pattern: "Assign a deduplication key to each notification before it
+ * enters the delivery pipeline. Encode what the notification is about (event
+ * type + entity id + payload version), store with a TTL, skip if seen."
+ * (Sohil Ladhani, Apr 2026 — notification deduplication)
+ *
+ * When [ttlMs] > 0, entries older than `ttlMs` are treated as absent — a
+ * repeat arrival after the TTL window is considered "new" again.
+ *
+ * Thread-safe via `synchronized(lock)`. [nowProvider] is injectable for test
+ * determinism; production callers use the default wall clock.
+ */
 class LruIdSet(
-    private val maxSize: Int
+    private val maxSize: Int,
+    private val ttlMs: Long = 0L,
+    private val nowProvider: () -> Long = { System.currentTimeMillis() }
 ) {
     private val lock = Any()
-    private val storage = object : LinkedHashMap<String, Unit>(maxSize, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>?): Boolean {
+    private val storage = object : LinkedHashMap<String, Long>(maxSize, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean {
             return size > maxSize
         }
     }
 
+    /**
+     * Returns true if [id] was NOT seen before (or its TTL has expired),
+     * false if it is a duplicate inside the TTL window.
+     *
+     * Calling this method always upserts the entry with the current timestamp.
+     */
     fun add(id: String): Boolean {
         val normalized = id.trim()
         if (normalized.isEmpty()) return false
+        val now = nowProvider()
         synchronized(lock) {
-            val wasNew = !storage.containsKey(normalized)
-            storage[normalized] = Unit
-            return wasNew
+            val previousTs = storage[normalized]
+            val isFresh = previousTs != null && (ttlMs <= 0L || (now - previousTs) < ttlMs)
+            storage[normalized] = now
+            return !isFresh
         }
     }
 
@@ -35,6 +60,21 @@ class LruIdSet(
             storage.clear()
         }
     }
+
+    /** Test-only. Returns current stored size (inclusive of stale-but-not-evicted entries). */
+    internal fun size(): Int = synchronized(lock) { storage.size }
+}
+
+/**
+ * Canonical compound dedup key — `eventClass|broadcastId|payloadVersion`.
+ *
+ * Industry pattern (FCM collapse_key / APNs apns-collapse-id): the dedup key
+ * must encode event class + entity id + version so that different event
+ * classes sharing the same id do not collide, and stale re-sends with a
+ * bumped payload version are treated as new.
+ */
+fun normalizeDedupKey(eventClass: String, broadcastId: String, payloadVersion: Int): String {
+    return "$eventClass|${broadcastId.trim()}|$payloadVersion"
 }
 
 data class PendingBroadcast(
