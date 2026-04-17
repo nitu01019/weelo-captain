@@ -1256,8 +1256,10 @@ object BroadcastFlowCoordinator {
         envelope: BroadcastIngressEnvelope,
         normalizedId: String
     ): String {
-        val semanticVersion = envelope.payloadVersion?.takeIf { it.isNotBlank() } ?: "v0"
-        return "${eventClass.name}|$normalizedId|$semanticVersion"
+        // W1-2 / F-C-02 — delegate to BroadcastDedupKey.build so the unified
+        // key format is defined in exactly one place. Output string is
+        // byte-identical to the previous inline format.
+        return BroadcastDedupKey.build(eventClass, normalizedId, envelope.payloadVersion)
     }
 
     /**

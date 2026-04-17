@@ -1,6 +1,7 @@
 package com.weelo.logistics.data.remote.socket
 
-import com.weelo.logistics.broadcast.BroadcastDedup
+import com.weelo.logistics.broadcast.BroadcastDedupKey
+import com.weelo.logistics.broadcast.BroadcastEventClass
 import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
 import com.weelo.logistics.broadcast.BroadcastFlowCoordinator
 import com.weelo.logistics.broadcast.BroadcastIngressEnvelope
@@ -225,12 +226,23 @@ class SocketEventRouter(
             attrs = mapOf("event" to rawEventName, "eventName" to rawEventName, "ingressSource" to "socket", "role" to (userRole ?: "unknown"))
         )
 
-        // Dedup — unified BroadcastDedup layer (cross-channel: Socket.IO + FCM)
+        // Dedup — unified BroadcastDedupKey layer (cross-channel: Socket.IO + FCM).
+        // W1-2 / F-C-02 — funnel through BroadcastDedupKey.admit so socket and FCM
+        // share the same pre-ingress namespace + 1-release legacy dual-probe.
+        val dedupPayload = try { args.firstOrNull() as? JSONObject } catch (_: Exception) { null }
         val dedupBroadcastId = try {
-            (args.firstOrNull() as? JSONObject)?.optString("broadcastId", "")?.takeIf { it.isNotBlank() }
+            dedupPayload?.optString("broadcastId", "")?.takeIf { it.isNotBlank() }
         } catch (_: Exception) { null }
         if (dedupBroadcastId != null) {
-            if (!BroadcastDedup.isNew(dedupBroadcastId)) {
+            val dedupPayloadVersion = try {
+                dedupPayload?.optString("payloadVersion", "")?.takeIf { it.isNotBlank() }
+            } catch (_: Exception) { null }
+            val admitted = BroadcastDedupKey.admit(
+                eventClass = BroadcastEventClass.NEW_BROADCAST,
+                id = dedupBroadcastId,
+                version = dedupPayloadVersion
+            )
+            if (!admitted) {
                 timber.log.Timber.d("\uD83D\uDD01 Dedup: skipping already-seen broadcast %s (cross-channel)", dedupBroadcastId)
                 BroadcastTelemetry.record(
                     stage = BroadcastStage.BROADCAST_GATED, status = BroadcastStatus.DROPPED,
