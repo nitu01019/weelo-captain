@@ -31,8 +31,6 @@ import com.weelo.logistics.ui.components.ProvideShimmerBrush
 import com.weelo.logistics.ui.components.SectionSkeletonBlock
 import com.weelo.logistics.ui.components.SkeletonBox
 import com.weelo.logistics.ui.theme.*
-import com.weelo.logistics.ui.viewmodel.TruckHoldConfirmViewModel
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -80,7 +78,10 @@ fun VehicleHoldConfirmScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val holdViewModel: TruckHoldConfirmViewModel = viewModel()
+    // F-C-76 / W1-1: the dead hold-confirm ViewModel that used to be
+    // instantiated here was deleted — the screen owns all hold state inline
+    // via ServerDeadlineTimer + direct retrofit calls (F-C-27). See
+    // VehicleHoldConfirmDeadVmGuardTest for the regression guard.
 
     // State
     var holdId by remember { mutableStateOf<String?>(null) }
