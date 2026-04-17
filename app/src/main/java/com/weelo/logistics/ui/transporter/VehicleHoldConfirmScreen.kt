@@ -93,6 +93,12 @@ fun VehicleHoldConfirmScreen(
     var isFinalizing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var holdSuccess by remember { mutableStateOf(false) }
+    // F-C-26: Extend +30s state — BookMyShow seat-lock extension pattern.
+    // Backend ships POST /truck-hold/flex-hold/extend (+30s, max 130s) and
+    // emits flex_hold_extended on success. extensionsUsed is incremented
+    // locally to enforce the client-side cap mirroring the backend (3 extends).
+    var isExtending by remember { mutableStateOf(false) }
+    var extensionsUsed by remember { mutableStateOf(0) }
     
     // Circular progress for countdown — scales to actual server duration
     val progress = if (totalSeconds > 0) remainingSeconds.toFloat() / totalSeconds else 0f
@@ -227,6 +233,64 @@ fun VehicleHoldConfirmScreen(
         }
     }
     
+    // F-C-26: Extend hold (+30s). Wires the existing TruckHoldApiService.extendFlexHold
+    // endpoint (previously shipped with ZERO callers). BookMyShow seat-lock
+    // extension pattern + Uber server-authoritative deadline refresh.
+    fun extendHold() {
+        if (holdId == null || isExtending || isConfirming || isFinalizing || remainingSeconds <= 0) return
+
+        scope.launch {
+            isExtending = true
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.truckHoldApi.extendFlexHold(
+                        com.weelo.logistics.data.api.ExtendFlexHoldRequest(holdId!!)
+                    )
+                }
+                if (response.isSuccessful && response.body()?.success == true) {
+                    val data = response.body()?.data
+                    val newExpiresAt = data?.expiresAt
+                    if (newExpiresAt != null) {
+                        try {
+                            val expiresAtMs = java.time.Instant.parse(newExpiresAt).toEpochMilli()
+                            val nowMs = System.currentTimeMillis()
+                            val nowElapsed = SystemClock.elapsedRealtime()
+                            deadlineElapsedMs = ServerDeadlineTimer.deadlineElapsedFromServerExpiry(
+                                expiresAtWallMs = expiresAtMs,
+                                nowWallMs = nowMs,
+                                nowElapsedMs = nowElapsed
+                            )
+                            val newRemaining = ServerDeadlineTimer.remainingSecondsFromDeadline(
+                                deadlineElapsedMs = deadlineElapsedMs,
+                                nowElapsedMs = nowElapsed
+                            )
+                            // Grow totalSeconds so the ring scales to the extended window,
+                            // not the original 90s — keeps the UI consistent.
+                            if (newRemaining > totalSeconds) totalSeconds = newRemaining
+                            remainingSeconds = newRemaining
+                            extensionsUsed += 1
+                            timber.log.Timber.i("✅ Hold extended: +30s, new remaining=${newRemaining}s")
+                        } catch (e: Exception) {
+                            timber.log.Timber.w(e, "Extend succeeded but expiresAt parse failed")
+                        }
+                    }
+                    Toast.makeText(context, "+30s extended", Toast.LENGTH_SHORT).show()
+                } else {
+                    val apiCode = response.body()?.error?.code
+                    val msg = response.body()?.error?.message ?: response.body()?.message
+                        ?: "Cannot extend further"
+                    timber.log.Timber.w("Extend failed: code=$apiCode msg=$msg")
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                timber.log.Timber.e(e, "Extend exception")
+                Toast.makeText(context, e.localizedMessage ?: "Network error", Toast.LENGTH_SHORT).show()
+            } finally {
+                isExtending = false
+            }
+        }
+    }
+
     // Cancel/release function
     fun cancelHold() {
         if (isFinalizing) return
@@ -444,7 +508,31 @@ fun VehicleHoldConfirmScreen(
                                 ) {
                                     Text("CANCEL")
                                 }
-                                
+
+                                // F-C-26: Extend +30s button (BookMyShow seat-lock extension).
+                                // Visible only when time is running low (<30s remaining) so the
+                                // transporter has a recovery lane before the server expires the
+                                // hold. Disabled while confirming/finalizing/extending.
+                                if (remainingSeconds in 1..29) {
+                                    OutlinedButton(
+                                        onClick = { extendHold() },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(12.dp),
+                                        enabled = !isConfirming && !isFinalizing && !isExtending
+                                    ) {
+                                        if (isExtending) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(20.dp),
+                                                strokeWidth = 2.dp
+                                            )
+                                        } else {
+                                            Icon(Icons.Default.Timer, null)
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("+30s", fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+
                                 // Confirm Button
                                 // F-C-27: BookMyShow grace-buffer — disable when <=2s left
                                 // so the client NEVER confirms after the server budget has elapsed.
