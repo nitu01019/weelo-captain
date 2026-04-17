@@ -1,5 +1,6 @@
 package com.weelo.logistics.ui.transporter
 
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -32,8 +33,12 @@ import com.weelo.logistics.data.repository.DriverResult
 import com.weelo.logistics.data.repository.VehicleRepository
 import com.weelo.logistics.data.repository.VehicleResult
 import com.weelo.logistics.data.remote.SocketIOService
+import com.weelo.logistics.ui.ServerDeadlineTimer
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.ui.viewmodel.DriverAssignmentViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 
 private fun DriverAssignmentAvailability.chipStatus(): ChipStatus {
@@ -75,7 +80,8 @@ fun DriverAssignmentScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    
+    val assignmentViewModel: DriverAssignmentViewModel = viewModel()
+
     // Real repositories connected to backend
     val broadcastRepository = remember { BroadcastRepository.getInstance(context) }
     val assignmentCoordinator = remember { BroadcastAssignmentCoordinator(broadcastRepository) }
@@ -95,7 +101,7 @@ fun DriverAssignmentScreen(
     val resolvedHoldId = remember(holdId) { holdId.trim().takeUnless { it.isBlank() } }
 
     // ── Hold expiry countdown (Phase 2 timer) ──
-    // Backend hold is 180s total. Phase 1 (TruckHoldConfirmScreen) used some of that.
+    // Backend hold is 180s total. Phase 1 (VehicleHoldConfirmScreen) used some of that.
     // Here we show remaining time so transporter knows how long they have to assign drivers.
     var holdRemainingSeconds by remember { mutableStateOf(-1) } // -1 = not loaded yet
     var holdExpired by remember { mutableStateOf(false) }
@@ -116,14 +122,26 @@ fun DriverAssignmentScreen(
                     java.time.Instant.parse(expiresAtStr).toEpochMilli()
                 } catch (_: Exception) { 0L }
                 if (expiresAtMs > 0) {
-                    var remaining = ((expiresAtMs - System.currentTimeMillis()) / 1000).toInt().coerceAtLeast(0)
-                    holdRemainingSeconds = remaining
-                    while (remaining > 0 && !isSubmitting) {
-                        kotlinx.coroutines.delay(1000)
-                        remaining--
-                        holdRemainingSeconds = remaining
+                    // F-C-27: pin a monotonic deadline and recompute every tick.
+                    // Doze-safe because SystemClock.elapsedRealtime keeps ticking in sleep
+                    // and isn't affected by wall-clock jumps.
+                    val deadlineElapsedMs = ServerDeadlineTimer.deadlineElapsedFromServerExpiry(
+                        expiresAtWallMs = expiresAtMs,
+                        nowWallMs = System.currentTimeMillis(),
+                        nowElapsedMs = SystemClock.elapsedRealtime()
+                    )
+                    holdRemainingSeconds = ServerDeadlineTimer.remainingSecondsFromDeadline(
+                        deadlineElapsedMs = deadlineElapsedMs,
+                        nowElapsedMs = SystemClock.elapsedRealtime()
+                    )
+                    while (holdRemainingSeconds > 0 && !isSubmitting) {
+                        kotlinx.coroutines.delay(500)
+                        holdRemainingSeconds = ServerDeadlineTimer.remainingSecondsFromDeadline(
+                            deadlineElapsedMs = deadlineElapsedMs,
+                            nowElapsedMs = SystemClock.elapsedRealtime()
+                        )
                     }
-                    if (remaining <= 0 && !isSubmitting) {
+                    if (holdRemainingSeconds <= 0 && !isSubmitting) {
                         holdExpired = true
                     }
                 }
@@ -607,367 +625,6 @@ fun DriverAssignmentScreen(
 
 }
 
-/**
- * VEHICLE DRIVER ASSIGNMENT CARD
- * Shows truck with assigned driver or assignment button
- */
-@Composable
-fun VehicleDriverAssignmentCard(
-    vehicle: Vehicle,
-    assignedDriver: Driver?,
-    onAssignDriver: () -> Unit,
-    onRemoveDriver: () -> Unit,
-    index: Int
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (assignedDriver != null)
-                    Modifier.border(2.dp, Success, RoundedCornerShape(12.dp))
-                else Modifier
-            ),
-        colors = CardDefaults.cardColors(
-            containerColor = if (assignedDriver != null) Success.copy(alpha = 0.05f) else White
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
-            // Truck Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Number Badge
-                Surface(
-                    shape = CircleShape,
-                    color = Primary
-                ) {
-                    Text(
-                        "$index",
-                        modifier = Modifier.padding(8.dp),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = White
-                    )
-                }
-                
-                Spacer(Modifier.width(12.dp))
-                
-                Icon(
-                    Icons.Default.LocalShipping,
-                    null,
-                    modifier = Modifier.size(32.dp),
-                    tint = Primary
-                )
-                
-                Spacer(Modifier.width(12.dp))
-                
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        vehicle.vehicleNumber,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        vehicle.displayName,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-                }
-                
-                // Status Badge
-                if (assignedDriver != null) {
-                    Icon(
-                        Icons.Default.CheckCircle,
-                        null,
-                        tint = Success,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-            }
-            
-            Spacer(Modifier.height(16.dp))
-            Divider()
-            Spacer(Modifier.height(16.dp))
-            
-            // Assigned Driver or Assignment Button
-            if (assignedDriver != null) {
-                val assignedStatus = assignedDriver.assignmentAvailability()
-                val assignedStatusColor = when (assignedStatus) {
-                    DriverAssignmentAvailability.ACTIVE -> Success
-                    DriverAssignmentAvailability.OFFLINE -> TextSecondary
-                    DriverAssignmentAvailability.ON_TRIP -> Warning
-                }
 
-                // Show assigned driver
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Driver Avatar
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(assignedStatusColor.copy(alpha = 0.2f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Person,
-                            null,
-                            tint = assignedStatusColor,
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
-                    
-                    Spacer(Modifier.width(12.dp))
-                    
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            assignedDriver.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        StatusChip(
-                            text = assignedStatus.displayName(),
-                            status = assignedStatus.chipStatus(),
-                            size = ChipSize.SMALL
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Star,
-                                null,
-                                modifier = Modifier.size(14.dp),
-                                tint = Warning
-                            )
-                            Text(
-                                " ${assignedDriver.rating} • ${assignedDriver.totalTrips} trips",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextSecondary
-                            )
-                        }
-                    }
-                    
-                    IconButton(onClick = onRemoveDriver) {
-                        Icon(Icons.Default.Close, "Remove", tint = Error)
-                    }
-                }
-            } else {
-                // Assign Driver Button
-                OutlinedButton(
-                    onClick = onAssignDriver,
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Primary
-                    ),
-                    border = ButtonDefaults.outlinedButtonBorder.copy(width = 2.dp)
-                ) {
-                    Icon(Icons.Default.PersonAdd, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "Assign Driver",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * DRIVER PICKER BOTTOM SHEET
- * Modal to select driver from available list
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun DriverPickerBottomSheet(
-    drivers: List<Driver>,
-    onDriverSelected: (Driver) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var showSheet by remember { mutableStateOf(true) }
-    
-    if (showSheet) {
-        ModalBottomSheet(
-            onDismissRequest = {
-                showSheet = false
-                onDismiss()
-            },
-            containerColor = White
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Text(
-                    "Select Driver",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold
-                )
-                
-                Spacer(Modifier.height(8.dp))
-                
-                Text(
-                    "${drivers.size} available driver(s)",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary
-                )
-                
-                Spacer(Modifier.height(16.dp))
-                
-                if (drivers.isEmpty()) {
-                    IllustratedEmptyState(
-                        illustrationRes = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.drawableRes,
-                        title = stringResource(R.string.empty_title_no_assignment_drivers),
-                        subtitle = stringResource(R.string.empty_subtitle_no_assignment_drivers),
-                        maxIllustrationWidthDp = EmptyStateLayoutStyle.MODAL_COMPACT.maxIllustrationWidthDp,
-                        maxTextWidthDp = EmptyStateLayoutStyle.MODAL_COMPACT.maxTextWidthDp,
-                        showFramedIllustration = EmptyStateLayoutStyle.MODAL_COMPACT.showFramedIllustration,
-                        sectionBackgroundColor = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.blendPalette().sectionBackground,
-                        sectionBlendMode = SectionBlendMode.PANEL,
-                        paletteHaloOverride = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.blendPalette().haloColor,
-                        paletteHaloAlphaOverride = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.blendPalette().haloAlpha
-                    )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // OPTIMIZATION: Add keys to prevent unnecessary recompositions
-                        items(
-                            items = drivers,
-                            key = { it.id }
-                        ) { driver ->
-                            DriverSelectCard(
-                                driver = driver,
-                                onClick = {
-                                    onDriverSelected(driver)
-                                    showSheet = false
-                                }
-                            )
-                        }
-                    }
-                }
-                
-                Spacer(Modifier.height(32.dp))
-            }
-        }
-    }
-}
-
-/**
- * DRIVER SELECT CARD - Driver option in bottom sheet
- */
-@Composable
-fun DriverSelectCard(
-    driver: Driver,
-    onClick: () -> Unit
-) {
-    val driverStatus = driver.assignmentAvailability()
-    val isSelectable = driverStatus.isSelectableForAssignment()
-    // NOTE: This card's disabled/offline styling is a safety-net only.
-    // The picker filters to ACTIVE drivers before passing them here,
-    // so isSelectable should always be true in normal usage.
-    // Keeping the guard in case the filter is ever bypassed.
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        onClick = { if (isSelectable) onClick() },
-        enabled = isSelectable,
-        colors = CardDefaults.cardColors(
-            if (isSelectable) White else SurfaceVariant
-        ),
-        elevation = CardDefaults.cardElevation(2.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Avatar
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(CircleShape)
-                    .background(
-                        when (driverStatus) {
-                            DriverAssignmentAvailability.ACTIVE -> Success.copy(alpha = 0.12f)
-                            DriverAssignmentAvailability.OFFLINE -> TextSecondary.copy(alpha = 0.12f)
-                            DriverAssignmentAvailability.ON_TRIP -> Warning.copy(alpha = 0.12f)
-                        }
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Default.Person,
-                    null,
-                    tint = when (driverStatus) {
-                        DriverAssignmentAvailability.ACTIVE -> Success
-                        DriverAssignmentAvailability.OFFLINE -> TextSecondary
-                        DriverAssignmentAvailability.ON_TRIP -> Warning
-                    },
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-            
-            Spacer(Modifier.width(16.dp))
-            
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    driver.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isSelectable) TextPrimary else TextSecondary
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    driver.mobileNumber,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Star, null, modifier = Modifier.size(16.dp), tint = Warning)
-                    Text(
-                        " ${driver.rating} • ${driver.totalTrips} trips",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-                StatusChip(
-                    text = driverStatus.displayName(),
-                    status = driverStatus.chipStatus(),
-                    size = ChipSize.SMALL
-                )
-                if (!isSelectable) {
-                    val blockedReason = when (driverStatus) {
-                        DriverAssignmentAvailability.ON_TRIP -> "On trip, cannot assign right now"
-                        DriverAssignmentAvailability.OFFLINE -> "Offline, cannot assign right now"
-                        DriverAssignmentAvailability.ACTIVE -> "Unavailable for assignment"
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        blockedReason,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Warning
-                    )
-                }
-            }
-            
-            Icon(
-                if (isSelectable) Icons.Default.ArrowForward else Icons.Default.Block,
-                null,
-                tint = if (isSelectable) Primary else Warning
-            )
-        }
-    }
-}
+// VehicleDriverAssignmentCard, DriverPickerBottomSheet, DriverSelectCard
+// extracted to DriverAssignmentParts.kt for 800-line compliance.
