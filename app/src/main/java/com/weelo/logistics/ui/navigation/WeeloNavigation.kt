@@ -282,7 +282,10 @@ fun WeeloNavigation(
                             assignedAt = assignedAt,
                             expiresAt = fcmNotification.data["expiresAt"],
                             routePoints = null,
-                            message = fcmNotification.body
+                            message = fcmNotification.body,
+                            // F-C-77: propagate server-provided DRIVER_ACCEPT_TIMEOUT_SECONDS
+                            // from FCM payload so fallback matches server truth (45s).
+                            driverAcceptTimeoutSeconds = fcmNotification.data["driverAcceptTimeoutSeconds"]?.toIntOrNull()
                         )
                         DriverTripRequestManager.addRequest(tripAssigned)
                     }

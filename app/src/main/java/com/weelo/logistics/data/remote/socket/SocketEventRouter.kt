@@ -712,6 +712,11 @@ class SocketEventRouter(
                 }
             }
             val expiresAt = data.optString("expiresAt", "").takeIf { it.isNotEmpty() }
+            // F-C-77: thread server-provided driverAcceptTimeoutSeconds so the
+            // DTO fallback uses server truth rather than a stale hardcode.
+            val driverAcceptTimeoutSeconds = if (data.has("driverAcceptTimeoutSeconds") && !data.isNull("driverAcceptTimeoutSeconds")) {
+                data.optInt("driverAcceptTimeoutSeconds").takeIf { it > 0 }
+            } else null
             val notification = TripAssignedNotification(
                 assignmentId = data.optString("assignmentId", ""),
                 tripId = data.optString("tripId", ""),
@@ -726,7 +731,8 @@ class SocketEventRouter(
                 assignedAt = data.optString("assignedAt", ""),
                 expiresAt = expiresAt,
                 routePoints = routePoints.ifEmpty { null },
-                message = data.optString("message", "New trip assigned!")
+                message = data.optString("message", "New trip assigned!"),
+                driverAcceptTimeoutSeconds = driverAcceptTimeoutSeconds
             )
             serviceScope.launch { _tripAssigned.emit(notification) }
             timber.log.Timber.i("\u2705 Trip assignment emitted to flow: ${notification.assignmentId}")

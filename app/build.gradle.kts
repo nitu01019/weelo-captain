@@ -38,6 +38,11 @@ android {
             ?: ""
         manifestPlaceholders += mapOf("MAPS_API_KEY" to mapsApiKey)
         buildConfigField("String", "MAPS_API_KEY", "\"$mapsApiKey\"")
+
+        // F-C-77: backend-sourced DRIVER_ACCEPT_TIMEOUT_SECONDS. Must match
+        // backend env var DRIVER_ACCEPT_TIMEOUT_SECONDS (currently 45s). Sourced
+        // at build time so the Kotlin fallback never drifts from server config.
+        buildConfigField("int", "DRIVER_ACCEPT_TIMEOUT_SECONDS", "45")
     }
 
     buildTypes {
@@ -227,6 +232,8 @@ dependencies {
     
     // Testing
     testImplementation("junit:junit:4.13.2")
+    testImplementation("io.mockk:mockk:1.13.8")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     androidTestImplementation(platform("androidx.compose:compose-bom:2023.10.01"))
