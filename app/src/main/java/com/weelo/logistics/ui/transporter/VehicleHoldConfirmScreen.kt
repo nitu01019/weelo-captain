@@ -40,8 +40,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val TAG = "VehicleHoldConfirm"
-// Fallback duration if server doesn't return expiresAt (should never happen)
-private const val HOLD_DURATION_FALLBACK_SECONDS = 180
+// F-C-76: HOLD_DURATION_FALLBACK_SECONDS removed. Pattern: server-authoritative
+// deadline — the client never fabricates a hold duration. If the server does
+// not return a parseable `expiresAt`, we fail-closed (show error + release
+// hold) rather than guessing a window that may be twice the server budget.
+// BookMyShow invariant: the client must NEVER time out after the server.
 
 /**
  * =============================================================================
@@ -81,9 +84,11 @@ fun VehicleHoldConfirmScreen(
 
     // State
     var holdId by remember { mutableStateOf<String?>(null) }
-    // Total seconds for progress ring calculation (set from server expiresAt)
-    var totalSeconds by remember { mutableStateOf(HOLD_DURATION_FALLBACK_SECONDS) }
-    var remainingSeconds by remember { mutableStateOf(HOLD_DURATION_FALLBACK_SECONDS) }
+    // F-C-76: initialize to 0 — the server is the sole source of truth for the
+    // hold duration. If the server response does not parse we fail-closed via
+    // errorMessage below, never by showing a fabricated window.
+    var totalSeconds by remember { mutableStateOf(0) }
+    var remainingSeconds by remember { mutableStateOf(0) }
     // F-C-27: monotonic elapsed-realtime deadline; -1 = not synced to server yet.
     // Recomputing `remainingSeconds` from this on every tick keeps the timer
     // correct across doze/sleep and wall-clock jumps (Uber + Android guidance).
@@ -131,6 +136,11 @@ fun VehicleHoldConfirmScreen(
                 holdId = response.body()?.data?.holdId
                 // Use server-provided expiresAt for timer synchronization
                 val expiresAtStr = response.body()?.data?.expiresAt
+                // F-C-76: fail-closed on missing/malformed expiresAt. The old
+                // path silently kept the 180s fallback, which was DOUBLE the
+                // actual server budget (90s FLEX) — guaranteeing the client
+                // would confirm after server expiry (Uber/BookMyShow anti-pattern).
+                var syncOk = false
                 if (expiresAtStr != null) {
                     try {
                         val expiresAtMs = java.time.Instant.parse(expiresAtStr).toEpochMilli()
@@ -146,16 +156,44 @@ fun VehicleHoldConfirmScreen(
                             deadlineElapsedMs = deadlineElapsedMs,
                             nowElapsedMs = nowElapsed
                         )
-                        totalSeconds = serverRemaining
-                        remainingSeconds = serverRemaining
-                        timber.log.Timber.d("Timer synced from server expiresAt: ${serverRemaining}s (deadlineElapsed=$deadlineElapsedMs)")
+                        if (serverRemaining > 0) {
+                            totalSeconds = serverRemaining
+                            remainingSeconds = serverRemaining
+                            syncOk = true
+                            timber.log.Timber.d("Timer synced from server expiresAt: ${serverRemaining}s (deadlineElapsed=$deadlineElapsedMs)")
+                        } else {
+                            timber.log.Timber.w("Server expiresAt already past — refusing to render a stale hold")
+                        }
                     } catch (e: Exception) {
-                        timber.log.Timber.w(e, "Failed to parse expiresAt, using fallback")
-                        // Keep fallback values
+                        // F-C-76: parse failure = fail-closed. We do NOT silently
+                        // render a 180s fake window — we release the hold and ask
+                        // the user to retry via the error UI.
+                        timber.log.Timber.e(e, "Failed to parse expiresAt: fail-closed release")
                     }
                 }
-                holdSuccess = true
-                timber.log.Timber.d("Hold success: $holdId")
+
+                if (syncOk) {
+                    holdSuccess = true
+                    timber.log.Timber.d("Hold success: $holdId")
+                } else {
+                    // F-C-76: release the server-side hold we just created, then
+                    // surface a user-facing error. Mirrors BookMyShow's
+                    // release-on-parse-failure recovery path.
+                    val staleHoldId = holdId
+                    holdId = null
+                    if (staleHoldId != null) {
+                        try {
+                            withContext(Dispatchers.IO) {
+                                RetrofitClient.truckHoldApi.releaseHold(
+                                    ReleaseHoldRequest(staleHoldId)
+                                )
+                            }
+                        } catch (e: Exception) {
+                            timber.log.Timber.w(e, "Release on parse-failure failed (non-fatal)")
+                        }
+                    }
+                    errorMessage = context.getString(R.string.failed_hold_vehicles)
+                }
             } else {
                 val msg = response.body()?.error?.message ?: response.body()?.message ?: context.getString(R.string.failed_hold_vehicles)
                 errorMessage = msg
