@@ -152,18 +152,25 @@ class BroadcastListScreenTimerTest {
     fun `no local remainingSeconds-- decrement remains in the file`() {
         // The old tick loop at line 263 decremented `remainingSeconds` once per
         // `delay(1000L)` suspend. That loop MUST be fully replaced by a
-        // recompute-from-deadline call.
-        assertFalse(
-            "BroadcastListScreen must not contain `remainingSeconds--` (F-C-27 fix incomplete)",
-            screenSource.contains("remainingSeconds--")
-        )
-        assertFalse(
-            "BroadcastListScreen must not contain any other local decrement of remainingSeconds",
-            screenSource.contains(Regex("""remainingSeconds\s*-=\s*1"""))
-        )
-        assertFalse(
-            "BroadcastListScreen must not reassign remainingSeconds = remainingSeconds - 1",
-            screenSource.contains(Regex("""remainingSeconds\s*=\s*remainingSeconds\s*-\s*1"""))
+        // recompute-from-deadline call. Same comment-filter pattern as
+        // `HoldFallbackRemovedTest`: occurrences inside `//` or `*` comments
+        // are allowed (for landmark/archaeology comments documenting the fix)
+        // but any live code line containing the decrement is a regression.
+        val lines = screenSource.lines()
+        val liveDecrementHits = lines.count { line ->
+            val trimmed = line.trim()
+            val isComment = trimmed.startsWith("//") ||
+                trimmed.startsWith("*") ||
+                trimmed.startsWith("/*")
+            !isComment && (
+                line.contains("remainingSeconds--") ||
+                    line.contains(Regex("""remainingSeconds\s*-=\s*1""")) ||
+                    line.contains(Regex("""remainingSeconds\s*=\s*remainingSeconds\s*-\s*1"""))
+                )
+        }
+        assertTrue(
+            "BroadcastListScreen must not contain a live remainingSeconds decrement (F-C-27 fix incomplete) — found $liveDecrementHits live hit(s)",
+            liveDecrementHits == 0
         )
     }
 

@@ -1,5 +1,6 @@
 package com.weelo.logistics.ui.transporter
 
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -66,6 +67,7 @@ import com.weelo.logistics.core.notification.BroadcastSoundService
 import com.weelo.logistics.data.model.BroadcastTrip
 import com.weelo.logistics.data.repository.BroadcastRepository
 import com.weelo.logistics.data.repository.BroadcastResult
+import com.weelo.logistics.ui.ServerDeadlineTimer
 import com.weelo.logistics.ui.components.EmptyStateArtwork
 import com.weelo.logistics.ui.components.EmptyStateHost
 import com.weelo.logistics.ui.components.ProvideShimmerBrush
@@ -250,17 +252,37 @@ private fun BroadcastListCard(
     val isSubmitEnabled = acceptedTrucks.isNotEmpty()
     val hasAnyHolding = truckHoldStates.values.any { it.isHolding }
 
-    // ── Per-card countdown ──
-    val initialRemaining = remember(broadcast.broadcastId) {
+    // ── Per-card countdown (F-C-27 / W1-3 — server-deadline recompute every
+    //    tick, doze-safe via SystemClock.elapsedRealtime). Pattern mirrors the
+    //    other 3 captain timer screens (VehicleHoldConfirmScreen,
+    //    DriverAssignmentScreen, DriverTripRequestOverlay) migrated in phase-3
+    //    commit a38862c. Replaces the old `remainingSeconds--` local decrement
+    //    loop that silently under-counted during Android doze. ──
+    val deadlineElapsedMs = remember(broadcast.broadcastId, broadcast.expiryTime) {
         val expiryMs = broadcast.expiryTime ?: (System.currentTimeMillis() + 120_000L)
-        ((expiryMs - System.currentTimeMillis()) / 1000).toInt().coerceAtLeast(0)
+        val nowWall = System.currentTimeMillis()
+        val nowElapsed = SystemClock.elapsedRealtime()
+        ServerDeadlineTimer.deadlineElapsedFromServerExpiry(
+            expiresAtWallMs = expiryMs,
+            nowWallMs = nowWall,
+            nowElapsedMs = nowElapsed
+        )
+    }
+    val initialRemaining = remember(broadcast.broadcastId, deadlineElapsedMs) {
+        ServerDeadlineTimer.remainingSecondsFromDeadline(
+            deadlineElapsedMs = deadlineElapsedMs,
+            nowElapsedMs = SystemClock.elapsedRealtime()
+        )
     }
     var remainingSeconds by remember(broadcast.broadcastId) { mutableIntStateOf(initialRemaining) }
 
-    LaunchedEffect(broadcast.broadcastId) {
+    LaunchedEffect(broadcast.broadcastId, deadlineElapsedMs) {
         while (remainingSeconds > 0) {
             delay(1000L)
-            remainingSeconds--
+            remainingSeconds = ServerDeadlineTimer.remainingSecondsFromDeadline(
+                deadlineElapsedMs = deadlineElapsedMs,
+                nowElapsedMs = SystemClock.elapsedRealtime()
+            )
         }
     }
 
