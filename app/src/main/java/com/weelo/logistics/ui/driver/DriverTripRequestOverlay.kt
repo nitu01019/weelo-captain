@@ -9,6 +9,9 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import com.weelo.logistics.BuildConfig
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -85,7 +88,27 @@ fun DriverTripRequestOverlay(
     // keeps ticking in sleep) and immune to wall-clock jumps.
     // If expiresAt is missing/unparseable, fall back to the DTO's remainingSeconds
     // anchored at screen-entry elapsed-realtime (same semantics as before).
-    val totalSeconds = remember { notification.remainingSeconds }
+    //
+    // F-C-31: the progress ring denominator must be STABLE for the whole
+    // assignment. Before this fix we read `notification.remainingSeconds` —
+    // a live getter that re-derives its value from System.currentTimeMillis()
+    // every call — inside `remember { ... }` with NO key. The remember block
+    // captured the getter at entry time, but the getter's VALUE decayed as
+    // real time ticked, producing an inverted progress ring. The fix is to
+    // `remember(assignmentId)` and prefer the stable DTO field
+    // `driverAcceptTimeoutSeconds` (server-sourced, never decays) with
+    // `BuildConfig.DRIVER_ACCEPT_TIMEOUT_SECONDS` as the last-resort fallback.
+    //
+    // The new path is gated by `BuildConfig.FF_DRIVER_TOTAL_SECONDS_FROM_DTO`
+    // so a rollback is a single flag flip.
+    val totalSeconds = if (BuildConfig.FF_DRIVER_TOTAL_SECONDS_FROM_DTO) {
+        remember(notification.assignmentId) {
+            notification.driverAcceptTimeoutSeconds
+                ?: BuildConfig.DRIVER_ACCEPT_TIMEOUT_SECONDS
+        }
+    } else {
+        remember(notification.assignmentId) { notification.remainingSeconds }
+    }
     val deadlineElapsedMs = remember(notification.assignmentId) {
         val nowElapsed = SystemClock.elapsedRealtime()
         val expiresAtWall = notification.expiresAt?.let {
@@ -124,30 +147,79 @@ fun DriverTripRequestOverlay(
     val swipeThresholdPx = with(density) { SWIPE_THRESHOLD_DP.dp.toPx() }
 
     // Countdown timer (F-C-27 — server-deadline recompute every tick, doze-safe)
-    // Industry Standard: Grab Mobile/Google - State-aware timer
-    // Includes isSwipeComplete in key -> restarts when swipe completes -> early return blocks timer
-    LaunchedEffect(notification.assignmentId, isProcessing, isSwipeComplete) {
-        // Block immediately if processing started OR swipe completed
-        if (isProcessing || isSwipeComplete) return@LaunchedEffect
-
-        while (remainingSeconds > 0) {
-            delay(COUNTDOWN_INTERVAL)
-            remainingSeconds = ServerDeadlineTimer.remainingSecondsFromDeadline(
-                deadlineElapsedMs = deadlineElapsedMs,
-                nowElapsedMs = SystemClock.elapsedRealtime()
-            )
-            Timber.tag("Overlay").i("⏰ Countdown: ${remainingSeconds}s")
+    //
+    // F-C-32: the prior implementation keyed the effect on
+    // `(assignmentId, isProcessing, isSwipeComplete)`. Every gate flip
+    // restarted the coroutine, which caused:
+    //   - The time-up auto-decline firing twice when isProcessing flipped
+    //     between "about to accept" and "accepting" within the same tick.
+    //   - A dropped tick each time the user partially dragged then released
+    //     (isSwipeComplete ticked in/out).
+    //
+    // The fix is a single-key effect (assignmentId) plus `rememberUpdatedState`
+    // for the gates — reads see the latest value each loop iteration without
+    // restarting. The decline on timeout runs inside `withContext(NonCancellable)`
+    // so an eager composable dispose cannot cancel the API call.
+    //
+    // Gated behind `BuildConfig.FF_DRIVER_TIMER_STABLE_KEY` (default OFF).
+    val processingRef = rememberUpdatedState(isProcessing)
+    val swipeCompleteRef = rememberUpdatedState(isSwipeComplete)
+    if (BuildConfig.FF_DRIVER_TIMER_STABLE_KEY) {
+        LaunchedEffect(notification.assignmentId) {
+            while (remainingSeconds > 0) {
+                // Latest gate values, read without restarting the effect.
+                if (processingRef.value || swipeCompleteRef.value) return@LaunchedEffect
+                delay(COUNTDOWN_INTERVAL)
+                remainingSeconds = ServerDeadlineTimer.remainingSecondsFromDeadline(
+                    deadlineElapsedMs = deadlineElapsedMs,
+                    nowElapsedMs = SystemClock.elapsedRealtime()
+                )
+                Timber.tag("Overlay").i("⏰ Countdown: ${remainingSeconds}s")
+            }
+            if (remainingSeconds <= 0) {
+                Timber.tag("Overlay").i("⏰ Timeout, declining: ${notification.assignmentId}")
+                withContext(NonCancellable) {
+                    onDecline(notification.assignmentId)
+                }
+            }
         }
+    } else {
+        // Legacy path — retained for flag-off rollback. Same behavior as before
+        // the F-C-32 fix (3-key effect, no NonCancellable wrapper).
+        LaunchedEffect(notification.assignmentId, isProcessing, isSwipeComplete) {
+            if (isProcessing || isSwipeComplete) return@LaunchedEffect
 
-        if (remainingSeconds <= 0) {
-            Timber.tag("Overlay").i("⏰ Timeout, declining: ${notification.assignmentId}")
-            onDecline(notification.assignmentId)
+            while (remainingSeconds > 0) {
+                delay(COUNTDOWN_INTERVAL)
+                remainingSeconds = ServerDeadlineTimer.remainingSecondsFromDeadline(
+                    deadlineElapsedMs = deadlineElapsedMs,
+                    nowElapsedMs = SystemClock.elapsedRealtime()
+                )
+                Timber.tag("Overlay").i("⏰ Countdown: ${remainingSeconds}s")
+            }
+
+            if (remainingSeconds <= 0) {
+                Timber.tag("Overlay").i("⏰ Timeout, declining: ${notification.assignmentId}")
+                onDecline(notification.assignmentId)
+            }
         }
     }
 
     // Play sound on appearance
     LaunchedEffect(Unit) {
         DriverTripRequestSoundService.playTripRequestSound(context)
+    }
+
+    // F-C-33: looping alarm requires deterministic teardown. When the
+    // overlay leaves the composition (dismissal, navigation, accept/decline
+    // complete), stop the alarm so it does not continue playing silently.
+    // Before this effect landed the one-shot alarm self-terminated, so a
+    // DisposableEffect was unnecessary; with the new loop-enabled service
+    // it is mandatory to avoid runaway audio after the overlay closes.
+    DisposableEffect(Unit) {
+        onDispose {
+            DriverTripRequestSoundService.stop()
+        }
     }
 
     // Handle swipe completion - only if not already processing

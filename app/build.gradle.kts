@@ -70,9 +70,18 @@ android {
         buildConfigField("boolean", "FF_BROADCAST_AUDIO_CONTROLLER", "false")
         buildConfigField("boolean", "FF_BROADCAST_FLP_LOCATION", "false")
 
-        // P9 t4 — F-C-22 WorkManager-backed hold release + F-C-60 data-only FCM handler
+        // P9 t4 — F-C-22 + F-C-60 WorkManager / data-only FCM flags
         buildConfigField("boolean", "FF_HOLD_RELEASE_WORKMANAGER", "false")
         buildConfigField("boolean", "FF_FCM_DATA_ONLY_HANDLER", "false")
+
+        // P9 t2 — F-C-29/31/32/33/34/44/47 Driver Assignment bundle flags
+        buildConfigField("boolean", "FF_DRIVER_ASSIGNMENT_VM_MIGRATION", "false")
+        buildConfigField("boolean", "FF_DRIVER_TOTAL_SECONDS_FROM_DTO", "false")
+        buildConfigField("boolean", "FF_DRIVER_TIMER_STABLE_KEY", "false")
+        buildConfigField("boolean", "FF_DRIVER_ALARM_LOOPING", "false")
+        buildConfigField("boolean", "FF_PHASE_AWARE_TIMER", "false")
+        buildConfigField("boolean", "FF_DRIVER_IDEMPOTENT_DISMISS", "false")
+        buildConfigField("boolean", "FF_PROACTIVE_DRIVER_EVICTION", "false")
     }
 
     buildTypes {

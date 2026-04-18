@@ -39,6 +39,9 @@ import com.weelo.logistics.ui.theme.*
 import com.weelo.logistics.ui.viewmodel.DriverAssignmentViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.weelo.logistics.BuildConfig
+import com.weelo.logistics.broadcast.assignment.DriverAssignmentUiState
+import com.weelo.logistics.data.model.HoldPhase
 import kotlinx.coroutines.launch
 
 private fun DriverAssignmentAvailability.chipStatus(): ChipStatus {
@@ -82,12 +85,23 @@ fun DriverAssignmentScreen(
     val scope = rememberCoroutineScope()
     val assignmentViewModel: DriverAssignmentViewModel = viewModel()
 
+    // F-C-29: when FF is ON, surface the VM's uiState so the Screen can read it
+    // the same way the rest of the app reads MVVM-backed state. Keeping the
+    // read unconditional (FF checked later) lets future rollouts enable the
+    // migration without touching imports.
+    val vmUiState: DriverAssignmentUiState by assignmentViewModel.uiState.collectAsStateWithLifecycle()
+    if (BuildConfig.FF_DRIVER_ASSIGNMENT_VM_MIGRATION) {
+        // Observation side-effect: surfaces the VM state to Compose without
+        // causing a recomposition-cycle. Screen still owns the mutation path.
+        timber.log.Timber.v("[F-C-29] VM uiState: %s", vmUiState::class.simpleName)
+    }
+
     // Real repositories connected to backend
     val broadcastRepository = remember { BroadcastRepository.getInstance(context) }
     val assignmentCoordinator = remember { BroadcastAssignmentCoordinator(broadcastRepository) }
     val vehicleRepository = remember { VehicleRepository.getInstance(context) }
     val driverRepository = remember { DriverRepository.getInstance(context) }
-    
+
     var broadcast by remember { mutableStateOf<BroadcastTrip?>(null) }
     var vehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
     var fleetDrivers by remember { mutableStateOf<List<Driver>>(emptyList()) }
@@ -97,8 +111,17 @@ fun DriverAssignmentScreen(
     var isSubmitting by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val fleetDriversById = remember(fleetDrivers) { fleetDrivers.associateBy { it.id } }
-    
+
     val resolvedHoldId = remember(holdId) { holdId.trim().takeUnless { it.isBlank() } }
+
+    // F-C-34: hold phase — sourced from the server via getMyActiveHold when
+    // the FF is ON. Until backend F-C-25 extension ships the phase field
+    // publicly we default to UNKNOWN so the UI falls back to the legacy block.
+    var holdPhase by remember { mutableStateOf(HoldPhase.UNKNOWN) }
+    var canExtendHold by remember { mutableStateOf(false) }
+
+    // F-C-47: banner state — surfaced when a driver goes offline mid-assignment.
+    var ejectedDriverName by remember { mutableStateOf<String?>(null) }
 
     // ── Hold expiry countdown (Phase 2 timer) ──
     // Backend hold is 180s total. Phase 1 (VehicleHoldConfirmScreen) used some of that.
@@ -116,7 +139,12 @@ fun DriverAssignmentScreen(
                     vehicleSubtype = requiredVehicleSubtype
                 )
             }
-            val expiresAtStr = response.body()?.data?.expiresAt
+            val myActiveHold = response.body()?.data
+            // F-C-34: pull phase + canExtend from backend when present.
+            // Nullable fallback -> UNKNOWN -> LegacyCountdownBlock.
+            holdPhase = myActiveHold?.phase ?: HoldPhase.UNKNOWN
+            canExtendHold = myActiveHold?.canExtend == true && holdPhase == HoldPhase.FLEX
+            val expiresAtStr = myActiveHold?.expiresAt
             if (expiresAtStr != null) {
                 val expiresAtMs = try {
                     java.time.Instant.parse(expiresAtStr).toEpochMilli()
@@ -263,20 +291,44 @@ fun DriverAssignmentScreen(
     LaunchedEffect(Unit) {
         SocketIOService.driverStatusChanged.collect { event ->
             timber.log.Timber.i("📡 [DriverAssignment] Real-time status: ${event.driverName} → ${if (event.isOnline) "ONLINE" else "OFFLINE"}")
-            
+
             // Check if this driver is currently assigned to a vehicle
             if (!event.isOnline) {
                 val isAssigned = driverAssignments.values.contains(event.driverId)
                 if (isAssigned) {
                     timber.log.Timber.w("⚠️ Assigned driver ${event.driverName} went OFFLINE — assignment invalidated")
-                    Toast.makeText(
-                        context,
-                        "${event.driverName} went offline. Please reassign.",
-                        Toast.LENGTH_LONG
-                    ).show()
+
+                    if (BuildConfig.FF_PROACTIVE_DRIVER_EVICTION) {
+                        // F-C-47: remove the vehicle -> driver entry and reopen the
+                        // picker for the affected vehicle. Before this fix the chip
+                        // went dim but the assignment stayed valid, so the
+                        // "Send to Drivers" button submitted an offline driver and
+                        // the backend silently rejected the whole batch.
+                        val affectedVehicleId = driverAssignments.entries
+                            .firstOrNull { it.value == event.driverId }?.key
+                        if (affectedVehicleId != null) {
+                            driverAssignments = driverAssignments - affectedVehicleId
+                            ejectedDriverName = event.driverName
+                            // Analytics breadcrumb — grep string must stay stable.
+                            timber.log.Timber.i(
+                                "driverEjectedMidAssignment driverId=%s vehicleId=%s",
+                                event.driverId,
+                                affectedVehicleId
+                            )
+                            // Auto-reopen the picker so the transporter has a
+                            // frictionless path to replace the ejected driver.
+                            showDriverPicker = affectedVehicleId
+                        }
+                    } else {
+                        Toast.makeText(
+                            context,
+                            "${event.driverName} went offline. Please reassign.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                 }
             }
-            
+
             fleetDrivers = fleetDrivers.map { driver ->
                 if (driver.id == event.driverId) {
                     driver.copy(isAvailable = event.isOnline)
@@ -337,41 +389,50 @@ fun DriverAssignmentScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Hold Expiry Timer (visible during Phase 2)
+                // F-C-34: phase-aware timer card (FF_PHASE_AWARE_TIMER).
+                // When FF is OFF — or when the server returns HoldPhase.UNKNOWN
+                // (e.g. prior to backend F-C-25 extension landing) — render the
+                // legacy block so this is a non-breaking diff. Both paths are
+                // covered by PhaseTimerCardTest.
                 if (holdRemainingSeconds >= 0) {
                     item {
-                        val timerColor = when {
-                            holdRemainingSeconds > 30 -> Success
-                            holdRemainingSeconds > 10 -> Warning
-                            else -> Error
-                        }
-                        val minutes = holdRemainingSeconds / 60
-                        val seconds = holdRemainingSeconds % 60
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(timerColor.copy(alpha = 0.1f))
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    Icons.Default.Timer,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(20.dp),
-                                    tint = timerColor
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    "Hold expires in ${minutes}:${"%02d".format(seconds)}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = timerColor
-                                )
+                        val useLegacy = !BuildConfig.FF_PHASE_AWARE_TIMER ||
+                            holdPhase == HoldPhase.UNKNOWN
+                        if (useLegacy) {
+                            LegacyCountdownBlock(remainingSeconds = holdRemainingSeconds)
+                        } else {
+                            val total = when (holdPhase) {
+                                HoldPhase.FLEX -> 130
+                                HoldPhase.CONFIRMED -> 180
+                                else -> 0
                             }
+                            PhaseTimerCard(
+                                phase = holdPhase,
+                                remaining = holdRemainingSeconds,
+                                total = total,
+                                canExtend = canExtendHold,
+                                onExtend = {
+                                    // Extend is only valid in FLEX — the card
+                                    // already gates, but double-check so a
+                                    // stale canExtend cannot hit a CONFIRMED
+                                    // hold. See PhaseTimerCardTest.
+                                    if (holdPhase == HoldPhase.FLEX && canExtendHold) {
+                                        timber.log.Timber.i("[F-C-34] Extend +30s requested")
+                                    }
+                                }
+                            )
                         }
+                    }
+                }
+
+                // F-C-47: ejection banner — shown when a driver goes offline
+                // mid-assignment. Tapping the picker clears the banner.
+                if (BuildConfig.FF_PROACTIVE_DRIVER_EVICTION && ejectedDriverName != null) {
+                    item {
+                        DriverEjectionBanner(
+                            driverName = ejectedDriverName!!,
+                            onDismiss = { ejectedDriverName = null }
+                        )
                     }
                 }
 
@@ -628,3 +689,7 @@ fun DriverAssignmentScreen(
 
 // VehicleDriverAssignmentCard, DriverPickerBottomSheet, DriverSelectCard
 // extracted to DriverAssignmentParts.kt for 800-line compliance.
+//
+// F-C-34 PhaseTimerCard + LegacyCountdownBlock and F-C-47 DriverEjectionBanner
+// live in PhaseTimerCard.kt (same package, internal visibility) for the same
+// reason. The Screen remains the state owner — the cards are pure renderers.

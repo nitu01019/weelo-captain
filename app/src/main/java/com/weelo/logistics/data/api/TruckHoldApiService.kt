@@ -366,7 +366,19 @@ data class MyActiveHoldData(
     val expiresAt: String,
 
     @SerializedName("status")
-    val status: String
+    val status: String,
+
+    // F-C-34 forward-compat: phase is populated by the backend F-C-25
+    // extension. Nullable so old backends (pre-extension) do not fail
+    // deserialization — `null` is treated as HoldPhase.UNKNOWN at the UI
+    // layer and falls back to LegacyCountdownBlock.
+    @SerializedName("phase")
+    val phase: com.weelo.logistics.data.model.HoldPhase? = null,
+
+    // F-C-34: `canExtend` mirrors the FLEX-phase extension availability.
+    // Default false so pre-extension backends never show the Extend button.
+    @SerializedName("canExtend")
+    val canExtend: Boolean = false
 )
 
 data class OrderAvailabilityResponse(
