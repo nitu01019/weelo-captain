@@ -83,13 +83,10 @@ android {
         buildConfigField("boolean", "FF_DRIVER_IDEMPOTENT_DISMISS", "false")
         buildConfigField("boolean", "FF_PROACTIVE_DRIVER_EVICTION", "false")
 
-        // P10 t2 — F-C-79/F-C-80/F-C-84 sealed-class enum canonicalization +
-        // schema-drift telemetry. When OFF (the default), SchemaDriftTelemetry
-        // runs in shadow mode: increments the metric + logs, but the
-        // graceful-degrade UNKNOWN fallback stays in place exactly as before.
-        // When ON, strict-mode parse can graduate (future — behind this same
-        // switch, zero call-site changes required). NO-DEPLOY: default OFF.
+        // P10 t2 — F-C-79/80/84 enum canonicalization
         buildConfigField("boolean", "FF_CUSTOMER_ENUM_CONTRACT_STRICT", "false")
+        // P10 t4 — F-C-67 parseJsonSafe + observability
+        buildConfigField("boolean", "FF_CUSTOMER_PARSE_JSON_SAFE", "false")
     }
 
     buildTypes {

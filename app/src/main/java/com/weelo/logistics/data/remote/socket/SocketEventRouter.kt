@@ -16,9 +16,11 @@ import com.weelo.logistics.data.model.RoutePoint
 import com.weelo.logistics.data.model.RoutePointType
 import com.weelo.logistics.data.model.TripAssignedNotification
 import com.weelo.logistics.data.model.TripLocationInfo
+import com.weelo.logistics.BuildConfig
 import com.weelo.logistics.data.remote.BroadcastFallbackRoute
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.data.remote.resolveBroadcastFallbackDecision
+import com.weelo.logistics.utils.parseJsonSafe
 import io.socket.client.Socket
 import io.socket.emitter.Emitter
 import kotlinx.coroutines.*
@@ -375,6 +377,27 @@ class SocketEventRouter(
     // --- Truck / assignment / booking handlers ---
 
     private fun handleTruckAssigned(args: Array<Any>) {
+        // F-C-67 — flag-guarded swap from `catch { Timber.e }` silent-swallow to
+        // `parseJsonSafe` which emits a `fix_id=F-C-67` telemetry breadcrumb on
+        // failure. Legacy path preserved under `else` for instant rollback.
+        if (BuildConfig.FF_CUSTOMER_PARSE_JSON_SAFE) {
+            val notification = parseJsonSafe<TruckAssignedNotification>(
+                event = SocketConstants.TRUCK_ASSIGNED,
+                raw = args.firstOrNull()
+            ) { data ->
+                timber.log.Timber.i("\uD83D\uDE9B Truck assigned: $data")
+                val assignment = data.optJSONObject("assignment")
+                TruckAssignedNotification(
+                    bookingId = data.optString("bookingId", ""),
+                    assignmentId = assignment?.optString("id", "") ?: "",
+                    vehicleNumber = assignment?.optString("vehicleNumber", "") ?: "",
+                    driverName = assignment?.optString("driverName", "") ?: "",
+                    status = assignment?.optString("status", "") ?: ""
+                )
+            }.getOrNull() ?: return
+            serviceScope.launch { _truckAssigned.emit(notification) }
+            return
+        }
         try {
             val data = args.firstOrNull() as? JSONObject ?: return
             timber.log.Timber.i("\uD83D\uDE9B Truck assigned: $data")
@@ -391,6 +414,24 @@ class SocketEventRouter(
     }
 
     private fun handleAssignmentStatusChanged(args: Array<Any>) {
+        // F-C-67 — flag-guarded adoption, see handleTruckAssigned for contract.
+        if (BuildConfig.FF_CUSTOMER_PARSE_JSON_SAFE) {
+            val notification = parseJsonSafe<AssignmentStatusNotification>(
+                event = SocketConstants.ASSIGNMENT_STATUS_CHANGED,
+                raw = args.firstOrNull()
+            ) { data ->
+                timber.log.Timber.i("\uD83D\uDCCB Assignment status changed: $data")
+                AssignmentStatusNotification(
+                    assignmentId = data.optString("assignmentId", ""),
+                    tripId = data.optString("tripId", ""),
+                    status = data.optString("status", ""),
+                    vehicleNumber = data.optString("vehicleNumber", ""),
+                    message = data.optString("message", "")
+                )
+            }.getOrNull() ?: return
+            serviceScope.launch { _assignmentStatusChanged.emit(notification) }
+            return
+        }
         try {
             val data = args.firstOrNull() as? JSONObject ?: return
             timber.log.Timber.i("\uD83D\uDCCB Assignment status changed: $data")
