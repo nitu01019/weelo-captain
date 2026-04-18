@@ -85,15 +85,15 @@ android {
 
         // P10 t2 — F-C-79/80/84 enum canonicalization
         buildConfigField("boolean", "FF_CUSTOMER_ENUM_CONTRACT_STRICT", "false")
-        // P10 t4 — F-C-67 parseJsonSafe + observability
+        // P10 t4 — F-C-67 parseJsonSafe + F-C-81 ORDER_BASE_TIMEOUT_SECONDS
         buildConfigField("boolean", "FF_CUSTOMER_PARSE_JSON_SAFE", "false")
-
-        // P10 t4 — F-C-81 ORDER_BASE_TIMEOUT_SECONDS centralization. Mirrors the
-        // backend env var `ORDER_BASE_TIMEOUT_SECONDS=120` so the three 120-second
-        // Kotlin fallbacks (sound auto-stop, card deadline, overlay timer ring)
-        // share one source of truth and never drift from server config. Same
-        // pattern as DRIVER_ACCEPT_TIMEOUT_SECONDS under F-C-77 above.
         buildConfigField("int", "ORDER_BASE_TIMEOUT_SECONDS", "120")
+        // P10 t1 — F-C-51/53/55/63/65 Captain contracts consumers (SocketEventRouter bundle)
+        buildConfigField("boolean", "FF_ASSIGNMENT_STATUS_ROUTER_V2", "false")
+        buildConfigField("boolean", "FF_DISPATCH_ACK_HANDLER", "false")
+        buildConfigField("boolean", "FF_BOOKING_V2_PAYLOAD", "false")
+        buildConfigField("boolean", "FF_ASSIGNMENT_STATUS_PAYLOAD_V2", "false")
+        buildConfigField("boolean", "FF_ORDER_PROGRESS_V1", "false")
     }
 
     buildTypes {
