@@ -1,6 +1,7 @@
 package com.weelo.logistics.data.model
 
 import com.weelo.logistics.R
+import com.weelo.logistics.telemetry.SchemaDriftTelemetry
 
 /**
  * Vehicle model - PRD-06 Compliant
@@ -32,12 +33,56 @@ data class Vehicle(
 
 /**
  * Vehicle Status
+ *
+ * F-C-80 — backend `prisma/schema.prisma` canonical values are
+ *   `available | in_transit | maintenance | inactive | on_hold` (lowercase).
+ * Mobile-side enum names stay UPPER_SNAKE_CASE for readability but the
+ * canonical mapping is centralised in the [Companion] block below so every
+ * parser (VehicleRepository, BroadcastRepository, socket handlers) speaks
+ * through one surface. The `UNKNOWN` sentinel is the forward-compatible
+ * escape hatch for values the backend rolls out before mobile is updated
+ * (e.g. a hypothetical `suspended`) — graceful degradation preserves the
+ * vehicle in the UI instead of silently collapsing to `INACTIVE` (the
+ * pre-F-C-80 bug per INDEX §F-C-80).
+ *
+ * F-C-84 — every unknown value is routed through
+ * [SchemaDriftTelemetry.record] so the `schema_drift_total{enum,value}`
+ * metric catches backend drift before it surfaces as a user-visible bug.
  */
 enum class VehicleStatus {
     AVAILABLE,      // Ready for trip
     IN_TRANSIT,     // On a trip
     MAINTENANCE,    // Under maintenance
-    INACTIVE        // Not in service
+    INACTIVE,       // Not in service
+    UNKNOWN;        // Unknown/unrecognised backend value — graceful degrade
+
+    companion object {
+        private const val ENUM_NAME: String = "VehicleStatus"
+
+        /**
+         * Canonical captain-side parser. Every call-site previously doing
+         * `when (raw.lowercase()) { ... else -> INACTIVE }` must route here.
+         * Null-safe, case-insensitive, emits schema-drift telemetry on the
+         * UNKNOWN path.
+         */
+        @JvmStatic
+        fun fromBackendString(raw: String?): VehicleStatus {
+            if (raw.isNullOrBlank()) {
+                SchemaDriftTelemetry.record(ENUM_NAME, raw, source = "VehicleStatus.fromBackendString")
+                return UNKNOWN
+            }
+            return when (raw.lowercase()) {
+                "available" -> AVAILABLE
+                "in_transit" -> IN_TRANSIT
+                "maintenance" -> MAINTENANCE
+                "inactive" -> INACTIVE
+                else -> {
+                    SchemaDriftTelemetry.record(ENUM_NAME, raw, source = "VehicleStatus.fromBackendString")
+                    UNKNOWN
+                }
+            }
+        }
+    }
 }
 
 /**

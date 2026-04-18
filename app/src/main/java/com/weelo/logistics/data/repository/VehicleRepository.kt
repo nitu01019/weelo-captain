@@ -518,12 +518,13 @@ class VehicleRepository private constructor(
             model = data.model,
             year = data.year,
             assignedDriverId = data.assignedDriverId,
-            status = when (data.status.lowercase()) {
-                "available" -> VehicleStatus.AVAILABLE
-                "in_transit" -> VehicleStatus.IN_TRANSIT
-                "maintenance" -> VehicleStatus.MAINTENANCE
-                else -> VehicleStatus.INACTIVE
-            }
+            // F-C-80 — single parser surface; emits schema_drift_total{enum,value}
+            // telemetry on the UNKNOWN path so backend schema drift becomes
+            // observable before it surfaces as a user-visible bug. Replaces the
+            // hand-rolled `when (data.status.lowercase())` fallback that
+            // collapsed every unknown value to INACTIVE (removing the vehicle
+            // from the fleet UI — silent data loss, pre-F-C-80 bug).
+            status = VehicleStatus.fromBackendString(data.status)
         )
     }
     
