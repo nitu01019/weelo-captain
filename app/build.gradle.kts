@@ -55,9 +55,7 @@ android {
         // at build time so the Kotlin fallback never drifts from server config.
         buildConfigField("int", "DRIVER_ACCEPT_TIMEOUT_SECONDS", "45")
 
-        // ============================================================
         // P9 t1 — F-C-05/F-C-10/F-C-11 Coordinator refactor flags
-        // ============================================================
         val ffCoordinatorRefactor = (project.findProperty("FF_BROADCAST_COORDINATOR_REFACTOR")?.toString()?.toBoolean() == true)
         val ffSingleOwnerBuffer = (project.findProperty("FF_BROADCAST_SINGLE_OWNER_BUFFER")?.toString()?.toBoolean() == true)
         val ffPriorityDrain = (project.findProperty("FF_BROADCAST_PRIORITY_DRAIN")?.toString()?.toBoolean() == true)
@@ -72,16 +70,8 @@ android {
         buildConfigField("boolean", "FF_BROADCAST_AUDIO_CONTROLLER", "false")
         buildConfigField("boolean", "FF_BROADCAST_FLP_LOCATION", "false")
 
-        // P9 t4 — F-C-22 WorkManager-backed hold release flag
+        // P9 t4 — F-C-22 WorkManager-backed hold release + F-C-60 data-only FCM handler
         buildConfigField("boolean", "FF_HOLD_RELEASE_WORKMANAGER", "false")
-
-        // F-C-60 (captain side): data-only FCM handler. Backend `FF_FCM_DATA_ONLY_FULLSCREEN`
-        // will, once captain release is at >=90% DAU, strip the `notification`
-        // block from FULLSCREEN_TYPES payloads so they arrive as data-only. When
-        // this captain-side flag is ON, we route data-only payloads through a
-        // `BroadcastExpediteWorker` that wakes the overlay pipeline from Doze.
-        // Default OFF — captain release must precede backend flag flip; in
-        // NO-DEPLOY mode this stays OFF everywhere (legacy hybrid path serves).
         buildConfigField("boolean", "FF_FCM_DATA_ONLY_HANDLER", "false")
     }
 
