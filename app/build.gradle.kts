@@ -74,6 +74,15 @@ android {
 
         // P9 t4 — F-C-22 WorkManager-backed hold release flag
         buildConfigField("boolean", "FF_HOLD_RELEASE_WORKMANAGER", "false")
+
+        // F-C-60 (captain side): data-only FCM handler. Backend `FF_FCM_DATA_ONLY_FULLSCREEN`
+        // will, once captain release is at >=90% DAU, strip the `notification`
+        // block from FULLSCREEN_TYPES payloads so they arrive as data-only. When
+        // this captain-side flag is ON, we route data-only payloads through a
+        // `BroadcastExpediteWorker` that wakes the overlay pipeline from Doze.
+        // Default OFF — captain release must precede backend flag flip; in
+        // NO-DEPLOY mode this stays OFF everywhere (legacy hybrid path serves).
+        buildConfigField("boolean", "FF_FCM_DATA_ONLY_HANDLER", "false")
     }
 
     buildTypes {
