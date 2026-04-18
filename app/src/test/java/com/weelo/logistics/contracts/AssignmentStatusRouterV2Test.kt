@@ -151,7 +151,7 @@ class AssignmentStatusRouterV2Test {
     }
 
     @Test
-    fun `fromJson returns null on empty orderId wrapper style shape`() {
+    fun `fromJson parses minimal payload with nullable oneof fields unset`() {
         // Functional unit test: stub is simple enough to exercise as a plain
         // Kotlin class (no Android deps).
         val data = org.json.JSONObject().apply {
