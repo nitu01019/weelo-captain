@@ -67,12 +67,13 @@ android {
         buildConfigField("boolean", "FF_BROADCAST_PRIORITY_DRAIN", ffPriorityDrain.toString())
         buildConfigField("boolean", "FF_BROADCAST_SHARED_FLOW_INGRESS", ffSharedFlowIngress.toString())
 
-        // ============================================================
         // P9 t3 — F-C-04/F-C-06/F-C-16 Overlay lifecycle flags
-        // ============================================================
         buildConfigField("boolean", "FF_BROADCAST_TRANSLUCENT_THEME", "false")
         buildConfigField("boolean", "FF_BROADCAST_AUDIO_CONTROLLER", "false")
         buildConfigField("boolean", "FF_BROADCAST_FLP_LOCATION", "false")
+
+        // P9 t4 — F-C-22 WorkManager-backed hold release flag
+        buildConfigField("boolean", "FF_HOLD_RELEASE_WORKMANAGER", "false")
     }
 
     buildTypes {

@@ -45,6 +45,8 @@ import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.LatLngBounds
 import com.google.maps.android.compose.*
+import com.weelo.logistics.BuildConfig
+import com.weelo.logistics.broadcast.work.HoldReleaseWorker
 import com.weelo.logistics.core.notification.BroadcastSoundService
 import com.weelo.logistics.data.model.BroadcastTrip
 import com.weelo.logistics.data.model.RequestedVehicle
@@ -398,17 +400,28 @@ fun BroadcastOverlayScreen(
     
     // =========================================================================
     // DISMISS - Release all holds
+    // F-C-22: flag-gated WorkManager release so the DELETE survives process
+    // kills (Redis hold otherwise stays for server TTL 180s and blocks other
+    // transporters). Legacy `scope.launch` remains under `else` for rollback.
     // =========================================================================
     fun handleDismiss() {
-        scope.launch {
-            truckHoldStates.values
-                .filter { it.holdId != null && it.status == TruckHoldStatus.ACCEPTED }
-                .forEach { state ->
+        val holdsToRelease = truckHoldStates.values
+            .filter { it.holdId != null && it.status == TruckHoldStatus.ACCEPTED }
+
+        if (BuildConfig.FF_HOLD_RELEASE_WORKMANAGER) {
+            holdsToRelease.forEach { state ->
+                timber.log.Timber.i("🔓 Enqueue hold release: ${state.holdId}")
+                HoldReleaseWorker.enqueue(context, state.holdId!!)
+            }
+        } else {
+            scope.launch {
+                holdsToRelease.forEach { state ->
                     timber.log.Timber.i("🔓 Releasing: ${state.holdId}")
                     broadcastRepository.releaseHold(state.holdId!!)
                 }
+            }
         }
-        
+
         currentBroadcast?.let { broadcast ->
             BroadcastOverlayManager.rejectCurrentBroadcast()
             onReject(broadcast)

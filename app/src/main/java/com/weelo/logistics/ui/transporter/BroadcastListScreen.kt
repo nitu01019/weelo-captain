@@ -54,6 +54,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.weelo.logistics.BuildConfig
 import com.weelo.logistics.broadcast.BroadcastOverlayContentNew
 import com.weelo.logistics.broadcast.BroadcastOverlayManager
 import com.weelo.logistics.broadcast.BroadcastStage
@@ -63,6 +64,7 @@ import com.weelo.logistics.broadcast.BroadcastStateSync
 import com.weelo.logistics.broadcast.BroadcastUiTiming
 import com.weelo.logistics.broadcast.TruckHoldState
 import com.weelo.logistics.broadcast.TruckHoldStatus
+import com.weelo.logistics.broadcast.work.HoldReleaseWorker
 import com.weelo.logistics.core.notification.BroadcastSoundService
 import com.weelo.logistics.data.model.BroadcastTrip
 import com.weelo.logistics.data.repository.BroadcastRepository
@@ -379,11 +381,21 @@ private fun BroadcastListCard(
     // ── DISMISS: Removes from this screen's list AND from the Overlay.
     //    Request Screen ignore = "I don't want this order" → remove everywhere.
     fun handleDismiss() {
-        // Release any Redis holds this card had
-        scope.launch {
-            truckHoldStates.values
-                .filter { it.holdId != null && it.status == TruckHoldStatus.ACCEPTED }
-                .forEach { broadcastRepository.releaseHold(it.holdId!!) }
+        // Release any Redis holds this card had.
+        // F-C-22: flag-gated WorkManager-backed release so the DELETE survives
+        // a process kill. Legacy `scope.launch` path remains under `else` for
+        // instant rollback. Flag defaults OFF per NO-DEPLOY.
+        val holdsToRelease = truckHoldStates.values
+            .filter { it.holdId != null && it.status == TruckHoldStatus.ACCEPTED }
+
+        if (BuildConfig.FF_HOLD_RELEASE_WORKMANAGER) {
+            holdsToRelease.forEach { state ->
+                HoldReleaseWorker.enqueue(context, state.holdId!!)
+            }
+        } else {
+            scope.launch {
+                holdsToRelease.forEach { broadcastRepository.releaseHold(it.holdId!!) }
+            }
         }
 
         // Propagate to Overlay — remove from overlay queue too
