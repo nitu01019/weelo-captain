@@ -1431,28 +1431,80 @@ object BroadcastFlowCoordinator {
     // =========================================================================
 
     /**
-     * F-C-11 — emit [envelope] into the SharedFlow ingress. Records the id
-     * into [_missedIds] when the buffer overflows, and triggers a reconcile.
+     * F-C-11 — emit [envelope] into the SharedFlow ingress. Tracks
+     * [_missedIds] when the SharedFlow has no live subscribers and the
+     * replay+extra capacity is exceeded.
      *
-     * Returns true when the SharedFlow accepted the envelope, false when it
-     * overflowed (and the id was recorded as missed).
+     * IMPLEMENTATION NOTE: `MutableSharedFlow.tryEmit` with `DROP_OLDEST`
+     * always returns true — it silently evicts the oldest item. SDK does
+     * not expose an `onUndeliveredElement` callback for SharedFlow. We
+     * therefore detect "missed" the same way the SOL-7 spec authorizes
+     * (§S-11 "explicit dropHandler on SharedFlow overflow"): track a
+     * monotonic counter of emitted-vs-replay-cache size; when the gap
+     * exceeds replay+extraBuffer the new envelopes have evicted prior
+     * items, and the EVICTED id list is what missedIds should hold.
+     *
+     * Practical compromise: we track the SET of envelopes that PASSED
+     * THROUGH the flow recently (via replayCache snapshot diff). When an
+     * envelope is no longer in the replay cache after emit, it is treated
+     * as evicted and recorded for reconcile.
+     *
+     * Returns true when the SharedFlow accepted the envelope (always true
+     * with DROP_OLDEST), false only when the underlying mechanism rejects.
      */
     private fun offerBroadcastEvent(envelope: BroadcastIngressEnvelope): Boolean {
+        val id = envelope.normalizedId.trim().ifEmpty {
+            envelope.broadcast?.broadcastId?.trim().orEmpty()
+        }
+        // Snapshot the replay cache BEFORE emit so we can detect which id was
+        // evicted on capacity overflow. With DROP_OLDEST the OLDEST envelope
+        // is the one ejected, and it always sits at index 0 of the cache.
+        // The eviction threshold depends on whether there are live subscribers:
+        //   - With subscribers: the queue grows up to (replay + extraBuffer)
+        //     before a producer's tryEmit forces an oldest-eviction.
+        //   - Without subscribers: only the replay cache exists; eviction
+        //     starts after `replay` items have accumulated.
+        val cacheBefore = broadcastEventFlow.replayCache
+        val hasSubscribers = broadcastEventFlow.subscriptionCount.value > 0
+        val evictionThreshold = if (hasSubscribers) {
+            INGRESS_SHARED_FLOW_REPLAY + INGRESS_SHARED_FLOW_EXTRA_BUFFER
+        } else {
+            INGRESS_SHARED_FLOW_REPLAY
+        }
+        val evictedId: String? = if (cacheBefore.size >= evictionThreshold) {
+            cacheBefore.firstOrNull()?.let { oldest ->
+                oldest.normalizedId.trim().ifEmpty {
+                    oldest.broadcast?.broadcastId?.trim().orEmpty()
+                }
+            }
+        } else null
+
         val accepted = broadcastEventFlow.tryEmit(envelope)
         if (!accepted) {
-            val id = envelope.normalizedId.trim().ifEmpty {
-                envelope.broadcast?.broadcastId?.trim().orEmpty()
-            }
             if (id.isNotEmpty()) {
                 _missedIds.update { it + id }
             }
             BroadcastTelemetry.record(
                 stage = BroadcastStage.INGRESS_BACKPRESSURE_DROPPED,
                 status = BroadcastStatus.DROPPED,
-                reason = "shared_flow_overflow",
+                reason = "shared_flow_rejected",
                 attrs = mapOf(
                     "id" to id.ifBlank { "none" },
                     "event" to envelope.rawEventName,
+                    "missedIdCount" to _missedIds.value.size.toString()
+                )
+            )
+        } else if (!evictedId.isNullOrEmpty()) {
+            // A prior envelope was DROP_OLDEST-evicted. Record its id so the
+            // next reconcile can backfill from the server.
+            _missedIds.update { it + evictedId }
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.INGRESS_BACKPRESSURE_DROPPED,
+                status = BroadcastStatus.DROPPED,
+                reason = "shared_flow_evicted_oldest",
+                attrs = mapOf(
+                    "evictedId" to evictedId,
+                    "newId" to id.ifBlank { "none" },
                     "missedIdCount" to _missedIds.value.size.toString()
                 )
             )

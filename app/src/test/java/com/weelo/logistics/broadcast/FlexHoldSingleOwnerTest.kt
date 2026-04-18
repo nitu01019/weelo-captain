@@ -56,36 +56,32 @@ class FlexHoldSingleOwnerTest {
     }
 
     /**
-     * INVARIANT 1: When the new path is ON, only the coordinator's pending
-     * queue stores buffered envelopes. The overlay manager's
-     * `startupBufferQueue` MUST stay empty.
+     * INVARIANT 1: When the new path is ON, the overlay manager's
+     * `bufferBroadcastLocked` MUST NOT add to its own `startupBufferQueue`.
+     * Buffer ownership is collapsed into the coordinator.
      *
-     * Today: both `BroadcastOverlayManager.startupBufferQueue` AND
-     * `BroadcastFlowCoordinator.pendingQueue` end up growing whenever the
-     * availability state is UNKNOWN, so the overlay-side queue size is > 0.
+     * We invoke `bufferBroadcastLocked` directly via reflection (the function
+     * is private and suspending) and assert the overlay-side queue stays empty
+     * because the flag-gate short-circuits.
+     *
+     * Today: `bufferBroadcastLocked` unconditionally `addLast`s to
+     * `startupBufferQueue`, so the assertion fails RED.
      */
     @Test
     fun `when single owner buffer enabled overlay manager does not buffer broadcasts`() {
-        val pendingQueue = newCoordinatorOwnedPendingQueue()
         val overlayBuffer = overlayManagerBufferQueue()
         overlayBuffer.clear()
-        pendingQueue.clear()
 
         val trip = sampleTrip("bx-1")
-        val item = PendingBroadcast(trip = trip, receivedAtMs = 1_000L)
-
-        // Coordinator-owned single-owner enqueue: must succeed and only the
-        // coordinator's queue grows.
-        pendingQueue.enqueue(item)
-
-        // The new contract: overlay manager MUST NOT buffer at all when
-        // singleOwnerBufferEnabled is ON. Buffer-ownership is collapsed
-        // into the coordinator.
-        assertEquals(
-            "coordinator-owned pending queue should hold the envelope",
-            1,
-            pendingQueue.size()
+        val item = BroadcastOverlayManager.BufferedBroadcast(
+            trip = trip,
+            receivedAtMs = 1_000L
         )
+
+        // Drive the suspend `bufferBroadcastLocked` from a runBlocking. With
+        // F-C-05 ON this must early-return without touching startupBufferQueue.
+        invokeBufferLocked(item)
+
         assertEquals(
             "overlay manager startupBufferQueue must stay empty when single-owner buffer is ON",
             0,
@@ -177,6 +173,41 @@ class FlexHoldSingleOwnerTest {
         val queue = field.get(BroadcastOverlayManager) as ArrayDeque<*>
         assertNotNull("overlay manager must keep its startupBufferQueue field for legacy fallback", queue)
         return queue
+    }
+
+    private fun invokeBufferLocked(item: BroadcastOverlayManager.BufferedBroadcast) {
+        // bufferBroadcastLocked is `private suspend` — invoke via reflection,
+        // passing a Continuation so the suspend machinery completes synchronously.
+        // Two methods exist on the JVM for a private suspend on a Kotlin object:
+        //   1) bufferBroadcastLocked(BufferedBroadcast, Continuation)  — 2 args
+        //   2) access$bufferBroadcastLocked(THIS, BufferedBroadcast, Continuation) — 3 args
+        // Prefer (1) when present since it sidesteps the synthetic accessor.
+        val privateMethod = BroadcastOverlayManager::class.java.declaredMethods.firstOrNull { m ->
+            m.name == "bufferBroadcastLocked"
+        }
+        val accessMethod = BroadcastOverlayManager::class.java.declaredMethods.firstOrNull { m ->
+            m.name == "access\$bufferBroadcastLocked"
+        }
+        val continuation = object : kotlin.coroutines.Continuation<Any?> {
+            override val context = kotlin.coroutines.EmptyCoroutineContext
+            override fun resumeWith(@Suppress("UNUSED_PARAMETER") result: Result<Any?>) {
+                // no-op — the flag-gate path is non-suspending in practice
+            }
+        }
+        when {
+            privateMethod != null -> {
+                privateMethod.isAccessible = true
+                privateMethod.invoke(BroadcastOverlayManager, item, continuation)
+            }
+            accessMethod != null -> {
+                accessMethod.isAccessible = true
+                accessMethod.invoke(null, BroadcastOverlayManager, item, continuation)
+            }
+            else -> error(
+                "BroadcastOverlayManager must keep bufferBroadcastLocked under the legacy " +
+                    "code path so this assertion can drive the early-return guard."
+            )
+        }
     }
 
     private fun sampleTrip(id: String): BroadcastTrip {

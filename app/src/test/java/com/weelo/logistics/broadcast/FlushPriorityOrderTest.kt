@@ -125,11 +125,13 @@ class FlushPriorityOrderTest {
         items: List<BroadcastOverlayManager.BufferedBroadcast>,
         nowMs: Long
     ): List<BroadcastOverlayManager.BufferedBroadcast> {
-        val method = BroadcastOverlayManager::class.java.getDeclaredMethod(
-            "sortBufferedForDrain",
-            List::class.java,
-            Long::class.javaPrimitiveType
-        )
+        // Kotlin `internal` functions get module-suffix name mangling — the
+        // JVM symbol is `sortBufferedForDrain$main` (or `$<module>` in Gradle
+        // builds). Resolve by matching the prefix so the lookup is robust to
+        // module-suffix changes across build setups.
+        val method = BroadcastOverlayManager::class.java.declaredMethods.first { m ->
+            m.name == "sortBufferedForDrain" || m.name.startsWith("sortBufferedForDrain$")
+        }
         method.isAccessible = true
         return method.invoke(BroadcastOverlayManager, items, nowMs)
             as List<BroadcastOverlayManager.BufferedBroadcast>
