@@ -87,6 +87,13 @@ android {
         buildConfigField("boolean", "FF_CUSTOMER_ENUM_CONTRACT_STRICT", "false")
         // P10 t4 — F-C-67 parseJsonSafe + observability
         buildConfigField("boolean", "FF_CUSTOMER_PARSE_JSON_SAFE", "false")
+
+        // P10 t4 — F-C-81 ORDER_BASE_TIMEOUT_SECONDS centralization. Mirrors the
+        // backend env var `ORDER_BASE_TIMEOUT_SECONDS=120` so the three 120-second
+        // Kotlin fallbacks (sound auto-stop, card deadline, overlay timer ring)
+        // share one source of truth and never drift from server config. Same
+        // pattern as DRIVER_ACCEPT_TIMEOUT_SECONDS under F-C-77 above.
+        buildConfigField("int", "ORDER_BASE_TIMEOUT_SECONDS", "120")
     }
 
     buildTypes {

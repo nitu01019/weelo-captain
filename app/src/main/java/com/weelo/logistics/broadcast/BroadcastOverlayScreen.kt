@@ -1136,9 +1136,11 @@ internal fun BroadcastOverlayContentNew(
                     }
                     
                     // Timer - Circular progress ring that depletes
+                    // F-C-81 — fallback sourced from BuildConfig.ORDER_BASE_TIMEOUT_SECONDS
+                    // so we never drift from backend env `ORDER_BASE_TIMEOUT_SECONDS=120`.
                     val totalTimeSeconds = broadcast.expiryTime?.let {
                         ((it - broadcast.broadcastTime) / 1000).toInt().coerceAtLeast(1)
-                    } ?: 120
+                    } ?: BuildConfig.ORDER_BASE_TIMEOUT_SECONDS
                     val timerProgress = (remainingSeconds.toFloat() / totalTimeSeconds.toFloat()).coerceIn(0f, 1f)
                     val timerColor = if (remainingSeconds <= 15) BroadcastDesignTokens.TimerRingUrgent else BroadcastDesignTokens.TimerRingActive
                     val trackColor = BroadcastDesignTokens.TimerRingTrack

@@ -261,7 +261,12 @@ private fun BroadcastListCard(
     //    commit a38862c. Replaces the old `remainingSeconds--` local decrement
     //    loop that silently under-counted during Android doze. ──
     val deadlineElapsedMs = remember(broadcast.broadcastId, broadcast.expiryTime) {
-        val expiryMs = broadcast.expiryTime ?: (System.currentTimeMillis() + 120_000L)
+        // F-C-81 — fallback derived from BuildConfig.ORDER_BASE_TIMEOUT_SECONDS
+        // instead of the magic `120_000L`. Same value today (120s), but sourced
+        // from the build flag so a backend env bump propagates without code edits.
+        val fallbackExpiryMs = System.currentTimeMillis() +
+            (BuildConfig.ORDER_BASE_TIMEOUT_SECONDS * 1000L)
+        val expiryMs = broadcast.expiryTime ?: fallbackExpiryMs
         val nowWall = System.currentTimeMillis()
         val nowElapsed = SystemClock.elapsedRealtime()
         ServerDeadlineTimer.deadlineElapsedFromServerExpiry(
