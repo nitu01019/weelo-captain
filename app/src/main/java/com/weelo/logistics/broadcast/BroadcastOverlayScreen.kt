@@ -163,13 +163,25 @@ fun BroadcastOverlayScreen(
     val isSubmitEnabled = acceptedTrucks.isNotEmpty()
     val hasAnyHolding = truckHoldStates.values.any { it.isHolding }
     
-    // Play sound when new broadcast appears
-    DisposableEffect(currentBroadcast?.broadcastId) {
-        currentBroadcast?.let { broadcast ->
-            soundService.playLoopingSound(isUrgent = broadcast.isUrgent)
-        }
-        onDispose {
-            soundService.stopSound()
+    // F-C-06 — Audio lifecycle.
+    //
+    // When BuildConfig.FF_BROADCAST_AUDIO_CONTROLLER is ON, the app-scoped
+    // BroadcastAudioController (installed in WeeloApp.onCreate) owns both
+    // play and stop — stop fires synchronously on the logical-dismiss edge
+    // rather than after AnimatedVisibility's 150 ms exit animation, so sound
+    // no longer plays for ~150 ms past logical dismiss on FCM-cancel.
+    //
+    // When the flag is OFF (default), the legacy DisposableEffect path stays
+    // live to guarantee zero behavior drift on canary rollback.
+    if (!com.weelo.logistics.BuildConfig.FF_BROADCAST_AUDIO_CONTROLLER) {
+        // Play sound when new broadcast appears
+        DisposableEffect(currentBroadcast?.broadcastId) {
+            currentBroadcast?.let { broadcast ->
+                soundService.playLoopingSound(isUrgent = broadcast.isUrgent)
+            }
+            onDispose {
+                soundService.stopSound()
+            }
         }
     }
 
