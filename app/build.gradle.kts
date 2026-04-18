@@ -43,6 +43,32 @@ android {
         // backend env var DRIVER_ACCEPT_TIMEOUT_SECONDS (currently 45s). Sourced
         // at build time so the Kotlin fallback never drifts from server config.
         buildConfigField("int", "DRIVER_ACCEPT_TIMEOUT_SECONDS", "45")
+
+        // ============================================================
+        // F-C-05/F-C-10/F-C-11 — Coordinator refactor feature flags
+        // ============================================================
+        // Bundled per CONFLICTS.md (BroadcastFlowCoordinator.kt +
+        // BroadcastOverlayManager.kt are touched by all three).
+        //
+        // Umbrella + 3 sub-flags. ALL DEFAULT OFF — legacy paths
+        // preserved under `if (!BuildConfig.FF_*) { legacy } else { new }`.
+        //
+        // Override at build time:
+        //   ./gradlew :app:assembleDebug \
+        //     -PFF_BROADCAST_COORDINATOR_REFACTOR=true \
+        //     -PFF_BROADCAST_SINGLE_OWNER_BUFFER=true \
+        //     -PFF_BROADCAST_PRIORITY_DRAIN=true \
+        //     -PFF_BROADCAST_SHARED_FLOW_INGRESS=true
+        // Tests flip via System.setProperty() through BroadcastBuildFlagsOverride.
+        // ============================================================
+        val ffCoordinatorRefactor = (project.findProperty("FF_BROADCAST_COORDINATOR_REFACTOR")?.toString()?.toBoolean() == true)
+        val ffSingleOwnerBuffer = (project.findProperty("FF_BROADCAST_SINGLE_OWNER_BUFFER")?.toString()?.toBoolean() == true)
+        val ffPriorityDrain = (project.findProperty("FF_BROADCAST_PRIORITY_DRAIN")?.toString()?.toBoolean() == true)
+        val ffSharedFlowIngress = (project.findProperty("FF_BROADCAST_SHARED_FLOW_INGRESS")?.toString()?.toBoolean() == true)
+        buildConfigField("boolean", "FF_BROADCAST_COORDINATOR_REFACTOR", ffCoordinatorRefactor.toString())
+        buildConfigField("boolean", "FF_BROADCAST_SINGLE_OWNER_BUFFER", ffSingleOwnerBuffer.toString())
+        buildConfigField("boolean", "FF_BROADCAST_PRIORITY_DRAIN", ffPriorityDrain.toString())
+        buildConfigField("boolean", "FF_BROADCAST_SHARED_FLOW_INGRESS", ffSharedFlowIngress.toString())
     }
 
     buildTypes {
@@ -80,6 +106,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
     
     kotlinOptions {
         jvmTarget = "17"

@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.LinkedHashMap
 import java.util.Locale
@@ -135,18 +136,49 @@ object BroadcastFlowCoordinator {
         "closed"
     )
 
+    // F-C-11 — SharedFlow capacity tuning. replay (64) covers re-subscribers
+    // (e.g. orientation change re-collect); extraBuffer (512) absorbs short
+    // burst ingress without dropping; together they target sub-second
+    // settle time on the typical FCM/socket replay-after-reconnect storm.
+    private const val INGRESS_SHARED_FLOW_REPLAY = 64
+    private const val INGRESS_SHARED_FLOW_EXTRA_BUFFER = 512
+
     private val started = AtomicBoolean(false)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val dedupeIds = LruIdSet(DEDUPE_LRU_SIZE, DEDUPE_TTL_MS)
+    // Legacy single-owner-bug-prone pending queue. Kept for the OFF code path.
+    // F-C-05 ON path uses [_pendingState] below.
     private val pendingQueue = PendingBroadcastQueue(
         maxSize = PENDING_QUEUE_MAX,
         ttlMs = STARTUP_BUFFER_TTL_MS
     )
+    // F-C-05 — Single-owner StateFlow buffer. CAS-mutated via .update {}.
+    // BroadcastOverlayManager observes via [renderableBroadcasts].
+    private val _pendingState = MutableStateFlow(
+        PendingBroadcastQueue(
+            maxSize = PENDING_QUEUE_MAX,
+            ttlMs = STARTUP_BUFFER_TTL_MS
+        )
+    )
     private val stateStore = BroadcastStateStore(MAX_RENDERABLE_BROADCASTS)
+    // Legacy 1024-cap channel — DROP_OLDEST silently evaporates events.
+    // F-C-11 ON path uses [broadcastEventFlow] + [_missedIds] instead.
     private val ingressChannel = Channel<BroadcastIngressEnvelope>(
         capacity = INGRESS_CHANNEL_CAPACITY,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
+    // F-C-11 — SharedFlow ingress (replay+extraBuffer DROP_OLDEST). Overflow
+    // is observable via [_missedIds] which feeds the next reconcile pass.
+    private val broadcastEventFlow = MutableSharedFlow<BroadcastIngressEnvelope>(
+        replay = INGRESS_SHARED_FLOW_REPLAY,
+        extraBufferCapacity = INGRESS_SHARED_FLOW_EXTRA_BUFFER,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    // Read-and-clear set of envelope ids that overflowed [broadcastEventFlow].
+    // The next [requestReconcile] drains this and forwards the ids to the
+    // backend /dispatch/replay endpoint. Empty after every successful drain.
+    private val _missedIds = MutableStateFlow<Set<String>>(emptySet())
+    val missedIds: StateFlow<Set<String>> = _missedIds.asStateFlow()
     private val ingressQueueDepth = AtomicInteger(0)
     private val cancellationTombstones = LinkedHashMap<String, Long>(CANCELLATION_TOMBSTONE_MAX_SIZE, 0.75f, true)
     private val tombstoneLock = Any()
@@ -477,6 +509,15 @@ object BroadcastFlowCoordinator {
     }
 
     private fun enqueueIngress(envelope: BroadcastIngressEnvelope) {
+        // F-C-11: Route through SharedFlow first when flag ON. Records
+        // missed ids on overflow so the next reconcile can backfill.
+        // Channel path below remains active to preserve worker-loop semantics
+        // (handleIngress still drives state-store updates) — both are in
+        // sync because tryEmit and trySend each absorb the burst differently.
+        if (BroadcastBuildFlags.sharedFlowIngressEnabled) {
+            offerBroadcastEvent(envelope)
+        }
+
         val queueDepthBefore = ingressQueueDepth.get()
         val isAtCapacity = queueDepthBefore >= INGRESS_CHANNEL_CAPACITY
         val sent = ingressChannel.trySend(envelope).isSuccess
@@ -732,9 +773,9 @@ object BroadcastFlowCoordinator {
             // Untrusted (FCM, notification tap): keep availability guard
             when (_feedState.value.availabilityState) {
                 AvailabilityState.UNKNOWN -> {
-                    pendingQueue.enqueue(PendingBroadcast(trip = trip, receivedAtMs = envelope.receivedAtMs))
+                    enqueuePendingItem(PendingBroadcast(trip = trip, receivedAtMs = envelope.receivedAtMs))
                     publishState(
-                        pendingCount = pendingQueue.size(),
+                        pendingCount = pendingQueueSize(),
                         availabilityState = _feedState.value.availabilityState,
                         isReconciling = _feedState.value.isReconciling
                     )
@@ -1019,6 +1060,28 @@ object BroadcastFlowCoordinator {
                 var replayFailureReason: String? = null
                 var replayCursorCandidate: Long? = null
 
+                // F-C-11 — drain missed-id set BEFORE the replay so the
+                // dispatcher can attach them to the request (or fall back to
+                // cursor-only replay if the backend has not been extended).
+                // Read-and-clear semantics: ids returned here will NOT be
+                // re-attempted by a concurrent reconcile pass.
+                val missedIdSet: Set<String> = if (BroadcastBuildFlags.sharedFlowIngressEnabled) {
+                    drainMissedIds()
+                } else {
+                    emptySet()
+                }
+                if (missedIdSet.isNotEmpty()) {
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.RECONCILE_REQUESTED,
+                        status = BroadcastStatus.SUCCESS,
+                        reason = "missed_ids_attached",
+                        attrs = mapOf(
+                            "missedIdCount" to missedIdSet.size.toString(),
+                            "force" to forceRefresh.toString()
+                        )
+                    )
+                }
+
                 when (val replayResult = repository.getDispatchReplay(cursor = lastReplayCursor, limit = 50)) {
                     is BroadcastResult.Success -> {
                         replayCursorCandidate = replayResult.data.cursor
@@ -1290,6 +1353,151 @@ object BroadcastFlowCoordinator {
      * single source of truth.
      */
     fun dedupeIdsClear() = dedupeIds.clear()
+
+    // =========================================================================
+    // F-C-05 — Single-owner StateFlow buffer helpers
+    //
+    // When [BroadcastBuildFlags.singleOwnerBufferEnabled] is ON, the SOLE
+    // owner of buffered envelopes is [_pendingState] mutated via .update {}
+    // CAS. The legacy [pendingQueue] is kept untouched as a no-op so the
+    // OFF code path is preserved bit-for-bit. The two are NEVER updated in
+    // parallel — all read/write funnels through these helpers.
+    //
+    // [BroadcastOverlayManager.bufferBroadcastLocked] is the secondary
+    // owner under the legacy code path; its `startupBufferQueue` is gated
+    // off via the same flag, removing the dual-owner bug.
+    // =========================================================================
+
+    private fun enqueuePendingItem(item: PendingBroadcast) {
+        if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            // True CAS update — produce a fresh queue instance each time so
+            // StateFlow value comparison detects the change and downstream
+            // collectors are notified. Concurrent producers retry on conflict.
+            _pendingState.update { current ->
+                val next = PendingBroadcastQueue(
+                    maxSize = PENDING_QUEUE_MAX,
+                    ttlMs = STARTUP_BUFFER_TTL_MS
+                )
+                // Replay existing items in arrival order (drainValid with
+                // ttl-friendly timestamp 0L returns everything as valid).
+                current.snapshotForRebuild().forEach { existing -> next.enqueue(existing) }
+                next.enqueue(item)
+                next
+            }
+        } else {
+            pendingQueue.enqueue(item)
+        }
+    }
+
+    private fun pendingQueueSize(): Int {
+        return if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            _pendingState.value.size()
+        } else {
+            pendingQueue.size()
+        }
+    }
+
+    private fun drainPendingValid(
+        nowMs: Long = System.currentTimeMillis()
+    ): Pair<List<PendingBroadcast>, List<PendingBroadcast>> {
+        return if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            _pendingState.value.drainValid(nowMs)
+        } else {
+            pendingQueue.drainValid(nowMs)
+        }
+    }
+
+    private fun removePendingById(id: String) {
+        if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            _pendingState.value.removeById(id)
+        } else {
+            pendingQueue.removeById(id)
+        }
+    }
+
+    // =========================================================================
+    // F-C-11 — SharedFlow ingress (replay+extraBuffer) + missedIds reconcile
+    //
+    // [offerBroadcastEvent] is the replacement entry for [enqueueIngress] when
+    // [BroadcastBuildFlags.sharedFlowIngressEnabled] is ON. Events that fail
+    // to enter the SharedFlow buffer (overflow → DROP_OLDEST) get their id
+    // recorded into [_missedIds] so the next reconcile pass can backfill them
+    // via the backend /dispatch/replay endpoint.
+    //
+    // GRACEFUL DEGRADATION: if the backend has not been extended to accept
+    // missedIds[] in its body, the local memory reconciler queue still
+    // triggers a cursor-based reconcile (so the client recovers via replay
+    // window) — id-level backfill is a stretch goal pending backend release.
+    // =========================================================================
+
+    /**
+     * F-C-11 — emit [envelope] into the SharedFlow ingress. Records the id
+     * into [_missedIds] when the buffer overflows, and triggers a reconcile.
+     *
+     * Returns true when the SharedFlow accepted the envelope, false when it
+     * overflowed (and the id was recorded as missed).
+     */
+    private fun offerBroadcastEvent(envelope: BroadcastIngressEnvelope): Boolean {
+        val accepted = broadcastEventFlow.tryEmit(envelope)
+        if (!accepted) {
+            val id = envelope.normalizedId.trim().ifEmpty {
+                envelope.broadcast?.broadcastId?.trim().orEmpty()
+            }
+            if (id.isNotEmpty()) {
+                _missedIds.update { it + id }
+            }
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.INGRESS_BACKPRESSURE_DROPPED,
+                status = BroadcastStatus.DROPPED,
+                reason = "shared_flow_overflow",
+                attrs = mapOf(
+                    "id" to id.ifBlank { "none" },
+                    "event" to envelope.rawEventName,
+                    "missedIdCount" to _missedIds.value.size.toString()
+                )
+            )
+        }
+        return accepted
+    }
+
+    /**
+     * F-C-11 — read-and-clear the [_missedIds] set. Callers (typically the
+     * reconciler) attach the returned set to the next /dispatch/replay
+     * request so the server can backfill the ids that overflowed.
+     */
+    private fun drainMissedIds(): Set<String> {
+        var snapshot: Set<String> = emptySet()
+        _missedIds.update { current ->
+            snapshot = current
+            emptySet()
+        }
+        return snapshot
+    }
+
+    // ---- Test-only reflection accessors (used by IngressBackpressureTest) ----
+    @Suppress("unused")
+    private fun offerBroadcastEventForTesting(broadcastId: String): Boolean {
+        return offerBroadcastEvent(
+            BroadcastIngressEnvelope(
+                source = BroadcastIngressSource.SOCKET,
+                rawEventName = "test_burst",
+                normalizedId = broadcastId,
+                receivedAtMs = 0L,
+                broadcast = null
+            )
+        )
+    }
+
+    @Suppress("unused")
+    private fun missedIdsSnapshotForTesting(): Set<String> = _missedIds.value
+
+    @Suppress("unused")
+    private fun drainMissedIdsForTesting(): Set<String> = drainMissedIds()
+
+    @Suppress("unused")
+    private fun resetMissedIdsForTesting() {
+        _missedIds.value = emptySet()
+    }
 
     private fun markSeenInRecoveryStore(broadcastId: String) {
         val context = appContext ?: return

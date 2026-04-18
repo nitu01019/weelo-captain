@@ -124,6 +124,18 @@ class PendingBroadcastQueue(
 
     fun size(): Int = synchronized(lock) { queue.size }
 
+    /**
+     * F-C-05 — Non-destructive snapshot used by the single-owner StateFlow
+     * CAS rebuild path. Unlike [drainValid], this does NOT mutate the queue;
+     * it returns the items in arrival order so a fresh queue can be rebuilt
+     * during a [kotlinx.coroutines.flow.MutableStateFlow.update] block.
+     */
+    fun snapshotForRebuild(): List<PendingBroadcast> {
+        synchronized(lock) {
+            return queue.toList()
+        }
+    }
+
     fun clear() {
         synchronized(lock) {
             queue.clear()
