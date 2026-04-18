@@ -1,5 +1,6 @@
 package com.weelo.logistics.data.remote.socket
 
+import com.weelo.logistics.BuildConfig
 import com.weelo.logistics.broadcast.BroadcastDedupKey
 import com.weelo.logistics.broadcast.BroadcastEventClass
 import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
@@ -12,6 +13,13 @@ import com.weelo.logistics.broadcast.BroadcastStage
 import com.weelo.logistics.broadcast.BroadcastStatus
 import com.weelo.logistics.broadcast.BroadcastTelemetry
 import com.weelo.logistics.broadcast.BroadcastUiTiming
+// P10 t1 — F-C-52 codegen consumers (stub imports until codegen lands).
+// Gated behind BuildConfig.FF_* flags (default OFF) so legacy handlers keep
+// handling traffic during backend-first rollout.
+import com.weelo.logistics.contracts.AssignmentStatusChangedEvent
+import com.weelo.logistics.contracts.BookingBroadcastV2Event
+import com.weelo.logistics.contracts.DispatchAckEvent
+import com.weelo.logistics.contracts.OrderProgressEvent
 import com.weelo.logistics.data.model.RoutePoint
 import com.weelo.logistics.data.model.RoutePointType
 import com.weelo.logistics.data.model.TripAssignedNotification
@@ -199,6 +207,27 @@ class SocketEventRouter(
 
             // Driver rating events
             on(SocketConstants.DRIVER_RATING_UPDATED) { args -> ext.handleDriverRatingUpdated(args) }
+
+            // ================================================================
+            // P10 t1 — F-C-51/53/55/63/65 Captain contracts consumers
+            // ================================================================
+            // All four event registrations below are ADDITIVE — they coexist
+            // with the existing legacy handlers above. Each handler short-
+            // circuits when its BuildConfig flag is OFF (default), so the
+            // socket listener overhead is a single flag read until we flip the
+            // gradle property on a canary build.
+            //
+            // Backend-first rollout plan:
+            //   1. Backend emits legacy + v2 shapes in parallel (t5 PRs).
+            //   2. Captain ships these handlers flag-OFF (this commit).
+            //   3. Canary gradle build flips the flag; captain consumes v2.
+            //   4. After 90%+ DAU on v2, backend drops the legacy emit.
+            //
+            // See F-C-83 audit doc (docs/phase4/flag-registry-audit.md) for
+            // the full captain+backend flag registry.
+            on(SocketConstants.ORDER_PROGRESS) { args -> handleOrderProgress(args) }
+            on(SocketConstants.DISPATCH_ACK_RESPONSE) { args -> handleDispatchAckResponse(args) }
+            on(SocketConstants.BOOKING_BROADCAST_V2) { args -> handleBookingBroadcastV2(args) }
         }
     }
 
@@ -435,6 +464,43 @@ class SocketEventRouter(
         try {
             val data = args.firstOrNull() as? JSONObject ?: return
             timber.log.Timber.i("\uD83D\uDCCB Assignment status changed: $data")
+
+            // P10 / F-C-51 + F-C-63 — typed v2 consumer under feature flag.
+            // When FF_ASSIGNMENT_STATUS_ROUTER_V2 OR FF_ASSIGNMENT_STATUS_PAYLOAD_V2
+            // is ON, delegate parse to the typed factory first. On null result or
+            // flag OFF, fall through to the legacy parse path so we never drop
+            // events during backend-first rollout.
+            if (BuildConfig.FF_ASSIGNMENT_STATUS_ROUTER_V2 ||
+                BuildConfig.FF_ASSIGNMENT_STATUS_PAYLOAD_V2) {
+                val typed = AssignmentStatusChangedEvent.fromJson(data)
+                if (typed != null) {
+                    timber.log.Timber.d(
+                        "\uD83D\uDCCB v2 parse ok: source=%s orderId=%s bookingId=%s accepted=%s pending=%s",
+                        typed.source ?: "none",
+                        typed.orderId ?: "none",
+                        typed.bookingId ?: "none",
+                        typed.trucksAccepted?.toString() ?: "none",
+                        typed.trucksPending?.toString() ?: "none"
+                    )
+                    // Emit the legacy notification shape the rest of the app already
+                    // consumes — v2 adds context but the downstream UI doesn't need
+                    // a new flow yet. Multi-vehicle progress UI (future) reads
+                    // trucksAccepted/trucksPending via a dedicated handler.
+                    val notification = AssignmentStatusNotification(
+                        assignmentId = typed.assignmentId,
+                        tripId = typed.tripId,
+                        status = typed.status,
+                        vehicleNumber = typed.vehicleNumber,
+                        message = typed.message
+                    )
+                    serviceScope.launch { _assignmentStatusChanged.emit(notification) }
+                    return
+                }
+                timber.log.Timber.w("\u21A9\uFE0F v2 parse returned null, falling back to legacy path")
+            }
+
+            // Legacy 5-field path — stays wired for: (a) flag OFF, (b) backend
+            // still emits legacy shape, (c) v2 parse fails closed on drift.
             val notification = AssignmentStatusNotification(
                 assignmentId = data.optString("assignmentId", ""),
                 tripId = data.optString("tripId", ""),
@@ -444,6 +510,107 @@ class SocketEventRouter(
             )
             serviceScope.launch { _assignmentStatusChanged.emit(notification) }
         } catch (e: Exception) { timber.log.Timber.e(e, "Error parsing assignment status: ${e.message}") }
+    }
+
+    // F-C-65 — Order progress consumer (per-order truck accept/pending/decline counts).
+    // Gated behind FF_ORDER_PROGRESS_V1. Feeds the existing
+    // _trucksRemainingUpdates flow so the transporter dashboard can render
+    // progress without a new UI wire-up — a future OrderProgressScreen can
+    // consume the typed OrderProgressEvent directly.
+    private fun handleOrderProgress(args: Array<Any>) {
+        if (!BuildConfig.FF_ORDER_PROGRESS_V1) return
+        try {
+            val data = args.firstOrNull() as? JSONObject ?: return
+            val event = OrderProgressEvent.fromJson(data) ?: run {
+                timber.log.Timber.w("order_progress: fromJson null, dropping event")
+                return
+            }
+            timber.log.Timber.i(
+                "\uD83D\uDCCA Order progress: orderId=%s status=%s accepted=%d pending=%d declined=%d needed=%d",
+                event.orderId, event.status, event.trucksAccepted, event.trucksPending,
+                event.trucksDeclined, event.trucksNeeded
+            )
+            // Reuse TrucksRemainingNotification as the compatibility emission —
+            // the dashboard already listens on this flow.
+            val trucksRemaining = (event.trucksNeeded - event.trucksAccepted).coerceAtLeast(0)
+            val notification = TrucksRemainingNotification(
+                orderId = event.orderId,
+                vehicleType = "",
+                totalTrucks = event.trucksNeeded,
+                trucksFilled = event.trucksAccepted,
+                trucksRemaining = trucksRemaining,
+                orderStatus = event.status,
+                eventId = null,
+                eventVersion = null,
+                serverTimeMs = event.updatedAtMs
+            )
+            serviceScope.launch { _trucksRemainingUpdates.emit(notification) }
+        } catch (e: Exception) { timber.log.Timber.e(e, "Error parsing order_progress: ${e.message}") }
+    }
+
+    // F-C-53 — Dispatch ACK receipt echo consumer (server -> client confirmation).
+    // Captain fires dispatch_ack on broadcast ingest (emitDispatchAck below);
+    // this handler consumes the optional echo backend emits when
+    // FF_DISPATCH_ACK_HANDLER is ON. Telemetry only — no business-logic side
+    // effect. Safe to enable before backend ships the matching emit.
+    private fun handleDispatchAckResponse(args: Array<Any>) {
+        if (!BuildConfig.FF_DISPATCH_ACK_HANDLER) return
+        try {
+            val data = args.firstOrNull() as? JSONObject ?: return
+            val event = DispatchAckEvent.fromJson(data) ?: run {
+                timber.log.Timber.w("dispatch_ack_response: fromJson null (likely missing orderId), dropping")
+                return
+            }
+            timber.log.Timber.d(
+                "\u2705 Dispatch ack receipt: orderId=%s revision=%s ackAt=%s source=%s",
+                event.orderId,
+                event.dispatchRevision?.toString() ?: "none",
+                event.acknowledgedAtMs?.toString() ?: "none",
+                event.source
+            )
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.BROADCAST_WS_RECEIVED,
+                status = BroadcastStatus.SUCCESS,
+                reason = "dispatch_ack_response",
+                attrs = mapOf(
+                    "orderId" to event.orderId,
+                    "dispatchRevision" to (event.dispatchRevision?.toString() ?: "none"),
+                    "source" to event.source
+                )
+            )
+        } catch (e: Exception) { timber.log.Timber.e(e, "Error parsing dispatch_ack_response: ${e.message}") }
+    }
+
+    // F-C-55 — Booking broadcast v2 payload consumer. Backend ships a v2 emit
+    // path that populates 6 transporter-context fields the legacy builder
+    // zeroes out ("0 of 0 trucks available" mislead). Gated behind
+    // FF_BOOKING_V2_PAYLOAD. Telemetry only — the real personalization UX
+    // lands in a follow-up that wires the v2 event into BroadcastCoordinator.
+    private fun handleBookingBroadcastV2(args: Array<Any>) {
+        if (!BuildConfig.FF_BOOKING_V2_PAYLOAD) return
+        try {
+            val data = args.firstOrNull() as? JSONObject ?: return
+            val event = BookingBroadcastV2Event.fromJson(data) ?: run {
+                timber.log.Timber.w("booking_broadcast_v2: fromJson null, dropping")
+                return
+            }
+            timber.log.Timber.i(
+                "\uD83D\uDCE6 Booking broadcast v2: id=%s personalized=%s youCanProvide=%d/%d needed=%d",
+                event.broadcastId, event.isPersonalized,
+                event.trucksYouCanProvide, event.maxTrucksYouCanProvide,
+                event.trucksStillNeeded
+            )
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.BROADCAST_WS_RECEIVED,
+                status = BroadcastStatus.SUCCESS,
+                reason = "booking_broadcast_v2",
+                attrs = mapOf(
+                    "broadcastId" to event.broadcastId,
+                    "isPersonalized" to event.isPersonalized.toString(),
+                    "trucksYouCanProvide" to event.trucksYouCanProvide.toString()
+                )
+            )
+        } catch (e: Exception) { timber.log.Timber.e(e, "Error parsing booking_broadcast_v2: ${e.message}") }
     }
 
     private fun handleBookingUpdated(args: Array<Any>) {

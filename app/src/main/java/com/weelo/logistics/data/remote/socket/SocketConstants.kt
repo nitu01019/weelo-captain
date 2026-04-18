@@ -80,6 +80,17 @@ object SocketConstants {
     // Order status events
     const val ORDER_STATUS_UPDATE = "order_status_update"
 
+    // F-C-65 — Per-order truck progress event (accepted/pending/declined counts)
+    // Distinct from ORDER_STATUS_UPDATE which only carries coarse status transitions.
+    const val ORDER_PROGRESS = "order_progress"
+
+    // F-C-53 — Dispatch ACK receipt echo (server -> client confirmation that
+    // captain's `dispatch_ack` emission was recorded by the backend handler).
+    const val DISPATCH_ACK_RESPONSE = "dispatch_ack_response"
+
+    // F-C-55 — Legacy booking broadcast v2 payload with transporter context.
+    const val BOOKING_BROADCAST_V2 = "booking_broadcast_v2"
+
     // Driver health events
     const val DRIVER_MAY_BE_OFFLINE = "driver_may_be_offline"
 
