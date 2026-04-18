@@ -39,27 +39,24 @@ android {
         manifestPlaceholders += mapOf("MAPS_API_KEY" to mapsApiKey)
         buildConfigField("String", "MAPS_API_KEY", "\"$mapsApiKey\"")
 
+        // F-C-04 — manifest placeholders driving the activity-alias enable
+        // toggle. Opaque FSI entry is ON while the translucent alias is OFF
+        // (and vice versa) — exactly one is active at runtime. Keeping the
+        // toggle in manifestPlaceholders lets the activity-alias respond to
+        // gradle property overrides on canary builds without code churn.
+        val translucentThemeEnabled = false
+        manifestPlaceholders += mapOf(
+            "broadcastOverlayThemeEnabled" to translucentThemeEnabled.toString(),
+            "broadcastLegacyThemeEnabled" to (!translucentThemeEnabled).toString()
+        )
+
         // F-C-77: backend-sourced DRIVER_ACCEPT_TIMEOUT_SECONDS. Must match
         // backend env var DRIVER_ACCEPT_TIMEOUT_SECONDS (currently 45s). Sourced
         // at build time so the Kotlin fallback never drifts from server config.
         buildConfigField("int", "DRIVER_ACCEPT_TIMEOUT_SECONDS", "45")
 
         // ============================================================
-        // F-C-05/F-C-10/F-C-11 — Coordinator refactor feature flags
-        // ============================================================
-        // Bundled per CONFLICTS.md (BroadcastFlowCoordinator.kt +
-        // BroadcastOverlayManager.kt are touched by all three).
-        //
-        // Umbrella + 3 sub-flags. ALL DEFAULT OFF — legacy paths
-        // preserved under `if (!BuildConfig.FF_*) { legacy } else { new }`.
-        //
-        // Override at build time:
-        //   ./gradlew :app:assembleDebug \
-        //     -PFF_BROADCAST_COORDINATOR_REFACTOR=true \
-        //     -PFF_BROADCAST_SINGLE_OWNER_BUFFER=true \
-        //     -PFF_BROADCAST_PRIORITY_DRAIN=true \
-        //     -PFF_BROADCAST_SHARED_FLOW_INGRESS=true
-        // Tests flip via System.setProperty() through BroadcastBuildFlagsOverride.
+        // P9 t1 — F-C-05/F-C-10/F-C-11 Coordinator refactor flags
         // ============================================================
         val ffCoordinatorRefactor = (project.findProperty("FF_BROADCAST_COORDINATOR_REFACTOR")?.toString()?.toBoolean() == true)
         val ffSingleOwnerBuffer = (project.findProperty("FF_BROADCAST_SINGLE_OWNER_BUFFER")?.toString()?.toBoolean() == true)
@@ -69,6 +66,13 @@ android {
         buildConfigField("boolean", "FF_BROADCAST_SINGLE_OWNER_BUFFER", ffSingleOwnerBuffer.toString())
         buildConfigField("boolean", "FF_BROADCAST_PRIORITY_DRAIN", ffPriorityDrain.toString())
         buildConfigField("boolean", "FF_BROADCAST_SHARED_FLOW_INGRESS", ffSharedFlowIngress.toString())
+
+        // ============================================================
+        // P9 t3 — F-C-04/F-C-06/F-C-16 Overlay lifecycle flags
+        // ============================================================
+        buildConfigField("boolean", "FF_BROADCAST_TRANSLUCENT_THEME", "false")
+        buildConfigField("boolean", "FF_BROADCAST_AUDIO_CONTROLLER", "false")
+        buildConfigField("boolean", "FF_BROADCAST_FLP_LOCATION", "false")
     }
 
     buildTypes {
