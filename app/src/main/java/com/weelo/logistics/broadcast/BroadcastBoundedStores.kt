@@ -165,25 +165,39 @@ class BroadcastStateStore(
     private fun enrichWithLocalPickupDistance(trip: BroadcastTrip): BroadcastTrip {
         if (trip.pickupDistanceKm > 0.0) return trip
         if (trip.pickupLocation.latitude == 0.0 || trip.pickupLocation.longitude == 0.0) return trip
-        return try {
-            val ctx = com.weelo.logistics.WeeloApp.getInstance()?.applicationContext ?: return trip
-            val locationManager = ctx.getSystemService(
-                android.content.Context.LOCATION_SERVICE
-            ) as? android.location.LocationManager ?: return trip
-            @Suppress("MissingPermission")
-            val driverLoc = locationManager.getLastKnownLocation(
-                android.location.LocationManager.GPS_PROVIDER
-            ) ?: locationManager.getLastKnownLocation(
-                android.location.LocationManager.NETWORK_PROVIDER
-            ) ?: return trip
+        val ctx = com.weelo.logistics.WeeloApp.getInstance()?.applicationContext ?: return trip
 
-            // Staleness guard: reject GPS fixes older than 5 minutes
-            if (System.currentTimeMillis() - driverLoc.time > MAX_LOCATION_AGE_MS) {
-                timber.log.Timber.d("📍 Skipping stale GPS fix (%d seconds old) for %s",
-                    (System.currentTimeMillis() - driverLoc.time) / 1000, trip.broadcastId)
-                return trip
+        // F-C-16 — when the FLP path is enabled, source the last-known
+        // location from the app-scoped memoized LocationCache. The cache
+        // enforces runtime permission checks, catches SecurityException
+        // distinctly, and memoizes for 30 s — so the socket-ingress thread
+        // does NOT block on GPS IPC per upsert.
+        val driverLoc: android.location.Location? =
+            if (com.weelo.logistics.BuildConfig.FF_BROADCAST_FLP_LOCATION) {
+                // Bridge the suspend API without changing upsert's signature.
+                // The cache hot-path is an AtomicReference read — no IPC —
+                // for 29 of every 30 seconds, so runBlocking here is in
+                // practice a nanosecond-scale call. The cold-path IPC also
+                // happens off the socket thread because the FLP task itself
+                // runs on its own executor.
+                kotlinx.coroutines.runBlocking {
+                    com.weelo.logistics.location.LocationCache.getFreshLocation(ctx)
+                }
+            } else {
+                legacyGetLastKnownLocation(ctx, trip.broadcastId)
             }
+                ?: return trip
 
+        // Staleness guard: reject GPS fixes older than 5 minutes. LocationCache
+        // emits fresh FLP fixes (typically <1 s old), so this is a belt-and-
+        // braces check for the legacy path.
+        if (System.currentTimeMillis() - driverLoc.time > MAX_LOCATION_AGE_MS) {
+            timber.log.Timber.d("📍 Skipping stale GPS fix (%d seconds old) for %s",
+                (System.currentTimeMillis() - driverLoc.time) / 1000, trip.broadcastId)
+            return trip
+        }
+
+        return try {
             val results = FloatArray(1)
             android.location.Location.distanceBetween(
                 driverLoc.latitude, driverLoc.longitude,
@@ -203,6 +217,34 @@ class BroadcastStateStore(
         } catch (e: Exception) {
             timber.log.Timber.w(e, "Failed to compute local pickup distance for %s", trip.broadcastId)
             trip
+        }
+    }
+
+    /**
+     * Legacy blocking LocationManager path preserved for rollback when
+     * [com.weelo.logistics.BuildConfig.FF_BROADCAST_FLP_LOCATION] is OFF.
+     * Kept private-in-class so no other consumer can accidentally revive it.
+     */
+    private fun legacyGetLastKnownLocation(
+        ctx: android.content.Context,
+        broadcastId: String
+    ): android.location.Location? {
+        return try {
+            val locationManager = ctx.getSystemService(
+                android.content.Context.LOCATION_SERVICE
+            ) as? android.location.LocationManager ?: return null
+            @Suppress("MissingPermission")
+            val driverLoc = locationManager.getLastKnownLocation(
+                android.location.LocationManager.GPS_PROVIDER
+            ) ?: locationManager.getLastKnownLocation(
+                android.location.LocationManager.NETWORK_PROVIDER
+            )
+            driverLoc
+        } catch (e: Exception) {
+            timber.log.Timber.w(
+                e, "Legacy LocationManager lookup failed for %s", broadcastId
+            )
+            null
         }
     }
 
