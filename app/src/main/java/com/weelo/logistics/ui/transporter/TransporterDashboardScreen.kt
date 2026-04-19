@@ -14,7 +14,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.remote.SocketIOService
-import com.weelo.logistics.data.remote.SocketConnectionState
+import com.weelo.logistics.data.remote.socket.SocketConnectionState
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.components.rememberScreenConfig
 import com.weelo.logistics.ui.components.responsiveHorizontalPadding

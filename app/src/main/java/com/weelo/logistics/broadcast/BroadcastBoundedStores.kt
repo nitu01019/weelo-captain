@@ -186,7 +186,7 @@ class BroadcastStateStore(
             } else {
                 legacyGetLastKnownLocation(ctx, trip.broadcastId)
             }
-                ?: return trip
+        if (driverLoc == null) return trip
 
         // Staleness guard: reject GPS fixes older than 5 minutes. LocationCache
         // emits fresh FLP fixes (typically <1 s old), so this is a belt-and-

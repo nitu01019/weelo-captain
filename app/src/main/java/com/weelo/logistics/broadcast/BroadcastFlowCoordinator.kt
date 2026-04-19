@@ -853,8 +853,34 @@ object BroadcastFlowCoordinator {
         }
     }
 
+    // F-C-10 — Priority ordering for pending drain (gated by
+    // BuildConfig.FF_BROADCAST_PRIORITY_DRAIN via BroadcastBuildFlags).
+    // Mirrors BroadcastOverlayManager.queuePriorityComparator semantics on
+    // the PendingBroadcast type: earliest expiry first, then higher fare,
+    // then higher eventVersion, then newer broadcastTime. Expiry is derived
+    // as receivedAtMs + STARTUP_BUFFER_TTL_MS to match the buffer TTL.
+    private val pendingPriorityComparator = Comparator<PendingBroadcast> { a, b ->
+        val aExpires = a.receivedAtMs + STARTUP_BUFFER_TTL_MS
+        val bExpires = b.receivedAtMs + STARTUP_BUFFER_TTL_MS
+        when {
+            aExpires != bExpires -> aExpires.compareTo(bExpires)
+            a.trip.farePerTruck != b.trip.farePerTruck ->
+                b.trip.farePerTruck.compareTo(a.trip.farePerTruck)
+            (a.trip.eventVersion ?: 0) != (b.trip.eventVersion ?: 0) ->
+                (b.trip.eventVersion ?: 0).compareTo(a.trip.eventVersion ?: 0)
+            else -> b.trip.broadcastTime.compareTo(a.trip.broadcastTime)
+        }
+    }
+
     private fun flushPendingBuffer() {
         val (valid, expired) = pendingQueue.drainValid()
+        // F-C-05 — When single-owner buffer flag is ON, also drain the
+        // CAS-owned [_pendingState] via the helper so it is emptied in
+        // lockstep with the legacy [pendingQueue]. The legacy call above is
+        // kept verbatim so the OFF code path is preserved bit-for-bit.
+        if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            drainPendingValid()
+        }
         expired.forEach {
             emitDrop(
                 id = it.trip.broadcastId,
@@ -863,7 +889,15 @@ object BroadcastFlowCoordinator {
             )
         }
 
-        valid.sortedBy { it.receivedAtMs }.forEach { pending ->
+        // F-C-10 — priority-sorted drain when the flag is ON; legacy FIFO
+        // preserved verbatim in the else branch. idx==0 is naturally the
+        // highest-priority item first under the priority path.
+        val orderedValid = if (BroadcastBuildFlags.priorityDrainEnabled) {
+            valid.sortedWith(pendingPriorityComparator)
+        } else {
+            valid.sortedBy { it.receivedAtMs }
+        }
+        orderedValid.forEach { pending ->
             enqueueIngress(
                 BroadcastIngressEnvelope(
                     source = BroadcastIngressSource.BUFFER,
@@ -883,6 +917,12 @@ object BroadcastFlowCoordinator {
 
     private fun dropPendingBufferForOffline() {
         val (valid, expired) = pendingQueue.drainValid()
+        // F-C-05 — Mirror the dual-drain from [flushPendingBuffer] so the
+        // single-owner [_pendingState] is also emptied when its flag is ON.
+        // Legacy pendingQueue.drainValid() call above is unchanged.
+        if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            drainPendingValid()
+        }
         valid.forEach {
             emitDrop(
                 id = it.trip.broadcastId,
@@ -1401,7 +1441,32 @@ object BroadcastFlowCoordinator {
         nowMs: Long = System.currentTimeMillis()
     ): Pair<List<PendingBroadcast>, List<PendingBroadcast>> {
         return if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
-            _pendingState.value.drainValid(nowMs)
+            // True CAS — replace with a fresh empty queue so StateFlow sees
+            // a new instance and emits. TTL check mirrors PendingBroadcastQueue
+            // semantics (receivedAtMs + ttlMs vs nowMs). Concurrent producers
+            // retry on conflict via StateFlow.update {}. Legacy else branch
+            // is preserved verbatim.
+            var valid: List<PendingBroadcast> = emptyList()
+            var expired: List<PendingBroadcast> = emptyList()
+            _pendingState.update { current ->
+                val snapshot = current.snapshotForRebuild()
+                val validAcc = mutableListOf<PendingBroadcast>()
+                val expiredAcc = mutableListOf<PendingBroadcast>()
+                snapshot.forEach { item ->
+                    if (nowMs - item.receivedAtMs <= STARTUP_BUFFER_TTL_MS) {
+                        validAcc += item
+                    } else {
+                        expiredAcc += item
+                    }
+                }
+                valid = validAcc
+                expired = expiredAcc
+                PendingBroadcastQueue(
+                    maxSize = PENDING_QUEUE_MAX,
+                    ttlMs = STARTUP_BUFFER_TTL_MS
+                )
+            }
+            valid to expired
         } else {
             pendingQueue.drainValid(nowMs)
         }
@@ -1409,7 +1474,20 @@ object BroadcastFlowCoordinator {
 
     private fun removePendingById(id: String) {
         if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
-            _pendingState.value.removeById(id)
+            // True CAS — rebuild a fresh queue that excludes [id] so the
+            // StateFlow emits a new instance to downstream collectors.
+            // Mirrors the rebuild pattern already used in enqueuePendingItem.
+            // Legacy else branch is preserved verbatim.
+            _pendingState.update { current ->
+                val next = PendingBroadcastQueue(
+                    maxSize = PENDING_QUEUE_MAX,
+                    ttlMs = STARTUP_BUFFER_TTL_MS
+                )
+                current.snapshotForRebuild()
+                    .filter { it.trip.broadcastId != id }
+                    .forEach { existing -> next.enqueue(existing) }
+                next
+            }
         } else {
             pendingQueue.removeById(id)
         }

@@ -24,7 +24,6 @@ import com.weelo.logistics.data.model.RoutePoint
 import com.weelo.logistics.data.model.RoutePointType
 import com.weelo.logistics.data.model.TripAssignedNotification
 import com.weelo.logistics.data.model.TripLocationInfo
-import com.weelo.logistics.BuildConfig
 import com.weelo.logistics.data.remote.BroadcastFallbackRoute
 import com.weelo.logistics.data.remote.RetrofitClient
 import com.weelo.logistics.data.remote.resolveBroadcastFallbackDecision

@@ -15,7 +15,7 @@ import com.weelo.logistics.data.model.BroadcastStatus
 import com.weelo.logistics.data.model.BroadcastTrip
 import com.weelo.logistics.data.remote.BroadcastDismissedNotification
 import com.weelo.logistics.data.remote.BroadcastNotification
-import com.weelo.logistics.data.remote.SocketConnectionState
+import com.weelo.logistics.data.remote.socket.SocketConnectionState
 import com.weelo.logistics.data.remote.SocketIOService
 import com.weelo.logistics.data.remote.TrucksRemainingNotification
 import com.weelo.logistics.data.repository.BroadcastFetchQueryMode

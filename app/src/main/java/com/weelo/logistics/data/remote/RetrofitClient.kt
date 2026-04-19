@@ -456,12 +456,10 @@ object RetrofitClient {
             }
             val body = response.body()
             val newAccessToken = body?.data?.accessToken
-            val newRefreshToken = body?.data?.refreshToken  // Save rotated refresh token (RFC 9700)
 
             if (response.isSuccessful && body?.success == true && !newAccessToken.isNullOrBlank()) {
                 securePrefs?.edit()?.apply {
                     putString(KEY_ACCESS_TOKEN, newAccessToken)
-                    newRefreshToken?.let { putString(KEY_REFRESH_TOKEN, it) }  // Persist rotated token
                     apply()
                 }
                 _authState.value = true
