@@ -1,5 +1,7 @@
 package com.weelo.logistics.data.model
 
+import com.weelo.logistics.telemetry.SchemaDriftTelemetry
+
 /**
  * BROADCAST SYSTEM DATA MODELS
  * ============================
@@ -677,7 +679,24 @@ enum class BroadcastStatus {
 }
 
 /**
- * AssignmentStatus - Status of transporter's assignment
+ * AssignmentStatus — Status of transporter's assignment
+ *
+ * F-C-79 — Backend `prisma/schema.prisma:102` canonical values:
+ *   `pending | driver_accepted | driver_declined | in_transit |
+ *    trip_started | completed | trip_completed | cancelled |
+ *    partial_delivery`
+ *
+ * Prior to this fix, the hand-rolled `when (raw.lowercase()) { ... else ->
+ * PENDING_DRIVER_RESPONSE }` in TripStatusManagementScreen silently collapsed
+ * `partial_delivery` back to `PENDING_DRIVER_RESPONSE` — a data-loss bug
+ * where the customer sees the trip as still-pending while the backend has
+ * already moved on (INDEX §F-C-79).
+ *
+ * The `PARTIAL_DELIVERY` branch surfaces the state to the customer; the
+ * `UNKNOWN` sentinel + canonical companion mapper (see the [Companion]
+ * block below) provides a single parser surface for all consumers and emits
+ * schema-drift telemetry so future backend enum additions are observable
+ * before they surface as bugs.
  */
 enum class AssignmentStatus {
     PENDING_DRIVER_RESPONSE,    // Waiting for driver to accept/decline
@@ -685,7 +704,42 @@ enum class AssignmentStatus {
     DRIVER_DECLINED,            // Driver declined, needs reassignment
     TRIP_STARTED,               // Driver started the trip
     TRIP_COMPLETED,             // Trip finished successfully
-    CANCELLED                   // Assignment cancelled
+    PARTIAL_DELIVERY,           // F-C-79 — some goods delivered, trip continues
+    CANCELLED,                  // Assignment cancelled
+    UNKNOWN;                    // Unknown/unrecognised backend value
+
+    companion object {
+        private const val ENUM_NAME: String = "AssignmentStatus"
+
+        /**
+         * Canonical captain-side parser. All call-sites previously doing
+         * `when (raw.lowercase()) { ... else -> PENDING_DRIVER_RESPONSE }`
+         * must route here — graceful degradation now returns UNKNOWN
+         * (NOT PENDING_DRIVER_RESPONSE, which would silently block the
+         * workflow). Case-insensitive, null/blank-safe, emits
+         * schema-drift telemetry on the UNKNOWN path.
+         */
+        @JvmStatic
+        fun fromBackendString(raw: String?): AssignmentStatus {
+            if (raw.isNullOrBlank()) {
+                SchemaDriftTelemetry.record(ENUM_NAME, raw, source = "AssignmentStatus.fromBackendString")
+                return UNKNOWN
+            }
+            return when (raw.lowercase()) {
+                "pending", "pending_driver_response" -> PENDING_DRIVER_RESPONSE
+                "driver_accepted", "accepted" -> DRIVER_ACCEPTED
+                "driver_declined", "declined" -> DRIVER_DECLINED
+                "in_transit", "in_progress", "trip_started" -> TRIP_STARTED
+                "completed", "trip_completed" -> TRIP_COMPLETED
+                "partial_delivery" -> PARTIAL_DELIVERY
+                "cancelled", "canceled" -> CANCELLED
+                else -> {
+                    SchemaDriftTelemetry.record(ENUM_NAME, raw, source = "AssignmentStatus.fromBackendString")
+                    UNKNOWN
+                }
+            }
+        }
+    }
 }
 
 /**

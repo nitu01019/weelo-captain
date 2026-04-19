@@ -1,5 +1,6 @@
 package com.weelo.logistics.ui.transporter
 
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -53,6 +54,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.weelo.logistics.BuildConfig
 import com.weelo.logistics.broadcast.BroadcastOverlayContentNew
 import com.weelo.logistics.broadcast.BroadcastOverlayManager
 import com.weelo.logistics.broadcast.BroadcastStage
@@ -62,10 +64,12 @@ import com.weelo.logistics.broadcast.BroadcastStateSync
 import com.weelo.logistics.broadcast.BroadcastUiTiming
 import com.weelo.logistics.broadcast.TruckHoldState
 import com.weelo.logistics.broadcast.TruckHoldStatus
+import com.weelo.logistics.broadcast.work.HoldReleaseWorker
 import com.weelo.logistics.core.notification.BroadcastSoundService
 import com.weelo.logistics.data.model.BroadcastTrip
 import com.weelo.logistics.data.repository.BroadcastRepository
 import com.weelo.logistics.data.repository.BroadcastResult
+import com.weelo.logistics.ui.ServerDeadlineTimer
 import com.weelo.logistics.ui.components.EmptyStateArtwork
 import com.weelo.logistics.ui.components.EmptyStateHost
 import com.weelo.logistics.ui.components.ProvideShimmerBrush
@@ -250,17 +254,42 @@ private fun BroadcastListCard(
     val isSubmitEnabled = acceptedTrucks.isNotEmpty()
     val hasAnyHolding = truckHoldStates.values.any { it.isHolding }
 
-    // ── Per-card countdown ──
-    val initialRemaining = remember(broadcast.broadcastId) {
-        val expiryMs = broadcast.expiryTime ?: (System.currentTimeMillis() + 120_000L)
-        ((expiryMs - System.currentTimeMillis()) / 1000).toInt().coerceAtLeast(0)
+    // ── Per-card countdown (F-C-27 / W1-3 — server-deadline recompute every
+    //    tick, doze-safe via SystemClock.elapsedRealtime). Pattern mirrors the
+    //    other 3 captain timer screens (VehicleHoldConfirmScreen,
+    //    DriverAssignmentScreen, DriverTripRequestOverlay) migrated in phase-3
+    //    commit a38862c. Replaces the old `remainingSeconds--` local decrement
+    //    loop that silently under-counted during Android doze. ──
+    val deadlineElapsedMs = remember(broadcast.broadcastId, broadcast.expiryTime) {
+        // F-C-81 — fallback derived from BuildConfig.ORDER_BASE_TIMEOUT_SECONDS
+        // instead of the magic `120_000L`. Same value today (120s), but sourced
+        // from the build flag so a backend env bump propagates without code edits.
+        val fallbackExpiryMs = System.currentTimeMillis() +
+            (BuildConfig.ORDER_BASE_TIMEOUT_SECONDS * 1000L)
+        val expiryMs = broadcast.expiryTime ?: fallbackExpiryMs
+        val nowWall = System.currentTimeMillis()
+        val nowElapsed = SystemClock.elapsedRealtime()
+        ServerDeadlineTimer.deadlineElapsedFromServerExpiry(
+            expiresAtWallMs = expiryMs,
+            nowWallMs = nowWall,
+            nowElapsedMs = nowElapsed
+        )
+    }
+    val initialRemaining = remember(broadcast.broadcastId, deadlineElapsedMs) {
+        ServerDeadlineTimer.remainingSecondsFromDeadline(
+            deadlineElapsedMs = deadlineElapsedMs,
+            nowElapsedMs = SystemClock.elapsedRealtime()
+        )
     }
     var remainingSeconds by remember(broadcast.broadcastId) { mutableIntStateOf(initialRemaining) }
 
-    LaunchedEffect(broadcast.broadcastId) {
+    LaunchedEffect(broadcast.broadcastId, deadlineElapsedMs) {
         while (remainingSeconds > 0) {
             delay(1000L)
-            remainingSeconds--
+            remainingSeconds = ServerDeadlineTimer.remainingSecondsFromDeadline(
+                deadlineElapsedMs = deadlineElapsedMs,
+                nowElapsedMs = SystemClock.elapsedRealtime()
+            )
         }
     }
 
@@ -357,11 +386,21 @@ private fun BroadcastListCard(
     // ── DISMISS: Removes from this screen's list AND from the Overlay.
     //    Request Screen ignore = "I don't want this order" → remove everywhere.
     fun handleDismiss() {
-        // Release any Redis holds this card had
-        scope.launch {
-            truckHoldStates.values
-                .filter { it.holdId != null && it.status == TruckHoldStatus.ACCEPTED }
-                .forEach { broadcastRepository.releaseHold(it.holdId!!) }
+        // Release any Redis holds this card had.
+        // F-C-22: flag-gated WorkManager-backed release so the DELETE survives
+        // a process kill. Legacy `scope.launch` path remains under `else` for
+        // instant rollback. Flag defaults OFF per NO-DEPLOY.
+        val holdsToRelease = truckHoldStates.values
+            .filter { it.holdId != null && it.status == TruckHoldStatus.ACCEPTED }
+
+        if (BuildConfig.FF_HOLD_RELEASE_WORKMANAGER) {
+            holdsToRelease.forEach { state ->
+                HoldReleaseWorker.enqueue(context, state.holdId!!)
+            }
+        } else {
+            scope.launch {
+                holdsToRelease.forEach { broadcastRepository.releaseHold(it.holdId!!) }
+            }
         }
 
         // Propagate to Overlay — remove from overlay queue too

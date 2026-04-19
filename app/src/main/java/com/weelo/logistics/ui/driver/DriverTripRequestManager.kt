@@ -1,5 +1,6 @@
 package com.weelo.logistics.ui.driver
 
+import com.weelo.logistics.BuildConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -79,6 +80,16 @@ object DriverTripRequestManager {
 
     /** Delay between showing requests (ms) */
     private const val REQUEST_DELAY_MS = 500L
+
+    /**
+     * F-C-44 — TTL for dismissed requests (5 minutes = 300_000 ms).
+     *
+     * Dismissed entries remain in the queue for recovery via
+     * [getDismissedRequests] up to this age. Older entries are pruned during
+     * [completeCurrentRequest] so the queue never grows unbounded during a
+     * multi-hour shift.
+     */
+    private const val DISMISSED_TTL_MS = 5 * 60 * 1000L  // 300_000 ms
 
     // =========================================================================
     // ACTIONS
@@ -249,6 +260,21 @@ object DriverTripRequestManager {
      *
      * Private function - called by all action methods
      * Thread-safe: Must be called within mutex.withLock
+     *
+     * F-C-44 — Idempotent dismiss + TTL pruning:
+     *   Before this fix the `onDismiss` path put the current request back
+     *   into `_requestQueue` with `dismissedAt = now` AND this function
+     *   picked the next request via `removeFirst()`. That immediately re-
+     *   surfaced the just-dismissed request, producing an infinite loop on
+     *   scrim-tap.
+     *
+     *   The fix under FF_DRIVER_IDEMPOTENT_DISMISS:
+     *     1. When walking forward, skip entries where `dismissedAt != null`.
+     *     2. Prune entries older than DISMISSED_TTL_MS so the queue never
+     *        grows unbounded across a multi-hour shift.
+     *
+     *   When FF is OFF the legacy `removeFirst()` behavior is preserved for
+     *   rollback parity.
      */
     private suspend fun completeCurrentRequest() {
         _currentRequest.value = null
@@ -257,14 +283,43 @@ object DriverTripRequestManager {
         // Brief delay before showing next request (for visual separation)
         delay(REQUEST_DELAY_MS)
 
-        // Show next request in queue
-        val queue = ArrayDeque(_requestQueue.value)
-        if (queue.isNotEmpty()) {
-            val next = queue.removeFirst()
-            _requestQueue.value = queue
-            _currentRequest.value = next
-            _isOverlayVisible.value = true
-            Timber.tag(TAG).i("Showing next request from queue: ${next.assignmentId}")
+        if (BuildConfig.FF_DRIVER_IDEMPOTENT_DISMISS) {
+            // F-C-44: prune expired dismissed entries first.
+            val now = System.currentTimeMillis()
+            val pruned = ArrayDeque(
+                _requestQueue.value.filterNot { notif ->
+                    notif.dismissedAt != null && (now - notif.dismissedAt) > DISMISSED_TTL_MS
+                }
+            )
+            // Find the next ACTIVE (non-dismissed) entry to surface.
+            val iterator = pruned.iterator()
+            var next: TripAssignedNotification? = null
+            while (iterator.hasNext()) {
+                val candidate = iterator.next()
+                if (candidate.dismissedAt == null) {
+                    iterator.remove()
+                    next = candidate
+                    break
+                }
+            }
+            _requestQueue.value = pruned
+            if (next != null) {
+                _currentRequest.value = next
+                _isOverlayVisible.value = true
+                Timber.tag(TAG).i("Showing next active request: ${next.assignmentId}")
+            } else {
+                Timber.tag(TAG).v("No active requests in queue (${pruned.size} dismissed retained)")
+            }
+        } else {
+            // Legacy path — shows next request regardless of dismissedAt.
+            val queue = ArrayDeque(_requestQueue.value)
+            if (queue.isNotEmpty()) {
+                val next = queue.removeFirst()
+                _requestQueue.value = queue
+                _currentRequest.value = next
+                _isOverlayVisible.value = true
+                Timber.tag(TAG).i("Showing next request from queue: ${next.assignmentId}")
+            }
         }
     }
 

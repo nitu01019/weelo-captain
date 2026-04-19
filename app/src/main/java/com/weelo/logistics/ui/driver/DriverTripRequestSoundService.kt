@@ -8,7 +8,19 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import com.weelo.logistics.BuildConfig
 import timber.log.Timber
+
+// =============================================================================
+// F-C-33 — Looping alarm constants
+// =============================================================================
+// VibrationEffect.createWaveform(pattern, repeat):
+//   -1 -> play pattern once and stop (legacy behavior)
+//    0 -> loop from index 0 of the pattern indefinitely (fixed behavior)
+// The looping index is 0 so the full pattern (beep-pause-beep) repeats
+// smoothly. DisposableEffect in the overlay terminates the alarm.
+private const val VIBRATION_PLAY_ONCE_INDEX = -1
+private const val VIBRATION_LOOP_INDEX = 0
 
 /**
  * =============================================================================
@@ -68,6 +80,9 @@ object DriverTripRequestSoundService {
                 )
 
                 // Create and configure MediaPlayer
+                // F-C-33: when FF_DRIVER_ALARM_LOOPING is ON the alarm loops
+                // until the DisposableEffect in DriverTripRequestOverlay calls
+                // stop(). Default OFF preserves the legacy one-shot behavior.
                 mediaPlayer = MediaPlayer().apply {
                     setAudioAttributes(
                         AudioAttributes.Builder()
@@ -77,7 +92,11 @@ object DriverTripRequestSoundService {
                     )
                     setDataSource(context, soundUri)
                     setVolume(1.0f, 1.0f)
-                    isLooping = false
+                    if (BuildConfig.FF_DRIVER_ALARM_LOOPING) {
+                        isLooping = true
+                    } else {
+                        isLooping = false
+                    }
                     prepareAsync()
                     setOnCompletionListener {
                         Timber.tag(TAG).i("Trip request sound completed")
@@ -145,15 +164,23 @@ object DriverTripRequestSoundService {
                 // Pattern: beep-pause-beep-pause-beep (200ms each, 100ms pauses)
                 val pattern = longArrayOf(0, 200, 100, 200, 100)
 
+                // F-C-33: repeat-index 0 -> loop pattern from the start when
+                // FF_DRIVER_ALARM_LOOPING is ON; -1 -> play once (legacy).
+                val repeatIndex = if (BuildConfig.FF_DRIVER_ALARM_LOOPING) {
+                    VIBRATION_LOOP_INDEX
+                } else {
+                    VIBRATION_PLAY_ONCE_INDEX
+                }
+
                 // Vibrate based on API level
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    val effect = VibrationEffect.createWaveform(pattern, -1)
+                    val effect = VibrationEffect.createWaveform(pattern, repeatIndex)
                     vibrator.vibrate(effect)
                 } else {
                     @Suppress("DEPRECATION")
-                    vibrator.vibrate(pattern, -1)
+                    vibrator.vibrate(pattern, repeatIndex)
                 }
-                Timber.tag(TAG).i("📳 Vibration played")
+                Timber.tag(TAG).i("📳 Vibration played (repeat=$repeatIndex)")
             }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Failed to play vibration")

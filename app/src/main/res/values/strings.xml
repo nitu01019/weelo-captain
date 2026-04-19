@@ -473,4 +473,36 @@
     <string name="auth_otp_verified_title">OTP verified</string>
     <string name="auth_otp_waiting_sms">Waiting for OTP SMS...</string>
     <string name="auth_otp_footer_sms_consent">By continuing, you agree to receive OTP and important communications such as booking updates via SMS.</string>
+
+    <!-- PR #3 — VehicleHoldConfirmScreen -->
+    <string name="failed_hold_vehicles">Failed to hold vehicles</string>
+    <string name="network_error_short">Network error</string>
+    <string name="time_expired_released">Time expired. Hold released.</string>
+    <string name="hold_confirmed_assign">Hold confirmed. Proceeding to driver assignment\u2026</string>
+    <string name="go_back">Go back</string>
+    <string name="vehicles_reserved">Vehicles reserved</string>
+    <string name="seconds_label">seconds</string>
+    <string name="confirm_within_time">Confirm within the time limit</string>
+
+    <!-- PR #3 — DriverTripRequestOverlay -->
+    <string name="new_trip_request">New trip request</string>
+    <string name="accepting_trip">Accepting trip\u2026</string>
+    <string name="declining_trip">Declining trip\u2026</string>
+    <string name="processing">Processing\u2026</string>
+    <string name="trip_earnings">TRIP EARNINGS</string>
+    <string name="route_details">Route details</string>
+    <string name="navigate_to_pickup">Navigate to pickup</string>
+    <string name="customer_label">Customer</string>
+    <string name="assigned_vehicle">Assigned vehicle</string>
+    <string name="call_customer_dialog_title">Call customer</string>
+    <string name="call_customer_dialog_message">Call %1$s at %2$s?</string>
+    <string name="call_button">Call</string>
+    <string name="accept_label">ACCEPT</string>
+    <string name="decline_label">DECLINE</string>
+    <string name="swipe_instructions">Swipe right to accept, left to decline</string>
+
+    <!-- PR #3 — CustomerRatingBadge / TripETADisplay -->
+    <string name="customer_rating">Customer rating</string>
+    <string name="est_trip_duration">Estimated trip duration</string>
+    <string name="eta_approx_format">\u2248 %1$d min</string>
 </resources>

@@ -56,15 +56,36 @@
 
         <!-- Broadcast Incoming Activity - Full-screen intent for background broadcasts -->
         <!-- Shows broadcast offer on lock screen, like an incoming phone call -->
+        <!--
+            F-C-04 — Dual-theme rollout via activity-alias.
+            - The base <activity> owns the concrete class and default opaque
+              theme (legacy path). It is enabled while
+              FF_BROADCAST_TRANSLUCENT_THEME is OFF.
+            - The <activity-alias> below points at the same class but applies
+              the translucent overlay theme; it is enabled only when the flag
+              flips ON (manifest placeholder fed from build.gradle.kts).
+            Exactly one of the two is enabled at any given time — callers
+            start the alias name when the flag is ON, and the concrete class
+            name when OFF. The BroadcastFullScreenNotifier chooses at runtime.
+        -->
         <activity
             android:name=".broadcast.BroadcastIncomingActivity"
             android:exported="false"
+            android:enabled="${broadcastLegacyThemeEnabled}"
             android:showOnLockScreen="true"
             android:turnScreenOn="true"
             android:theme="@style/Theme.WeeloLogistics"
             android:taskAffinity=""
             android:excludeFromRecents="true"
             android:launchMode="singleInstance" />
+
+        <!-- F-C-04 — Translucent-theme alias (FF_BROADCAST_TRANSLUCENT_THEME ON). -->
+        <activity-alias
+            android:name=".broadcast.BroadcastIncomingActivityOverlay"
+            android:enabled="${broadcastOverlayThemeEnabled}"
+            android:exported="false"
+            android:targetActivity=".broadcast.BroadcastIncomingActivity"
+            android:theme="@style/Theme.WeeloLogistics.BroadcastOverlay" />
         
         <!-- GPS Tracking Service - Real-time location for trips -->
         <service

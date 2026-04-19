@@ -45,6 +45,8 @@ import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.LatLngBounds
 import com.google.maps.android.compose.*
+import com.weelo.logistics.BuildConfig
+import com.weelo.logistics.broadcast.work.HoldReleaseWorker
 import com.weelo.logistics.core.notification.BroadcastSoundService
 import com.weelo.logistics.data.model.BroadcastTrip
 import com.weelo.logistics.data.model.RequestedVehicle
@@ -163,13 +165,25 @@ fun BroadcastOverlayScreen(
     val isSubmitEnabled = acceptedTrucks.isNotEmpty()
     val hasAnyHolding = truckHoldStates.values.any { it.isHolding }
     
-    // Play sound when new broadcast appears
-    DisposableEffect(currentBroadcast?.broadcastId) {
-        currentBroadcast?.let { broadcast ->
-            soundService.playLoopingSound(isUrgent = broadcast.isUrgent)
-        }
-        onDispose {
-            soundService.stopSound()
+    // F-C-06 — Audio lifecycle.
+    //
+    // When BuildConfig.FF_BROADCAST_AUDIO_CONTROLLER is ON, the app-scoped
+    // BroadcastAudioController (installed in WeeloApp.onCreate) owns both
+    // play and stop — stop fires synchronously on the logical-dismiss edge
+    // rather than after AnimatedVisibility's 150 ms exit animation, so sound
+    // no longer plays for ~150 ms past logical dismiss on FCM-cancel.
+    //
+    // When the flag is OFF (default), the legacy DisposableEffect path stays
+    // live to guarantee zero behavior drift on canary rollback.
+    if (!com.weelo.logistics.BuildConfig.FF_BROADCAST_AUDIO_CONTROLLER) {
+        // Play sound when new broadcast appears
+        DisposableEffect(currentBroadcast?.broadcastId) {
+            currentBroadcast?.let { broadcast ->
+                soundService.playLoopingSound(isUrgent = broadcast.isUrgent)
+            }
+            onDispose {
+                soundService.stopSound()
+            }
         }
     }
 
@@ -386,17 +400,28 @@ fun BroadcastOverlayScreen(
     
     // =========================================================================
     // DISMISS - Release all holds
+    // F-C-22: flag-gated WorkManager release so the DELETE survives process
+    // kills (Redis hold otherwise stays for server TTL 180s and blocks other
+    // transporters). Legacy `scope.launch` remains under `else` for rollback.
     // =========================================================================
     fun handleDismiss() {
-        scope.launch {
-            truckHoldStates.values
-                .filter { it.holdId != null && it.status == TruckHoldStatus.ACCEPTED }
-                .forEach { state ->
+        val holdsToRelease = truckHoldStates.values
+            .filter { it.holdId != null && it.status == TruckHoldStatus.ACCEPTED }
+
+        if (BuildConfig.FF_HOLD_RELEASE_WORKMANAGER) {
+            holdsToRelease.forEach { state ->
+                timber.log.Timber.i("🔓 Enqueue hold release: ${state.holdId}")
+                HoldReleaseWorker.enqueue(context, state.holdId!!)
+            }
+        } else {
+            scope.launch {
+                holdsToRelease.forEach { state ->
                     timber.log.Timber.i("🔓 Releasing: ${state.holdId}")
                     broadcastRepository.releaseHold(state.holdId!!)
                 }
+            }
         }
-        
+
         currentBroadcast?.let { broadcast ->
             BroadcastOverlayManager.rejectCurrentBroadcast()
             onReject(broadcast)
@@ -1111,9 +1136,11 @@ internal fun BroadcastOverlayContentNew(
                     }
                     
                     // Timer - Circular progress ring that depletes
+                    // F-C-81 — fallback sourced from BuildConfig.ORDER_BASE_TIMEOUT_SECONDS
+                    // so we never drift from backend env `ORDER_BASE_TIMEOUT_SECONDS=120`.
                     val totalTimeSeconds = broadcast.expiryTime?.let {
                         ((it - broadcast.broadcastTime) / 1000).toInt().coerceAtLeast(1)
-                    } ?: 120
+                    } ?: BuildConfig.ORDER_BASE_TIMEOUT_SECONDS
                     val timerProgress = (remainingSeconds.toFloat() / totalTimeSeconds.toFloat()).coerceIn(0f, 1f)
                     val timerColor = if (remainingSeconds <= 15) BroadcastDesignTokens.TimerRingUrgent else BroadcastDesignTokens.TimerRingActive
                     val trackColor = BroadcastDesignTokens.TimerRingTrack

@@ -6,6 +6,7 @@ import com.google.firebase.messaging.FirebaseMessaging
 import com.weelo.logistics.broadcast.BroadcastStage
 import com.weelo.logistics.broadcast.BroadcastStatus
 import com.weelo.logistics.broadcast.BroadcastTelemetry
+import com.weelo.logistics.broadcast.BroadcastAudioController
 import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
 import com.weelo.logistics.broadcast.BroadcastFlowCoordinator
 import com.weelo.logistics.broadcast.BroadcastOverlayManager
@@ -123,6 +124,13 @@ class WeeloApp : Application() {
         AvailabilityManager.getInstance(this)
         BroadcastFlowCoordinator.initialize(this)
         BroadcastFlowCoordinator.start()
+
+        // F-C-06 — app-scoped BroadcastAudioController (default OFF).
+        // When the flag is ON, the controller owns play/stop lifecycle and
+        // the legacy DisposableEffect in BroadcastOverlayScreen short-circuits.
+        if (BuildConfig.FF_BROADCAST_AUDIO_CONTROLLER) {
+            BroadcastAudioController.init(this)
+        }
         
         // Initialize HeartbeatManager for geolocation tracking
         HeartbeatManager.initialize(this)

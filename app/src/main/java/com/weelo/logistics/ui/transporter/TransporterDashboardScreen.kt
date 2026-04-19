@@ -14,7 +14,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.weelo.logistics.data.remote.SocketIOService
-import com.weelo.logistics.data.remote.SocketConnectionState
+import com.weelo.logistics.data.remote.socket.SocketConnectionState
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.components.rememberScreenConfig
 import com.weelo.logistics.ui.components.responsiveHorizontalPadding
@@ -95,6 +95,13 @@ fun TransporterDashboardScreen(
         }
     )
     val dashboardUiState by dashboardViewModel.uiState.collectAsStateWithLifecycle()
+
+    // =========================================================================
+    // CACHED DRAWER PROFILE — Same pattern as DriverDashboardScreen (lines 103-117)
+    // Holds the last known profile to prevent "Not logged in" flash during
+    // state transitions. Only updates when a non-null profile arrives.
+    // =========================================================================
+    var cachedDrawerProfile by remember { mutableStateOf<DrawerUserProfile?>(null) }
 
     // WebSocket connection state for realtime badges/hints (connection lifecycle owned by app/auth)
     val socketState by SocketIOService.connectionState.collectAsStateWithLifecycle()
@@ -192,22 +199,26 @@ fun TransporterDashboardScreen(
     val isBackendConnected = contentState?.isBackendConnected ?: true
     val showFirstRunSetupFromState = contentState?.showFirstRunSetup == true
     
-    // OPTIMIZATION: Use derivedStateOf to prevent unnecessary recomposition when userProfile changes
-    val drawerProfile by remember {
-        derivedStateOf {
-            userProfile?.let {
-                DrawerUserProfile(
-                    id = it.id,
-                    phone = it.phone,
-                    name = it.name ?: "",
-                    role = it.role,
-                    email = it.email,
-                    businessName = it.getBusinessDisplayName(),
-                    isVerified = it.isVerified
-                )
-            }
+    // CACHED DRAWER PROFILE — Prevents "Not logged in" flash
+    // Same pattern as DriverDashboardScreen: hold last known profile,
+    // fall back to cache when current state has null profile.
+    val latestDrawerProfile = userProfile?.let {
+        DrawerUserProfile(
+            id = it.id,
+            phone = it.phone,
+            name = it.name ?: "",
+            role = it.role,
+            email = it.email,
+            businessName = it.getBusinessDisplayName(),
+            isVerified = it.isVerified
+        )
+    }
+    LaunchedEffect(latestDrawerProfile) {
+        if (latestDrawerProfile != null) {
+            cachedDrawerProfile = latestDrawerProfile
         }
     }
+    val drawerProfile = latestDrawerProfile ?: cachedDrawerProfile
     
     // OPTIMIZATION: Remember menu items to prevent recreation on every recomposition
     // Extract strings outside remember {} since stringResource is @Composable

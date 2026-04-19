@@ -3,11 +3,15 @@ package com.weelo.logistics.ui.driver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import com.weelo.logistics.BuildConfig
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,11 +44,16 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.delay
+import androidx.compose.ui.res.stringResource
+import com.weelo.logistics.R
 import timber.log.Timber
 import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 import com.weelo.logistics.data.model.TripAssignedNotification
 import com.weelo.logistics.data.model.TripLocationInfo
+import com.weelo.logistics.ui.ServerDeadlineTimer
+import com.weelo.logistics.ui.driver.components.CustomerRatingBadge
+import com.weelo.logistics.ui.driver.components.TripETADisplay
 
 // =============================================================================
 // CONSTANTS
@@ -74,7 +83,55 @@ fun DriverTripRequestOverlay(
     val context = LocalContext.current
     val density = LocalDensity.current
 
-    var remainingSeconds by remember { mutableStateOf(notification.remainingSeconds) }
+    // F-C-27: pin a monotonic deadline from the server-sent expiresAt, then
+    // recompute remainingSeconds every tick. Doze-safe (SystemClock.elapsedRealtime
+    // keeps ticking in sleep) and immune to wall-clock jumps.
+    // If expiresAt is missing/unparseable, fall back to the DTO's remainingSeconds
+    // anchored at screen-entry elapsed-realtime (same semantics as before).
+    //
+    // F-C-31: the progress ring denominator must be STABLE for the whole
+    // assignment. Before this fix we read `notification.remainingSeconds` —
+    // a live getter that re-derives its value from System.currentTimeMillis()
+    // every call — inside `remember { ... }` with NO key. The remember block
+    // captured the getter at entry time, but the getter's VALUE decayed as
+    // real time ticked, producing an inverted progress ring. The fix is to
+    // `remember(assignmentId)` and prefer the stable DTO field
+    // `driverAcceptTimeoutSeconds` (server-sourced, never decays) with
+    // `BuildConfig.DRIVER_ACCEPT_TIMEOUT_SECONDS` as the last-resort fallback.
+    //
+    // The new path is gated by `BuildConfig.FF_DRIVER_TOTAL_SECONDS_FROM_DTO`
+    // so a rollback is a single flag flip.
+    val totalSeconds = if (BuildConfig.FF_DRIVER_TOTAL_SECONDS_FROM_DTO) {
+        remember(notification.assignmentId) {
+            notification.driverAcceptTimeoutSeconds
+                ?: BuildConfig.DRIVER_ACCEPT_TIMEOUT_SECONDS
+        }
+    } else {
+        remember(notification.assignmentId) { notification.remainingSeconds }
+    }
+    val deadlineElapsedMs = remember(notification.assignmentId) {
+        val nowElapsed = SystemClock.elapsedRealtime()
+        val expiresAtWall = notification.expiresAt?.let {
+            runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull()
+        }
+        if (expiresAtWall != null) {
+            ServerDeadlineTimer.deadlineElapsedFromServerExpiry(
+                expiresAtWallMs = expiresAtWall,
+                nowWallMs = System.currentTimeMillis(),
+                nowElapsedMs = nowElapsed
+            )
+        } else {
+            nowElapsed + (notification.remainingSeconds * 1000L)
+        }
+    }
+    var remainingSeconds by remember(notification.assignmentId) {
+        mutableStateOf(
+            ServerDeadlineTimer.remainingSecondsFromDeadline(
+                deadlineElapsedMs = deadlineElapsedMs,
+                nowElapsedMs = SystemClock.elapsedRealtime()
+            )
+        )
+    }
     var swipeOffset by remember { mutableStateOf(0f) }
     var isAccepting by remember { mutableStateOf(false) }
     var isDeclining by remember { mutableStateOf(false) }
@@ -89,28 +146,80 @@ fun DriverTripRequestOverlay(
 
     val swipeThresholdPx = with(density) { SWIPE_THRESHOLD_DP.dp.toPx() }
 
-    // Countdown timer
-    // Industry Standard: Grab Mobile/Google - State-aware timer
-    // Includes isSwipeComplete in key -> restarts when swipe completes -> early return blocks timer
-    LaunchedEffect(notification.assignmentId, isProcessing, isSwipeComplete) {
-        // Block immediately if processing started OR swipe completed
-        if (isProcessing || isSwipeComplete) return@LaunchedEffect
-
-        while (remainingSeconds > 0) {
-            delay(COUNTDOWN_INTERVAL)
-            remainingSeconds--
-            Timber.tag("Overlay").i("⏰ Countdown: ${remainingSeconds}s")
+    // Countdown timer (F-C-27 — server-deadline recompute every tick, doze-safe)
+    //
+    // F-C-32: the prior implementation keyed the effect on
+    // `(assignmentId, isProcessing, isSwipeComplete)`. Every gate flip
+    // restarted the coroutine, which caused:
+    //   - The time-up auto-decline firing twice when isProcessing flipped
+    //     between "about to accept" and "accepting" within the same tick.
+    //   - A dropped tick each time the user partially dragged then released
+    //     (isSwipeComplete ticked in/out).
+    //
+    // The fix is a single-key effect (assignmentId) plus `rememberUpdatedState`
+    // for the gates — reads see the latest value each loop iteration without
+    // restarting. The decline on timeout runs inside `withContext(NonCancellable)`
+    // so an eager composable dispose cannot cancel the API call.
+    //
+    // Gated behind `BuildConfig.FF_DRIVER_TIMER_STABLE_KEY` (default OFF).
+    val processingRef = rememberUpdatedState(isProcessing)
+    val swipeCompleteRef = rememberUpdatedState(isSwipeComplete)
+    if (BuildConfig.FF_DRIVER_TIMER_STABLE_KEY) {
+        LaunchedEffect(notification.assignmentId) {
+            while (remainingSeconds > 0) {
+                // Latest gate values, read without restarting the effect.
+                if (processingRef.value || swipeCompleteRef.value) return@LaunchedEffect
+                delay(COUNTDOWN_INTERVAL)
+                remainingSeconds = ServerDeadlineTimer.remainingSecondsFromDeadline(
+                    deadlineElapsedMs = deadlineElapsedMs,
+                    nowElapsedMs = SystemClock.elapsedRealtime()
+                )
+                Timber.tag("Overlay").i("⏰ Countdown: ${remainingSeconds}s")
+            }
+            if (remainingSeconds <= 0) {
+                Timber.tag("Overlay").i("⏰ Timeout, declining: ${notification.assignmentId}")
+                withContext(NonCancellable) {
+                    onDecline(notification.assignmentId)
+                }
+            }
         }
+    } else {
+        // Legacy path — retained for flag-off rollback. Same behavior as before
+        // the F-C-32 fix (3-key effect, no NonCancellable wrapper).
+        LaunchedEffect(notification.assignmentId, isProcessing, isSwipeComplete) {
+            if (isProcessing || isSwipeComplete) return@LaunchedEffect
 
-        if (remainingSeconds <= 0) {
-            Timber.tag("Overlay").i("⏰ Timeout, declining: ${notification.assignmentId}")
-            onDecline(notification.assignmentId)
+            while (remainingSeconds > 0) {
+                delay(COUNTDOWN_INTERVAL)
+                remainingSeconds = ServerDeadlineTimer.remainingSecondsFromDeadline(
+                    deadlineElapsedMs = deadlineElapsedMs,
+                    nowElapsedMs = SystemClock.elapsedRealtime()
+                )
+                Timber.tag("Overlay").i("⏰ Countdown: ${remainingSeconds}s")
+            }
+
+            if (remainingSeconds <= 0) {
+                Timber.tag("Overlay").i("⏰ Timeout, declining: ${notification.assignmentId}")
+                onDecline(notification.assignmentId)
+            }
         }
     }
 
     // Play sound on appearance
     LaunchedEffect(Unit) {
         DriverTripRequestSoundService.playTripRequestSound(context)
+    }
+
+    // F-C-33: looping alarm requires deterministic teardown. When the
+    // overlay leaves the composition (dismissal, navigation, accept/decline
+    // complete), stop the alarm so it does not continue playing silently.
+    // Before this effect landed the one-shot alarm self-terminated, so a
+    // DisposableEffect was unnecessary; with the new loop-enabled service
+    // it is mandatory to avoid runaway audio after the overlay closes.
+    DisposableEffect(Unit) {
+        onDispose {
+            DriverTripRequestSoundService.stop()
+        }
     }
 
     // Handle swipe completion - only if not already processing
@@ -153,6 +262,7 @@ fun DriverTripRequestOverlay(
         ) {
             SwipeableCard(
                 notification = notification,
+                totalSeconds = totalSeconds,
                 remainingSeconds = remainingSeconds,
                 swipeOffset = swipeOffset,
                 onSwipeChange = { newOffset -> if (!isProcessing) swipeOffset = newOffset },
@@ -175,6 +285,7 @@ fun DriverTripRequestOverlay(
 @Composable
 private fun SwipeableCard(
     notification: TripAssignedNotification,
+    totalSeconds: Int,
     remainingSeconds: Int,
     swipeOffset: Float,
     onSwipeChange: (Float) -> Unit,
@@ -244,7 +355,7 @@ private fun SwipeableCard(
                     .padding(20.dp)
                     .then(if (isProcessing) Modifier.alpha(0.3f) else Modifier)
             ) {
-                HeaderRow(remainingSeconds, countdownColor, scale)
+                HeaderRow(totalSeconds, remainingSeconds, countdownColor, scale)
 
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -262,6 +373,15 @@ private fun SwipeableCard(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 DetailsCard(notification)
+
+                // Customer rating + Trip ETA badges
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CustomerRatingBadge(rating = notification.customerRating)
+                    TripETADisplay(distanceKm = notification.distanceKm)
+                }
 
                 Spacer(modifier = Modifier.height(24.dp))
 
@@ -293,9 +413,9 @@ private fun SwipeableCard(
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             text = when (actionState) {
-                                ActionState.ACCEPTING -> "Accepting trip..."
-                                ActionState.DECLINING -> "Declining trip..."
-                                else -> "Processing..."
+                                ActionState.ACCEPTING -> stringResource(R.string.accepting_trip)
+                                ActionState.DECLINING -> stringResource(R.string.declining_trip)
+                                else -> stringResource(R.string.processing)
                             },
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Medium,
@@ -313,6 +433,7 @@ private fun SwipeableCard(
  */
 @Composable
 private fun HeaderRow(
+    totalSeconds: Int,
     remainingSeconds: Int,
     countdownColor: Color,
     scale: Float
@@ -331,7 +452,7 @@ private fun HeaderRow(
             )
             Spacer(modifier = Modifier.width(12.dp))
             Text(
-                "New Trip Request",
+                stringResource(R.string.new_trip_request),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
@@ -346,7 +467,7 @@ private fun HeaderRow(
                 },
             contentAlignment = Alignment.Center
         ) {
-            val progress = (remainingSeconds.toFloat() / 60f).coerceIn(0f, 1f)
+            val progress = (remainingSeconds.toFloat() / totalSeconds.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
             CircularProgressIndicator(
                 progress = progress,
                 modifier = Modifier.fillMaxSize(),
@@ -383,7 +504,7 @@ private fun EarningsCard(fare: Double) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                "Trip Earnings",
+                stringResource(R.string.trip_earnings),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
             )
@@ -425,7 +546,7 @@ private fun RouteCard(
                 .padding(16.dp)
         ) {
             Text(
-                "Route Details",
+                stringResource(R.string.route_details),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
@@ -435,7 +556,7 @@ private fun RouteCard(
             LocationRow(
                 icon = Icons.Default.TripOrigin,
                 iconColor = Color(0xFF4CAF50),
-                label = "PICKUP",
+                label = stringResource(R.string.pickup_label).uppercase(),
                 address = pickup.address,
                 city = pickup.city
             )
@@ -480,7 +601,7 @@ private fun RouteCard(
             LocationRow(
                 icon = Icons.Default.LocationOn,
                 iconColor = Color(0xFFF44336),
-                label = "DROP",
+                label = stringResource(R.string.drop_label).uppercase(),
                 address = drop.address,
                 city = drop.city
             )
@@ -496,7 +617,7 @@ private fun RouteCard(
                     contentDescription = null
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Navigate to Pickup", fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.navigate_to_pickup), fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -590,7 +711,7 @@ private fun DetailsCard(
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            "Customer",
+                            stringResource(R.string.customer_label),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.outlineVariant
                         )
@@ -609,10 +730,10 @@ private fun DetailsCard(
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         },
-                        title = { Text("Call Customer?") },
+                        title = { Text(stringResource(R.string.call_customer_dialog_title)) },
                         text = {
                             Text(
-                                "Call ${notification.customerName} at ${notification.customerPhone}?"
+                                stringResource(R.string.call_customer_dialog_message, notification.customerName, notification.customerPhone)
                             )
                         },
                         confirmButton = {
@@ -623,12 +744,12 @@ private fun DetailsCard(
                                 }
                                 context.startActivity(intent)
                             }) {
-                                Text("Call")
+                                Text(stringResource(R.string.call_button))
                             }
                         },
                         dismissButton = {
                             TextButton(onClick = { showCallDialog.value = false }) {
-                                Text("Cancel")
+                                Text(stringResource(R.string.cancel))
                             }
                         }
                     )
@@ -672,7 +793,7 @@ private fun DetailsCard(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            "Assigned Vehicle",
+                            stringResource(R.string.assigned_vehicle),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.outlineVariant
                         )
@@ -715,7 +836,7 @@ private fun SwipeIndicator(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        "Decline",
+                        stringResource(R.string.decline_label),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error
                     )
@@ -731,7 +852,7 @@ private fun SwipeIndicator(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        "Accept",
+                        stringResource(R.string.accept_label),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -748,7 +869,7 @@ private fun SwipeIndicator(
 
     if (swipeOffset == 0f && !isAccepting && !isDeclining) {
         Text(
-            "← Swipe to Decline | Swipe to Accept →",
+            stringResource(R.string.swipe_instructions),
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
             style = MaterialTheme.typography.bodySmall,

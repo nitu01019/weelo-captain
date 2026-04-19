@@ -18,7 +18,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.LinkedHashMap
 import kotlin.math.abs
 
 /**
@@ -33,7 +32,12 @@ object BroadcastOverlayManager {
     private const val MAX_STARTUP_BUFFER_SIZE = 50
     private const val STARTUP_BUFFER_TTL_MS = 90_000L
     private const val DEFAULT_BROADCAST_TIMEOUT_MS = 60_000L
-    private const val DEDUPE_LRU_SIZE = 2_000
+    // F-C-02: Dedup now delegated to BroadcastFlowCoordinator (single LRU+TTL).
+    // The inner seenBroadcastIds LinkedHashMap (2k entries, no TTL) was removed
+    // to eliminate drift vs. BroadcastDedup (500 FIFO) and BroadcastFlowCoordinator
+    // (10k LRU). All four dedup entry points now funnel into one store.
+    private const val OVERLAY_EVENT_CLASS = "overlay"
+    private const val OVERLAY_PAYLOAD_VERSION = 1
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val mutex = Mutex()
@@ -43,13 +47,6 @@ object BroadcastOverlayManager {
 
     private val broadcastQueue = mutableListOf<QueuedBroadcast>()
     private val startupBufferQueue = ArrayDeque<BufferedBroadcast>()
-
-    private val dedupeLock = Any()
-    private val seenBroadcastIds = object : LinkedHashMap<String, Long>(DEDUPE_LRU_SIZE, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean {
-            return size > DEDUPE_LRU_SIZE
-        }
-    }
 
     private val _currentBroadcast = MutableStateFlow<BroadcastTrip?>(null)
     val currentBroadcast: StateFlow<BroadcastTrip?> = _currentBroadcast.asStateFlow()
@@ -296,9 +293,8 @@ object BroadcastOverlayManager {
                 _queueSize.value = 0
                 _currentIndex.value = 0
                 _totalBroadcastCount.value = 0
-                synchronized(dedupeLock) {
-                    seenBroadcastIds.clear()
-                }
+                // F-C-02: dedup state is coordinator-owned; clear via delegate.
+                BroadcastFlowCoordinator.dedupeIdsClear()
                 timber.log.Timber.i("🗑️ All broadcasts cleared")
             }
         }
@@ -440,18 +436,19 @@ object BroadcastOverlayManager {
         return AvailabilityManager.getInstance(context).availabilityState.value
     }
 
+    private fun overlayDedupKey(broadcastId: String): String =
+        normalizeDedupKey(OVERLAY_EVENT_CLASS, broadcastId, OVERLAY_PAYLOAD_VERSION)
+
     private fun registerBroadcastIdIfNew(broadcastId: String): Boolean {
-        synchronized(dedupeLock) {
-            if (seenBroadcastIds.containsKey(broadcastId)) return false
-            seenBroadcastIds[broadcastId] = System.currentTimeMillis()
-            return true
-        }
+        if (broadcastId.isBlank()) return false
+        // F-C-02: delegate to coordinator-owned LRU+TTL. Preserves "first-arrival
+        // wins" semantics and still allows rollback via unregisterBroadcastId.
+        return BroadcastFlowCoordinator.dedupeIdsIsNew(overlayDedupKey(broadcastId))
     }
 
     private fun unregisterBroadcastId(broadcastId: String) {
-        synchronized(dedupeLock) {
-            seenBroadcastIds.remove(broadcastId)
-        }
+        if (broadcastId.isBlank()) return
+        BroadcastFlowCoordinator.dedupeIdsRemove(overlayDedupKey(broadcastId))
     }
 
     private fun createQueuedBroadcast(broadcast: BroadcastTrip, receivedAtMs: Long = System.currentTimeMillis()): QueuedBroadcast {
@@ -481,6 +478,21 @@ object BroadcastOverlayManager {
     }
 
     private suspend fun bufferBroadcastLocked(item: BufferedBroadcast) {
+        // F-C-05: when single-owner buffer is ON, the coordinator is the
+        // SOLE owner. The overlay manager MUST NOT add to its own
+        // `startupBufferQueue` — doing so would re-introduce the dual-owner
+        // bug where OFFLINE→ONLINE transitions can double-buffer or silently
+        // drop on UNKNOWN-state transition.
+        if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.BROADCAST_GATED,
+                status = BroadcastStatus.SKIPPED,
+                reason = "single_owner_buffer_delegated_to_coordinator",
+                attrs = mapOf("broadcastId" to item.trip.broadcastId)
+            )
+            return
+        }
+
         val now = System.currentTimeMillis()
 
         // purge expired entries first
@@ -523,32 +535,118 @@ object BroadcastOverlayManager {
     private fun flushBufferedBroadcasts() {
         scope.launch {
             mutex.withLock {
-                var flushed = 0
-                while (true) {
-                    val item = startupBufferQueue.removeFirstOrNull() ?: break
-                    if (isStartupBufferExpired(item)) {
-                        unregisterBroadcastId(item.trip.broadcastId)
-                        BroadcastTelemetry.record(
-                            stage = BroadcastStage.BROADCAST_GATED,
-                            status = BroadcastStatus.DROPPED,
-                            reason = "availability_unknown_buffer_expired",
-                            attrs = mapOf("broadcastId" to item.trip.broadcastId)
-                        )
-                        continue
-                    }
-                    val shouldShowImmediately = _currentBroadcast.value == null && flushed == 0
-                    showBroadcastOnlineLocked(
-                        broadcast = item.trip,
-                        receivedAtMs = item.receivedAtMs,
-                        forceImmediate = shouldShowImmediately
-                    )
-                    flushed++
-                }
-                updateQueueSizeLocked()
-                if (flushed > 0) {
-                    timber.log.Timber.i("📤 Flushed buffered broadcasts: $flushed")
+                if (BroadcastBuildFlags.priorityDrainEnabled) {
+                    flushBufferedBroadcastsByPriorityLocked()
+                } else {
+                    flushBufferedBroadcastsFifoLocked()
                 }
             }
+        }
+    }
+
+    private suspend fun flushBufferedBroadcastsFifoLocked() {
+        var flushed = 0
+        while (true) {
+            val item = startupBufferQueue.removeFirstOrNull() ?: break
+            if (isStartupBufferExpired(item)) {
+                unregisterBroadcastId(item.trip.broadcastId)
+                BroadcastTelemetry.record(
+                    stage = BroadcastStage.BROADCAST_GATED,
+                    status = BroadcastStatus.DROPPED,
+                    reason = "availability_unknown_buffer_expired",
+                    attrs = mapOf("broadcastId" to item.trip.broadcastId)
+                )
+                continue
+            }
+            val shouldShowImmediately = _currentBroadcast.value == null && flushed == 0
+            showBroadcastOnlineLocked(
+                broadcast = item.trip,
+                receivedAtMs = item.receivedAtMs,
+                forceImmediate = shouldShowImmediately
+            )
+            flushed++
+        }
+        updateQueueSizeLocked()
+        if (flushed > 0) {
+            timber.log.Timber.i("📤 Flushed buffered broadcasts: $flushed")
+        }
+    }
+
+    /**
+     * F-C-10 — Priority-sorted drain (Uber airport-queue pattern).
+     *
+     * Earliest-deadline first, then urgent first, then highest fare. Replaces
+     * the FIFO `removeFirstOrNull` loop which arbitrarily force-shows the
+     * first arrival regardless of urgency.
+     */
+    private suspend fun flushBufferedBroadcastsByPriorityLocked() {
+        val now = System.currentTimeMillis()
+        val snapshot = startupBufferQueue.toList()
+        startupBufferQueue.clear()
+
+        // Filter out expired and emit the standard drop telemetry for them.
+        val (live, expired) = snapshot.partition { !isStartupBufferExpired(it, now) }
+        expired.forEach { item ->
+            unregisterBroadcastId(item.trip.broadcastId)
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.BROADCAST_GATED,
+                status = BroadcastStatus.DROPPED,
+                reason = "availability_unknown_buffer_expired",
+                attrs = mapOf("broadcastId" to item.trip.broadcastId)
+            )
+        }
+
+        val sorted = sortBufferedForDrain(live, nowMs = now)
+        sorted.forEachIndexed { idx, item ->
+            val forceImmediate = _currentBroadcast.value == null && idx == 0
+            showBroadcastOnlineLocked(
+                broadcast = item.trip,
+                receivedAtMs = item.receivedAtMs,
+                forceImmediate = forceImmediate
+            )
+        }
+        updateQueueSizeLocked()
+        if (sorted.isNotEmpty()) {
+            timber.log.Timber.i(
+                "📤 Priority-flushed buffered broadcasts: %d (force-shown=%s)",
+                sorted.size,
+                sorted.firstOrNull()?.trip?.broadcastId ?: "none"
+            )
+        }
+    }
+
+    /**
+     * F-C-10 — Pure helper for priority sort. Kept package-internal so the
+     * `FlushPriorityOrderTest` can exercise the comparator without spinning
+     * up coroutines or the full overlay manager.
+     *
+     * Order: urgent first, then earliest deadline (smallest expiryTime),
+     * then highest fare, then most recent broadcastTime — matches the
+     * existing [queuePriorityComparator] semantics for queued broadcasts.
+     */
+    @Suppress("unused")
+    internal fun sortBufferedForDrain(
+        items: List<BufferedBroadcast>,
+        nowMs: Long
+    ): List<BufferedBroadcast> {
+        return items.sortedWith(bufferedDrainComparator(nowMs))
+    }
+
+    private fun bufferedDrainComparator(@Suppress("UNUSED_PARAMETER") nowMs: Long): Comparator<BufferedBroadcast> {
+        return Comparator { a, b ->
+            // 1) Urgent first.
+            val urgentCmp = b.trip.isUrgent.compareTo(a.trip.isUrgent)
+            if (urgentCmp != 0) return@Comparator urgentCmp
+            // 2) Earliest deadline first. Treat null/0 expiry as far-future.
+            val aExp = a.trip.expiryTime?.takeIf { it > 0L } ?: Long.MAX_VALUE
+            val bExp = b.trip.expiryTime?.takeIf { it > 0L } ?: Long.MAX_VALUE
+            val expCmp = aExp.compareTo(bExp)
+            if (expCmp != 0) return@Comparator expCmp
+            // 3) Highest fare first.
+            val fareCmp = b.trip.farePerTruck.compareTo(a.trip.farePerTruck)
+            if (fareCmp != 0) return@Comparator fareCmp
+            // 4) Most recent broadcastTime first (newest payload wins on tie).
+            b.trip.broadcastTime.compareTo(a.trip.broadcastTime)
         }
     }
 

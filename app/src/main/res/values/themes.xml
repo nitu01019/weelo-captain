@@ -5,4 +5,32 @@
         <item name="android:statusBarColor">@color/white</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>
+
+    <!--
+        F-C-04 — Translucent FSI theme for BroadcastIncomingActivity.
+
+        Rationale (SOL-7 §S-04, INDEX.md:1540-1552):
+          The FSI Activity previously ran under the opaque Theme.WeeloLogistics.
+          When the Compose Dialog inside the Activity mounted over the user's
+          previous task / lockscreen, the opaque background caused a 300-500ms
+          white-flash (reproducible on Samsung OneUI6 + Xiaomi HyperOS).
+
+          A translucent theme with a transparent windowBackground eliminates the
+          flash — the Activity itself becomes a pass-through chrome and the
+          Compose overlay is the only visible UI.
+
+        Anti-pattern guard:
+          windowIsFloating=false is INTENTIONAL. Setting it to true is the #1
+          reported OneUI6 breakage (clips touch targets + taskbar insets).
+          Do not "simplify" this to a Dialog theme — that regresses the fix.
+    -->
+    <style name="Theme.WeeloLogistics.BroadcastOverlay" parent="Theme.WeeloLogistics">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowIsFloating">false</item>
+    </style>
 </resources>

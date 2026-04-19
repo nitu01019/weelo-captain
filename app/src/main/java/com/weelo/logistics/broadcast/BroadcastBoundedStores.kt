@@ -4,23 +4,48 @@ import com.weelo.logistics.data.model.BroadcastStatus
 import com.weelo.logistics.data.model.BroadcastTrip
 import java.util.LinkedHashMap
 
+/**
+ * Bounded LRU id set with optional TTL. Used as the single coordinator-owned
+ * cross-channel dedup store (Socket.IO + FCM + overlay + notification-open).
+ *
+ * Industry pattern: "Assign a deduplication key to each notification before it
+ * enters the delivery pipeline. Encode what the notification is about (event
+ * type + entity id + payload version), store with a TTL, skip if seen."
+ * (Sohil Ladhani, Apr 2026 — notification deduplication)
+ *
+ * When [ttlMs] > 0, entries older than `ttlMs` are treated as absent — a
+ * repeat arrival after the TTL window is considered "new" again.
+ *
+ * Thread-safe via `synchronized(lock)`. [nowProvider] is injectable for test
+ * determinism; production callers use the default wall clock.
+ */
 class LruIdSet(
-    private val maxSize: Int
+    private val maxSize: Int,
+    private val ttlMs: Long = 0L,
+    private val nowProvider: () -> Long = { System.currentTimeMillis() }
 ) {
     private val lock = Any()
-    private val storage = object : LinkedHashMap<String, Unit>(maxSize, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>?): Boolean {
+    private val storage = object : LinkedHashMap<String, Long>(maxSize, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean {
             return size > maxSize
         }
     }
 
+    /**
+     * Returns true if [id] was NOT seen before (or its TTL has expired),
+     * false if it is a duplicate inside the TTL window.
+     *
+     * Calling this method always upserts the entry with the current timestamp.
+     */
     fun add(id: String): Boolean {
         val normalized = id.trim()
         if (normalized.isEmpty()) return false
+        val now = nowProvider()
         synchronized(lock) {
-            val wasNew = !storage.containsKey(normalized)
-            storage[normalized] = Unit
-            return wasNew
+            val previousTs = storage[normalized]
+            val isFresh = previousTs != null && (ttlMs <= 0L || (now - previousTs) < ttlMs)
+            storage[normalized] = now
+            return !isFresh
         }
     }
 
@@ -35,6 +60,21 @@ class LruIdSet(
             storage.clear()
         }
     }
+
+    /** Test-only. Returns current stored size (inclusive of stale-but-not-evicted entries). */
+    internal fun size(): Int = synchronized(lock) { storage.size }
+}
+
+/**
+ * Canonical compound dedup key — `eventClass|broadcastId|payloadVersion`.
+ *
+ * Industry pattern (FCM collapse_key / APNs apns-collapse-id): the dedup key
+ * must encode event class + entity id + version so that different event
+ * classes sharing the same id do not collide, and stale re-sends with a
+ * bumped payload version are treated as new.
+ */
+fun normalizeDedupKey(eventClass: String, broadcastId: String, payloadVersion: Int): String {
+    return "$eventClass|${broadcastId.trim()}|$payloadVersion"
 }
 
 data class PendingBroadcast(
@@ -84,6 +124,18 @@ class PendingBroadcastQueue(
 
     fun size(): Int = synchronized(lock) { queue.size }
 
+    /**
+     * F-C-05 — Non-destructive snapshot used by the single-owner StateFlow
+     * CAS rebuild path. Unlike [drainValid], this does NOT mutate the queue;
+     * it returns the items in arrival order so a fresh queue can be rebuilt
+     * during a [kotlinx.coroutines.flow.MutableStateFlow.update] block.
+     */
+    fun snapshotForRebuild(): List<PendingBroadcast> {
+        synchronized(lock) {
+            return queue.toList()
+        }
+    }
+
     fun clear() {
         synchronized(lock) {
             queue.clear()
@@ -113,25 +165,39 @@ class BroadcastStateStore(
     private fun enrichWithLocalPickupDistance(trip: BroadcastTrip): BroadcastTrip {
         if (trip.pickupDistanceKm > 0.0) return trip
         if (trip.pickupLocation.latitude == 0.0 || trip.pickupLocation.longitude == 0.0) return trip
-        return try {
-            val ctx = com.weelo.logistics.WeeloApp.getInstance()?.applicationContext ?: return trip
-            val locationManager = ctx.getSystemService(
-                android.content.Context.LOCATION_SERVICE
-            ) as? android.location.LocationManager ?: return trip
-            @Suppress("MissingPermission")
-            val driverLoc = locationManager.getLastKnownLocation(
-                android.location.LocationManager.GPS_PROVIDER
-            ) ?: locationManager.getLastKnownLocation(
-                android.location.LocationManager.NETWORK_PROVIDER
-            ) ?: return trip
+        val ctx = com.weelo.logistics.WeeloApp.getInstance()?.applicationContext ?: return trip
 
-            // Staleness guard: reject GPS fixes older than 5 minutes
-            if (System.currentTimeMillis() - driverLoc.time > MAX_LOCATION_AGE_MS) {
-                timber.log.Timber.d("📍 Skipping stale GPS fix (%d seconds old) for %s",
-                    (System.currentTimeMillis() - driverLoc.time) / 1000, trip.broadcastId)
-                return trip
+        // F-C-16 — when the FLP path is enabled, source the last-known
+        // location from the app-scoped memoized LocationCache. The cache
+        // enforces runtime permission checks, catches SecurityException
+        // distinctly, and memoizes for 30 s — so the socket-ingress thread
+        // does NOT block on GPS IPC per upsert.
+        val driverLoc: android.location.Location? =
+            if (com.weelo.logistics.BuildConfig.FF_BROADCAST_FLP_LOCATION) {
+                // Bridge the suspend API without changing upsert's signature.
+                // The cache hot-path is an AtomicReference read — no IPC —
+                // for 29 of every 30 seconds, so runBlocking here is in
+                // practice a nanosecond-scale call. The cold-path IPC also
+                // happens off the socket thread because the FLP task itself
+                // runs on its own executor.
+                kotlinx.coroutines.runBlocking {
+                    com.weelo.logistics.location.LocationCache.getFreshLocation(ctx)
+                }
+            } else {
+                legacyGetLastKnownLocation(ctx, trip.broadcastId)
             }
+        if (driverLoc == null) return trip
 
+        // Staleness guard: reject GPS fixes older than 5 minutes. LocationCache
+        // emits fresh FLP fixes (typically <1 s old), so this is a belt-and-
+        // braces check for the legacy path.
+        if (System.currentTimeMillis() - driverLoc.time > MAX_LOCATION_AGE_MS) {
+            timber.log.Timber.d("📍 Skipping stale GPS fix (%d seconds old) for %s",
+                (System.currentTimeMillis() - driverLoc.time) / 1000, trip.broadcastId)
+            return trip
+        }
+
+        return try {
             val results = FloatArray(1)
             android.location.Location.distanceBetween(
                 driverLoc.latitude, driverLoc.longitude,
@@ -151,6 +217,34 @@ class BroadcastStateStore(
         } catch (e: Exception) {
             timber.log.Timber.w(e, "Failed to compute local pickup distance for %s", trip.broadcastId)
             trip
+        }
+    }
+
+    /**
+     * Legacy blocking LocationManager path preserved for rollback when
+     * [com.weelo.logistics.BuildConfig.FF_BROADCAST_FLP_LOCATION] is OFF.
+     * Kept private-in-class so no other consumer can accidentally revive it.
+     */
+    private fun legacyGetLastKnownLocation(
+        ctx: android.content.Context,
+        broadcastId: String
+    ): android.location.Location? {
+        return try {
+            val locationManager = ctx.getSystemService(
+                android.content.Context.LOCATION_SERVICE
+            ) as? android.location.LocationManager ?: return null
+            @Suppress("MissingPermission")
+            val driverLoc = locationManager.getLastKnownLocation(
+                android.location.LocationManager.GPS_PROVIDER
+            ) ?: locationManager.getLastKnownLocation(
+                android.location.LocationManager.NETWORK_PROVIDER
+            )
+            driverLoc
+        } catch (e: Exception) {
+            timber.log.Timber.w(
+                e, "Legacy LocationManager lookup failed for %s", broadcastId
+            )
+            null
         }
     }
 

@@ -38,6 +38,62 @@ android {
             ?: ""
         manifestPlaceholders += mapOf("MAPS_API_KEY" to mapsApiKey)
         buildConfigField("String", "MAPS_API_KEY", "\"$mapsApiKey\"")
+
+        // F-C-04 — manifest placeholders driving the activity-alias enable
+        // toggle. Opaque FSI entry is ON while the translucent alias is OFF
+        // (and vice versa) — exactly one is active at runtime. Keeping the
+        // toggle in manifestPlaceholders lets the activity-alias respond to
+        // gradle property overrides on canary builds without code churn.
+        val translucentThemeEnabled = false
+        manifestPlaceholders += mapOf(
+            "broadcastOverlayThemeEnabled" to translucentThemeEnabled.toString(),
+            "broadcastLegacyThemeEnabled" to (!translucentThemeEnabled).toString()
+        )
+
+        // F-C-77: backend-sourced DRIVER_ACCEPT_TIMEOUT_SECONDS. Must match
+        // backend env var DRIVER_ACCEPT_TIMEOUT_SECONDS (currently 45s). Sourced
+        // at build time so the Kotlin fallback never drifts from server config.
+        buildConfigField("int", "DRIVER_ACCEPT_TIMEOUT_SECONDS", "45")
+
+        // P9 t1 — F-C-05/F-C-10/F-C-11 Coordinator refactor flags
+        val ffCoordinatorRefactor = (project.findProperty("FF_BROADCAST_COORDINATOR_REFACTOR")?.toString()?.toBoolean() == true)
+        val ffSingleOwnerBuffer = (project.findProperty("FF_BROADCAST_SINGLE_OWNER_BUFFER")?.toString()?.toBoolean() == true)
+        val ffPriorityDrain = (project.findProperty("FF_BROADCAST_PRIORITY_DRAIN")?.toString()?.toBoolean() == true)
+        val ffSharedFlowIngress = (project.findProperty("FF_BROADCAST_SHARED_FLOW_INGRESS")?.toString()?.toBoolean() == true)
+        buildConfigField("boolean", "FF_BROADCAST_COORDINATOR_REFACTOR", ffCoordinatorRefactor.toString())
+        buildConfigField("boolean", "FF_BROADCAST_SINGLE_OWNER_BUFFER", ffSingleOwnerBuffer.toString())
+        buildConfigField("boolean", "FF_BROADCAST_PRIORITY_DRAIN", ffPriorityDrain.toString())
+        buildConfigField("boolean", "FF_BROADCAST_SHARED_FLOW_INGRESS", ffSharedFlowIngress.toString())
+
+        // P9 t3 — F-C-04/F-C-06/F-C-16 Overlay lifecycle flags
+        buildConfigField("boolean", "FF_BROADCAST_TRANSLUCENT_THEME", "false")
+        buildConfigField("boolean", "FF_BROADCAST_AUDIO_CONTROLLER", "false")
+        buildConfigField("boolean", "FF_BROADCAST_FLP_LOCATION", "false")
+
+        // P9 t4 — F-C-22 + F-C-60 WorkManager / data-only FCM flags
+        buildConfigField("boolean", "FF_HOLD_RELEASE_WORKMANAGER", "false")
+        buildConfigField("boolean", "FF_FCM_DATA_ONLY_HANDLER", "false")
+
+        // P9 t2 — F-C-29/31/32/33/34/44/47 Driver Assignment bundle flags
+        buildConfigField("boolean", "FF_DRIVER_ASSIGNMENT_VM_MIGRATION", "false")
+        buildConfigField("boolean", "FF_DRIVER_TOTAL_SECONDS_FROM_DTO", "false")
+        buildConfigField("boolean", "FF_DRIVER_TIMER_STABLE_KEY", "false")
+        buildConfigField("boolean", "FF_DRIVER_ALARM_LOOPING", "false")
+        buildConfigField("boolean", "FF_PHASE_AWARE_TIMER", "false")
+        buildConfigField("boolean", "FF_DRIVER_IDEMPOTENT_DISMISS", "false")
+        buildConfigField("boolean", "FF_PROACTIVE_DRIVER_EVICTION", "false")
+
+        // P10 t2 — F-C-79/80/84 enum canonicalization
+        buildConfigField("boolean", "FF_CUSTOMER_ENUM_CONTRACT_STRICT", "false")
+        // P10 t4 — F-C-67 parseJsonSafe + F-C-81 ORDER_BASE_TIMEOUT_SECONDS
+        buildConfigField("boolean", "FF_CUSTOMER_PARSE_JSON_SAFE", "false")
+        buildConfigField("int", "ORDER_BASE_TIMEOUT_SECONDS", "120")
+        // P10 t1 — F-C-51/53/55/63/65 Captain contracts consumers (SocketEventRouter bundle)
+        buildConfigField("boolean", "FF_ASSIGNMENT_STATUS_ROUTER_V2", "false")
+        buildConfigField("boolean", "FF_DISPATCH_ACK_HANDLER", "false")
+        buildConfigField("boolean", "FF_BOOKING_V2_PAYLOAD", "false")
+        buildConfigField("boolean", "FF_ASSIGNMENT_STATUS_PAYLOAD_V2", "false")
+        buildConfigField("boolean", "FF_ORDER_PROGRESS_V1", "false")
     }
 
     buildTypes {
@@ -75,6 +131,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
     
     kotlinOptions {
         jvmTarget = "17"
@@ -227,6 +284,8 @@ dependencies {
     
     // Testing
     testImplementation("junit:junit:4.13.2")
+    testImplementation("io.mockk:mockk:1.13.8")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     androidTestImplementation(platform("androidx.compose:compose-bom:2023.10.01"))

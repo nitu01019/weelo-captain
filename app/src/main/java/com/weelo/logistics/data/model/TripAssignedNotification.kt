@@ -1,5 +1,7 @@
 package com.weelo.logistics.data.model
 
+import com.weelo.logistics.BuildConfig
+
 /**
  * =============================================================================
  * TRIP ASSIGNED NOTIFICATION
@@ -31,18 +33,29 @@ data class TripAssignedNotification(
     val customerName: String,        // Customer name for display
     val customerPhone: String,       // Customer phone for calling
     val assignedAt: String,          // ISO timestamp of assignment
-    val expiresAt: String?,         // ISO timestamp when offer expires (60s from assignment)
+    val expiresAt: String?,         // ISO timestamp when offer expires (server DRIVER_ACCEPT_TIMEOUT_SECONDS from assignment, default 45s)
     val routePoints: List<RoutePoint>?,  // Full route for multi-stop trips
     val message: String,             // Human-readable message
-    val dismissedAt: Long? = null    // When driver dismissed (timestamp, null if not dismissed)
+    val customerRating: Double? = null,  // Customer average rating (nullable, hide badge if missing)
+    val dismissedAt: Long? = null,   // When driver dismissed (timestamp, null if not dismissed)
+    // F-C-77: server-sourced driver-accept timeout. Falls back to BuildConfig
+    // (currently 45s) if the server did not populate the field — matches backend
+    // env var DRIVER_ACCEPT_TIMEOUT_SECONDS. Wired from ConfirmedHoldData and
+    // trip_assigned socket/FCM payloads.
+    val driverAcceptTimeoutSeconds: Int? = null
 ) {
     /**
-     * Get remaining seconds for countdown timer
-     * Returns 0 if expiresAt is null or already expired
+     * Get remaining seconds for countdown timer.
+     *
+     * F-C-77 fallback chain (server-authoritative → BuildConfig → hard default):
+     *   1. parse expiresAt → return remaining seconds
+     *   2. driverAcceptTimeoutSeconds from server payload
+     *   3. BuildConfig.DRIVER_ACCEPT_TIMEOUT_SECONDS (build-time mirror of server env)
      */
     val remainingSeconds: Int
         get() {
-            val expiryTime = expiresAt?.let { parseIso8601(it) } ?: return 60
+            val expiryTime = expiresAt?.let { parseIso8601(it) }
+                ?: return driverAcceptTimeoutSeconds ?: BuildConfig.DRIVER_ACCEPT_TIMEOUT_SECONDS
             val now = System.currentTimeMillis()
             val remaining = (expiryTime - now) / 1000
             return if (remaining > 0) remaining.toInt() else 0

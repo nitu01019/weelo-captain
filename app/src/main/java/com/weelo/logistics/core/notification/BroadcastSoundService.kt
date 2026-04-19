@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import com.weelo.logistics.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -306,9 +307,13 @@ class BroadcastSoundService private constructor(private val context: Context) {
                     setDataSource(context, uri)
                     val vol = if (isUrgent) 1f else _volume.value
                     setVolume(vol, vol)
-                    setOnPreparedListener { 
-                        it.start() 
-                        handler.postDelayed(autoStopRunnable, 120_000L)
+                    setOnPreparedListener {
+                        it.start()
+                        // F-C-81 — auto-stop mirrors backend `ORDER_BASE_TIMEOUT_SECONDS`
+                        // so the ringtone never outlives the server-side order-lifecycle
+                        // window. Centralized via BuildConfig to kill future drift.
+                        val autoStopMs = BuildConfig.ORDER_BASE_TIMEOUT_SECONDS * 1000L
+                        handler.postDelayed(autoStopRunnable, autoStopMs)
                     }
                     setOnErrorListener { mp, _, _ -> 
                         mp.release()

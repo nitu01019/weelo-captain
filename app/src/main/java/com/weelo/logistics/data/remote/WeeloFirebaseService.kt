@@ -10,6 +10,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import com.weelo.logistics.BuildConfig
 import com.weelo.logistics.MainActivity
 import com.weelo.logistics.R
 import com.weelo.logistics.broadcast.BroadcastFeatureFlagsRegistry
@@ -20,6 +21,7 @@ import com.weelo.logistics.broadcast.BroadcastRolePolicy
 import com.weelo.logistics.broadcast.BroadcastStage
 import com.weelo.logistics.broadcast.BroadcastStatus
 import com.weelo.logistics.broadcast.BroadcastTelemetry
+import com.weelo.logistics.broadcast.work.BroadcastExpediteWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -86,7 +88,21 @@ class WeeloFirebaseService : FirebaseMessagingService() {
         const val TYPE_DRIVER_OFFLINE = "driver_offline"
         const val TYPE_PAYMENT = "payment"
         const val TYPE_GENERAL = "general"
-        
+
+        // F-C-60: FULLSCREEN_TYPES — FCM notification types that MUST wake the
+        // overlay pipeline from Doze. When backend `FF_FCM_DATA_ONLY_FULLSCREEN`
+        // is ON, the backend strips the `notification` block for these types so
+        // `onMessageReceived` fires (data-only in Doze → SDK routes to us). We
+        // then hand off to `BroadcastExpediteWorker` which uses expedited work
+        // to guarantee execution. Captain-side flag: FF_FCM_DATA_ONLY_HANDLER.
+        // Must mirror backend FULLSCREEN_TYPES set exactly.
+        val FULLSCREEN_TYPES: Set<String> = setOf(
+            TYPE_NEW_BROADCAST,
+            TYPE_NEW_TRUCK_REQUEST,
+            TYPE_TRIP_ASSIGNED,
+            TYPE_DRIVER_TIMEOUT
+        )
+
         // Flow for foreground notifications
         private val _foregroundNotifications = MutableSharedFlow<FCMNotification>(
             replay = 0,
@@ -206,6 +222,42 @@ class WeeloFirebaseService : FirebaseMessagingService() {
             assignmentId = data["assignmentId"],
             amount = data["amount"]?.toDoubleOrNull()
         )
+
+        // F-C-60: Data-only FCM detection. When backend `FF_FCM_DATA_ONLY_FULLSCREEN`
+        // is ON and the type is in FULLSCREEN_TYPES, the `notification` block is
+        // stripped — the SDK routes to `onMessageReceived` even in Doze. We then
+        // hand off to BroadcastExpediteWorker for guaranteed execution within
+        // the 10-second Doze budget. Legacy hybrid path below still runs when
+        // flag is OFF or payload is hybrid (notification != null).
+        val isDataOnlyFullscreenPayload = remoteMessage.notification == null &&
+            FULLSCREEN_TYPES.contains(type)
+        if (BuildConfig.FF_FCM_DATA_ONLY_HANDLER &&
+            isDataOnlyFullscreenPayload &&
+            canHandleBroadcastIngress &&
+            !normalizedBroadcastId.isNullOrBlank()
+        ) {
+            timber.log.Timber.i(
+                "📡 F-C-60: data-only FCM detected type=%s id=%s → enqueue BroadcastExpediteWorker",
+                type,
+                normalizedBroadcastId
+            )
+            BroadcastExpediteWorker.enqueue(
+                context = applicationContext,
+                type = type,
+                broadcastId = normalizedBroadcastId,
+                payloadVersion = data["payloadVersion"],
+                receivedAtMs = System.currentTimeMillis()
+            )
+            // ACK delivery via socket (Uber RAMEN-style guarantee). The worker
+            // handles the actual coordinator ingress — but we can ACK
+            // immediately so the backend knows this device received the push.
+            SocketIOService.emitDispatchAck(
+                orderId = normalizedBroadcastId,
+                dispatchRevision = data["dispatchRevision"]?.toLongOrNull(),
+                source = "fcm",
+                receivedAtMs = System.currentTimeMillis()
+            )
+        }
 
         if (BroadcastFeatureFlagsRegistry.current().broadcastCoordinatorEnabled &&
             type == TYPE_NEW_BROADCAST &&

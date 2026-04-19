@@ -32,6 +32,14 @@ import com.weelo.logistics.ui.driver.ActionState
 import com.weelo.logistics.ui.driver.DriverTripNavigationScreen
 import com.weelo.logistics.ui.viewmodel.MainViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import com.weelo.logistics.data.remote.SocketIOService
+import com.weelo.logistics.data.remote.WeeloFirebaseService
+import com.weelo.logistics.data.model.TripAssignedNotification
+import com.weelo.logistics.data.model.TripLocationInfo
+import com.weelo.logistics.ui.utils.SocketUiEventDeduper
 
 private const val FF_STRICT_LOGOUT_OFFLINE_ENFORCEMENT = true
 
@@ -198,6 +206,93 @@ fun WeeloNavigation(
     val isOverlayVisible by DriverTripRequestManager.isOverlayVisible.collectAsState()
     val currentRequest by DriverTripRequestManager.currentRequest.collectAsState()
     val actionState by DriverTripRequestManager.actionState.collectAsState()
+
+    // =========================================================================
+    // APP-LEVEL TRIP REQUEST COLLECTION (Industry Standard: Uber/Ola Pattern)
+    // =========================================================================
+    // WHY HERE: WeeloNavigation is composed for the ENTIRE driver session.
+    // Unlike DriverDashboardScreen which is destroyed on navigation away,
+    // these collectors survive across all screens (Settings, Profile, etc.)
+    //
+    // DEDUP: DriverTripRequestManager.addRequest() rejects duplicate assignmentIds.
+    // SocketUiEventDeduper provides a second layer. Zero risk of double overlay.
+    //
+    // RESEARCH: Google recommends app-level collection for mission-critical
+    // real-time events. Screen-level collection is for screen-specific UI.
+    // =========================================================================
+    if (isDriver) {
+        val driverLifecycleOwner = LocalLifecycleOwner.current
+        val appEventDeduper = remember { SocketUiEventDeduper(maxEntries = 64) }
+
+        // Socket.IO path: Primary delivery channel
+        LaunchedEffect(driverLifecycleOwner) {
+            driverLifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                SocketIOService.tripAssigned.collect { notification ->
+                    val dedupeKey = "${notification.assignmentId}|${notification.assignedAt}"
+                    if (!appEventDeduper.shouldHandle(dedupeKey)) {
+                        Timber.d("⏭️ [NAV] Skipping replayed trip_assigned: $dedupeKey")
+                        return@collect
+                    }
+                    Timber.i("🚛 [NAV] Trip assigned: ${notification.assignmentId} (${notification.vehicleNumber})")
+                    DriverTripRequestManager.addRequest(notification)
+                }
+            }
+        }
+
+        // FCM path: Backup delivery when Socket.IO missed the event
+        LaunchedEffect(driverLifecycleOwner) {
+            driverLifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                WeeloFirebaseService.foregroundNotifications.collect { fcmNotification ->
+                    if (fcmNotification.type == WeeloFirebaseService.TYPE_TRIP_ASSIGNED) {
+                        val assignmentId = fcmNotification.assignmentId ?: return@collect
+                        if (assignmentId.isBlank()) return@collect
+
+                        val assignedAt = fcmNotification.data["assignedAt"] ?: ""
+                        val dedupeKey = "$assignmentId|$assignedAt"
+                        if (!appEventDeduper.shouldHandle(dedupeKey)) {
+                            Timber.d("⏭️ [NAV] Skipping duplicate FCM trip_assigned: $dedupeKey")
+                            return@collect
+                        }
+
+                        Timber.i("📱 [NAV] FCM Trip assigned: $assignmentId")
+
+                        val tripAssigned = TripAssignedNotification(
+                            assignmentId = assignmentId,
+                            tripId = fcmNotification.tripId ?: fcmNotification.data["tripId"] ?: "",
+                            orderId = fcmNotification.data["orderId"] ?: "",
+                            truckRequestId = fcmNotification.data["truckRequestId"] ?: "",
+                            pickup = TripLocationInfo(
+                                address = fcmNotification.data["pickupAddress"] ?: "",
+                                city = fcmNotification.data["pickupCity"] ?: "",
+                                latitude = fcmNotification.data["pickupLat"]?.toDoubleOrNull() ?: 0.0,
+                                longitude = fcmNotification.data["pickupLng"]?.toDoubleOrNull() ?: 0.0
+                            ),
+                            drop = TripLocationInfo(
+                                address = fcmNotification.data["dropAddress"] ?: "",
+                                city = fcmNotification.data["dropCity"] ?: "",
+                                latitude = fcmNotification.data["dropLat"]?.toDoubleOrNull() ?: 0.0,
+                                longitude = fcmNotification.data["dropLng"]?.toDoubleOrNull() ?: 0.0
+                            ),
+                            vehicleNumber = fcmNotification.data["vehicleNumber"] ?: "",
+                            farePerTruck = fcmNotification.data["fare"]?.toDoubleOrNull()
+                                ?: fcmNotification.amount ?: 0.0,
+                            distanceKm = fcmNotification.data["distanceKm"]?.toDoubleOrNull() ?: 0.0,
+                            customerName = fcmNotification.data["customerName"] ?: "",
+                            customerPhone = fcmNotification.data["customerPhone"] ?: "",
+                            assignedAt = assignedAt,
+                            expiresAt = fcmNotification.data["expiresAt"],
+                            routePoints = null,
+                            message = fcmNotification.body,
+                            // F-C-77: propagate server-provided DRIVER_ACCEPT_TIMEOUT_SECONDS
+                            // from FCM payload so fallback matches server truth (45s).
+                            driverAcceptTimeoutSeconds = fcmNotification.data["driverAcceptTimeoutSeconds"]?.toIntOrNull()
+                        )
+                        DriverTripRequestManager.addRequest(tripAssigned)
+                    }
+                }
+            }
+        }
+    }
 
     // Determine start destination based on login status
     // CRITICAL: Drivers ALWAYS go through onboarding check first

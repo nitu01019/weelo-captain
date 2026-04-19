@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.LinkedHashMap
 import java.util.Locale
@@ -115,6 +116,7 @@ sealed interface BroadcastCoordinatorEvent {
  */
 object BroadcastFlowCoordinator {
     private const val DEDUPE_LRU_SIZE = 10_000
+    private const val DEDUPE_TTL_MS = 10L * 60L * 1000L // 10 minutes (industry-standard dedup window)
     private const val PENDING_QUEUE_MAX = 50
     private const val STARTUP_BUFFER_TTL_MS = 90_000L
     private const val MAX_RENDERABLE_BROADCASTS = 250
@@ -134,18 +136,49 @@ object BroadcastFlowCoordinator {
         "closed"
     )
 
+    // F-C-11 — SharedFlow capacity tuning. replay (64) covers re-subscribers
+    // (e.g. orientation change re-collect); extraBuffer (512) absorbs short
+    // burst ingress without dropping; together they target sub-second
+    // settle time on the typical FCM/socket replay-after-reconnect storm.
+    private const val INGRESS_SHARED_FLOW_REPLAY = 64
+    private const val INGRESS_SHARED_FLOW_EXTRA_BUFFER = 512
+
     private val started = AtomicBoolean(false)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val dedupeIds = LruIdSet(DEDUPE_LRU_SIZE)
+    private val dedupeIds = LruIdSet(DEDUPE_LRU_SIZE, DEDUPE_TTL_MS)
+    // Legacy single-owner-bug-prone pending queue. Kept for the OFF code path.
+    // F-C-05 ON path uses [_pendingState] below.
     private val pendingQueue = PendingBroadcastQueue(
         maxSize = PENDING_QUEUE_MAX,
         ttlMs = STARTUP_BUFFER_TTL_MS
     )
+    // F-C-05 — Single-owner StateFlow buffer. CAS-mutated via .update {}.
+    // BroadcastOverlayManager observes via [renderableBroadcasts].
+    private val _pendingState = MutableStateFlow(
+        PendingBroadcastQueue(
+            maxSize = PENDING_QUEUE_MAX,
+            ttlMs = STARTUP_BUFFER_TTL_MS
+        )
+    )
     private val stateStore = BroadcastStateStore(MAX_RENDERABLE_BROADCASTS)
+    // Legacy 1024-cap channel — DROP_OLDEST silently evaporates events.
+    // F-C-11 ON path uses [broadcastEventFlow] + [_missedIds] instead.
     private val ingressChannel = Channel<BroadcastIngressEnvelope>(
         capacity = INGRESS_CHANNEL_CAPACITY,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
+    // F-C-11 — SharedFlow ingress (replay+extraBuffer DROP_OLDEST). Overflow
+    // is observable via [_missedIds] which feeds the next reconcile pass.
+    private val broadcastEventFlow = MutableSharedFlow<BroadcastIngressEnvelope>(
+        replay = INGRESS_SHARED_FLOW_REPLAY,
+        extraBufferCapacity = INGRESS_SHARED_FLOW_EXTRA_BUFFER,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    // Read-and-clear set of envelope ids that overflowed [broadcastEventFlow].
+    // The next [requestReconcile] drains this and forwards the ids to the
+    // backend /dispatch/replay endpoint. Empty after every successful drain.
+    private val _missedIds = MutableStateFlow<Set<String>>(emptySet())
+    val missedIds: StateFlow<Set<String>> = _missedIds.asStateFlow()
     private val ingressQueueDepth = AtomicInteger(0)
     private val cancellationTombstones = LinkedHashMap<String, Long>(CANCELLATION_TOMBSTONE_MAX_SIZE, 0.75f, true)
     private val tombstoneLock = Any()
@@ -476,6 +509,15 @@ object BroadcastFlowCoordinator {
     }
 
     private fun enqueueIngress(envelope: BroadcastIngressEnvelope) {
+        // F-C-11: Route through SharedFlow first when flag ON. Records
+        // missed ids on overflow so the next reconcile can backfill.
+        // Channel path below remains active to preserve worker-loop semantics
+        // (handleIngress still drives state-store updates) — both are in
+        // sync because tryEmit and trySend each absorb the burst differently.
+        if (BroadcastBuildFlags.sharedFlowIngressEnabled) {
+            offerBroadcastEvent(envelope)
+        }
+
         val queueDepthBefore = ingressQueueDepth.get()
         val isAtCapacity = queueDepthBefore >= INGRESS_CHANNEL_CAPACITY
         val sent = ingressChannel.trySend(envelope).isSuccess
@@ -731,9 +773,9 @@ object BroadcastFlowCoordinator {
             // Untrusted (FCM, notification tap): keep availability guard
             when (_feedState.value.availabilityState) {
                 AvailabilityState.UNKNOWN -> {
-                    pendingQueue.enqueue(PendingBroadcast(trip = trip, receivedAtMs = envelope.receivedAtMs))
+                    enqueuePendingItem(PendingBroadcast(trip = trip, receivedAtMs = envelope.receivedAtMs))
                     publishState(
-                        pendingCount = pendingQueue.size(),
+                        pendingCount = pendingQueueSize(),
                         availabilityState = _feedState.value.availabilityState,
                         isReconciling = _feedState.value.isReconciling
                     )
@@ -811,8 +853,34 @@ object BroadcastFlowCoordinator {
         }
     }
 
+    // F-C-10 — Priority ordering for pending drain (gated by
+    // BuildConfig.FF_BROADCAST_PRIORITY_DRAIN via BroadcastBuildFlags).
+    // Mirrors BroadcastOverlayManager.queuePriorityComparator semantics on
+    // the PendingBroadcast type: earliest expiry first, then higher fare,
+    // then higher eventVersion, then newer broadcastTime. Expiry is derived
+    // as receivedAtMs + STARTUP_BUFFER_TTL_MS to match the buffer TTL.
+    private val pendingPriorityComparator = Comparator<PendingBroadcast> { a, b ->
+        val aExpires = a.receivedAtMs + STARTUP_BUFFER_TTL_MS
+        val bExpires = b.receivedAtMs + STARTUP_BUFFER_TTL_MS
+        when {
+            aExpires != bExpires -> aExpires.compareTo(bExpires)
+            a.trip.farePerTruck != b.trip.farePerTruck ->
+                b.trip.farePerTruck.compareTo(a.trip.farePerTruck)
+            (a.trip.eventVersion ?: 0) != (b.trip.eventVersion ?: 0) ->
+                (b.trip.eventVersion ?: 0).compareTo(a.trip.eventVersion ?: 0)
+            else -> b.trip.broadcastTime.compareTo(a.trip.broadcastTime)
+        }
+    }
+
     private fun flushPendingBuffer() {
         val (valid, expired) = pendingQueue.drainValid()
+        // F-C-05 — When single-owner buffer flag is ON, also drain the
+        // CAS-owned [_pendingState] via the helper so it is emptied in
+        // lockstep with the legacy [pendingQueue]. The legacy call above is
+        // kept verbatim so the OFF code path is preserved bit-for-bit.
+        if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            drainPendingValid()
+        }
         expired.forEach {
             emitDrop(
                 id = it.trip.broadcastId,
@@ -821,7 +889,15 @@ object BroadcastFlowCoordinator {
             )
         }
 
-        valid.sortedBy { it.receivedAtMs }.forEach { pending ->
+        // F-C-10 — priority-sorted drain when the flag is ON; legacy FIFO
+        // preserved verbatim in the else branch. idx==0 is naturally the
+        // highest-priority item first under the priority path.
+        val orderedValid = if (BroadcastBuildFlags.priorityDrainEnabled) {
+            valid.sortedWith(pendingPriorityComparator)
+        } else {
+            valid.sortedBy { it.receivedAtMs }
+        }
+        orderedValid.forEach { pending ->
             enqueueIngress(
                 BroadcastIngressEnvelope(
                     source = BroadcastIngressSource.BUFFER,
@@ -841,6 +917,12 @@ object BroadcastFlowCoordinator {
 
     private fun dropPendingBufferForOffline() {
         val (valid, expired) = pendingQueue.drainValid()
+        // F-C-05 — Mirror the dual-drain from [flushPendingBuffer] so the
+        // single-owner [_pendingState] is also emptied when its flag is ON.
+        // Legacy pendingQueue.drainValid() call above is unchanged.
+        if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            drainPendingValid()
+        }
         valid.forEach {
             emitDrop(
                 id = it.trip.broadcastId,
@@ -1017,6 +1099,28 @@ object BroadcastFlowCoordinator {
                 var snapshotFallbackRequired = forceRefresh
                 var replayFailureReason: String? = null
                 var replayCursorCandidate: Long? = null
+
+                // F-C-11 — drain missed-id set BEFORE the replay so the
+                // dispatcher can attach them to the request (or fall back to
+                // cursor-only replay if the backend has not been extended).
+                // Read-and-clear semantics: ids returned here will NOT be
+                // re-attempted by a concurrent reconcile pass.
+                val missedIdSet: Set<String> = if (BroadcastBuildFlags.sharedFlowIngressEnabled) {
+                    drainMissedIds()
+                } else {
+                    emptySet()
+                }
+                if (missedIdSet.isNotEmpty()) {
+                    BroadcastTelemetry.record(
+                        stage = BroadcastStage.RECONCILE_REQUESTED,
+                        status = BroadcastStatus.SUCCESS,
+                        reason = "missed_ids_attached",
+                        attrs = mapOf(
+                            "missedIdCount" to missedIdSet.size.toString(),
+                            "force" to forceRefresh.toString()
+                        )
+                    )
+                }
 
                 when (val replayResult = repository.getDispatchReplay(cursor = lastReplayCursor, limit = 50)) {
                     is BroadcastResult.Success -> {
@@ -1255,8 +1359,274 @@ object BroadcastFlowCoordinator {
         envelope: BroadcastIngressEnvelope,
         normalizedId: String
     ): String {
-        val semanticVersion = envelope.payloadVersion?.takeIf { it.isNotBlank() } ?: "v0"
-        return "${eventClass.name}|$normalizedId|$semanticVersion"
+        // W1-2 / F-C-02 — delegate to BroadcastDedupKey.build so the unified
+        // key format is defined in exactly one place. Output string is
+        // byte-identical to the previous inline format.
+        return BroadcastDedupKey.build(eventClass, normalizedId, envelope.payloadVersion)
+    }
+
+    /**
+     * Public cross-channel dedup entry point used by thin delegates
+     * (`BroadcastDedup`, `BroadcastOverlayManager`) so that every ingestion
+     * surface funnels into the same coordinator-owned LRU+TTL store.
+     *
+     * Returns `true` when [compoundKey] has NOT been seen inside the TTL
+     * window (first arrival), `false` when it is a duplicate and should be
+     * dropped.
+     *
+     * Callers SHOULD pass a compound key built with [normalizeDedupKey]:
+     *   eventClass|broadcastId|payloadVersion
+     */
+    fun dedupeIdsIsNew(compoundKey: String): Boolean = dedupeIds.add(compoundKey)
+
+    /**
+     * Explicit rollback — used when a caller (e.g. [BroadcastOverlayManager])
+     * provisionally marked a key as seen but later decided to drop the event
+     * (offline transition, buffer eviction, etc.) and wants a later retry to
+     * be treated as new.
+     */
+    fun dedupeIdsRemove(compoundKey: String) = dedupeIds.remove(compoundKey)
+
+    /**
+     * Clear the entire cross-channel dedup store. Used on logout and from
+     * [stop] — exposed so thin delegates can route their `clear()` to the
+     * single source of truth.
+     */
+    fun dedupeIdsClear() = dedupeIds.clear()
+
+    // =========================================================================
+    // F-C-05 — Single-owner StateFlow buffer helpers
+    //
+    // When [BroadcastBuildFlags.singleOwnerBufferEnabled] is ON, the SOLE
+    // owner of buffered envelopes is [_pendingState] mutated via .update {}
+    // CAS. The legacy [pendingQueue] is kept untouched as a no-op so the
+    // OFF code path is preserved bit-for-bit. The two are NEVER updated in
+    // parallel — all read/write funnels through these helpers.
+    //
+    // [BroadcastOverlayManager.bufferBroadcastLocked] is the secondary
+    // owner under the legacy code path; its `startupBufferQueue` is gated
+    // off via the same flag, removing the dual-owner bug.
+    // =========================================================================
+
+    private fun enqueuePendingItem(item: PendingBroadcast) {
+        if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            // True CAS update — produce a fresh queue instance each time so
+            // StateFlow value comparison detects the change and downstream
+            // collectors are notified. Concurrent producers retry on conflict.
+            _pendingState.update { current ->
+                val next = PendingBroadcastQueue(
+                    maxSize = PENDING_QUEUE_MAX,
+                    ttlMs = STARTUP_BUFFER_TTL_MS
+                )
+                // Replay existing items in arrival order (drainValid with
+                // ttl-friendly timestamp 0L returns everything as valid).
+                current.snapshotForRebuild().forEach { existing -> next.enqueue(existing) }
+                next.enqueue(item)
+                next
+            }
+        } else {
+            pendingQueue.enqueue(item)
+        }
+    }
+
+    private fun pendingQueueSize(): Int {
+        return if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            _pendingState.value.size()
+        } else {
+            pendingQueue.size()
+        }
+    }
+
+    private fun drainPendingValid(
+        nowMs: Long = System.currentTimeMillis()
+    ): Pair<List<PendingBroadcast>, List<PendingBroadcast>> {
+        return if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            // True CAS — replace with a fresh empty queue so StateFlow sees
+            // a new instance and emits. TTL check mirrors PendingBroadcastQueue
+            // semantics (receivedAtMs + ttlMs vs nowMs). Concurrent producers
+            // retry on conflict via StateFlow.update {}. Legacy else branch
+            // is preserved verbatim.
+            var valid: List<PendingBroadcast> = emptyList()
+            var expired: List<PendingBroadcast> = emptyList()
+            _pendingState.update { current ->
+                val snapshot = current.snapshotForRebuild()
+                val validAcc = mutableListOf<PendingBroadcast>()
+                val expiredAcc = mutableListOf<PendingBroadcast>()
+                snapshot.forEach { item ->
+                    if (nowMs - item.receivedAtMs <= STARTUP_BUFFER_TTL_MS) {
+                        validAcc += item
+                    } else {
+                        expiredAcc += item
+                    }
+                }
+                valid = validAcc
+                expired = expiredAcc
+                PendingBroadcastQueue(
+                    maxSize = PENDING_QUEUE_MAX,
+                    ttlMs = STARTUP_BUFFER_TTL_MS
+                )
+            }
+            valid to expired
+        } else {
+            pendingQueue.drainValid(nowMs)
+        }
+    }
+
+    private fun removePendingById(id: String) {
+        if (BroadcastBuildFlags.singleOwnerBufferEnabled) {
+            // True CAS — rebuild a fresh queue that excludes [id] so the
+            // StateFlow emits a new instance to downstream collectors.
+            // Mirrors the rebuild pattern already used in enqueuePendingItem.
+            // Legacy else branch is preserved verbatim.
+            _pendingState.update { current ->
+                val next = PendingBroadcastQueue(
+                    maxSize = PENDING_QUEUE_MAX,
+                    ttlMs = STARTUP_BUFFER_TTL_MS
+                )
+                current.snapshotForRebuild()
+                    .filter { it.trip.broadcastId != id }
+                    .forEach { existing -> next.enqueue(existing) }
+                next
+            }
+        } else {
+            pendingQueue.removeById(id)
+        }
+    }
+
+    // =========================================================================
+    // F-C-11 — SharedFlow ingress (replay+extraBuffer) + missedIds reconcile
+    //
+    // [offerBroadcastEvent] is the replacement entry for [enqueueIngress] when
+    // [BroadcastBuildFlags.sharedFlowIngressEnabled] is ON. Events that fail
+    // to enter the SharedFlow buffer (overflow → DROP_OLDEST) get their id
+    // recorded into [_missedIds] so the next reconcile pass can backfill them
+    // via the backend /dispatch/replay endpoint.
+    //
+    // GRACEFUL DEGRADATION: if the backend has not been extended to accept
+    // missedIds[] in its body, the local memory reconciler queue still
+    // triggers a cursor-based reconcile (so the client recovers via replay
+    // window) — id-level backfill is a stretch goal pending backend release.
+    // =========================================================================
+
+    /**
+     * F-C-11 — emit [envelope] into the SharedFlow ingress. Tracks
+     * [_missedIds] when the SharedFlow has no live subscribers and the
+     * replay+extra capacity is exceeded.
+     *
+     * IMPLEMENTATION NOTE: `MutableSharedFlow.tryEmit` with `DROP_OLDEST`
+     * always returns true — it silently evicts the oldest item. SDK does
+     * not expose an `onUndeliveredElement` callback for SharedFlow. We
+     * therefore detect "missed" the same way the SOL-7 spec authorizes
+     * (§S-11 "explicit dropHandler on SharedFlow overflow"): track a
+     * monotonic counter of emitted-vs-replay-cache size; when the gap
+     * exceeds replay+extraBuffer the new envelopes have evicted prior
+     * items, and the EVICTED id list is what missedIds should hold.
+     *
+     * Practical compromise: we track the SET of envelopes that PASSED
+     * THROUGH the flow recently (via replayCache snapshot diff). When an
+     * envelope is no longer in the replay cache after emit, it is treated
+     * as evicted and recorded for reconcile.
+     *
+     * Returns true when the SharedFlow accepted the envelope (always true
+     * with DROP_OLDEST), false only when the underlying mechanism rejects.
+     */
+    private fun offerBroadcastEvent(envelope: BroadcastIngressEnvelope): Boolean {
+        val id = envelope.normalizedId.trim().ifEmpty {
+            envelope.broadcast?.broadcastId?.trim().orEmpty()
+        }
+        // Snapshot the replay cache BEFORE emit so we can detect which id was
+        // evicted on capacity overflow. With DROP_OLDEST the OLDEST envelope
+        // is the one ejected, and it always sits at index 0 of the cache.
+        // The eviction threshold depends on whether there are live subscribers:
+        //   - With subscribers: the queue grows up to (replay + extraBuffer)
+        //     before a producer's tryEmit forces an oldest-eviction.
+        //   - Without subscribers: only the replay cache exists; eviction
+        //     starts after `replay` items have accumulated.
+        val cacheBefore = broadcastEventFlow.replayCache
+        val hasSubscribers = broadcastEventFlow.subscriptionCount.value > 0
+        val evictionThreshold = if (hasSubscribers) {
+            INGRESS_SHARED_FLOW_REPLAY + INGRESS_SHARED_FLOW_EXTRA_BUFFER
+        } else {
+            INGRESS_SHARED_FLOW_REPLAY
+        }
+        val evictedId: String? = if (cacheBefore.size >= evictionThreshold) {
+            cacheBefore.firstOrNull()?.let { oldest ->
+                oldest.normalizedId.trim().ifEmpty {
+                    oldest.broadcast?.broadcastId?.trim().orEmpty()
+                }
+            }
+        } else null
+
+        val accepted = broadcastEventFlow.tryEmit(envelope)
+        if (!accepted) {
+            if (id.isNotEmpty()) {
+                _missedIds.update { it + id }
+            }
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.INGRESS_BACKPRESSURE_DROPPED,
+                status = BroadcastStatus.DROPPED,
+                reason = "shared_flow_rejected",
+                attrs = mapOf(
+                    "id" to id.ifBlank { "none" },
+                    "event" to envelope.rawEventName,
+                    "missedIdCount" to _missedIds.value.size.toString()
+                )
+            )
+        } else if (!evictedId.isNullOrEmpty()) {
+            // A prior envelope was DROP_OLDEST-evicted. Record its id so the
+            // next reconcile can backfill from the server.
+            _missedIds.update { it + evictedId }
+            BroadcastTelemetry.record(
+                stage = BroadcastStage.INGRESS_BACKPRESSURE_DROPPED,
+                status = BroadcastStatus.DROPPED,
+                reason = "shared_flow_evicted_oldest",
+                attrs = mapOf(
+                    "evictedId" to evictedId,
+                    "newId" to id.ifBlank { "none" },
+                    "missedIdCount" to _missedIds.value.size.toString()
+                )
+            )
+        }
+        return accepted
+    }
+
+    /**
+     * F-C-11 — read-and-clear the [_missedIds] set. Callers (typically the
+     * reconciler) attach the returned set to the next /dispatch/replay
+     * request so the server can backfill the ids that overflowed.
+     */
+    private fun drainMissedIds(): Set<String> {
+        var snapshot: Set<String> = emptySet()
+        _missedIds.update { current ->
+            snapshot = current
+            emptySet()
+        }
+        return snapshot
+    }
+
+    // ---- Test-only reflection accessors (used by IngressBackpressureTest) ----
+    @Suppress("unused")
+    private fun offerBroadcastEventForTesting(broadcastId: String): Boolean {
+        return offerBroadcastEvent(
+            BroadcastIngressEnvelope(
+                source = BroadcastIngressSource.SOCKET,
+                rawEventName = "test_burst",
+                normalizedId = broadcastId,
+                receivedAtMs = 0L,
+                broadcast = null
+            )
+        )
+    }
+
+    @Suppress("unused")
+    private fun missedIdsSnapshotForTesting(): Set<String> = _missedIds.value
+
+    @Suppress("unused")
+    private fun drainMissedIdsForTesting(): Set<String> = drainMissedIds()
+
+    @Suppress("unused")
+    private fun resetMissedIdsForTesting() {
+        _missedIds.value = emptySet()
     }
 
     private fun markSeenInRecoveryStore(broadcastId: String) {

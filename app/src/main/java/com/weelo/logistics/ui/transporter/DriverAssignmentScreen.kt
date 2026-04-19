@@ -1,5 +1,6 @@
 package com.weelo.logistics.ui.transporter
 
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -32,8 +33,15 @@ import com.weelo.logistics.data.repository.DriverResult
 import com.weelo.logistics.data.repository.VehicleRepository
 import com.weelo.logistics.data.repository.VehicleResult
 import com.weelo.logistics.data.remote.SocketIOService
+import com.weelo.logistics.ui.ServerDeadlineTimer
 import com.weelo.logistics.ui.components.*
 import com.weelo.logistics.ui.theme.*
+import com.weelo.logistics.ui.viewmodel.DriverAssignmentViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.weelo.logistics.BuildConfig
+import com.weelo.logistics.broadcast.assignment.DriverAssignmentUiState
+import com.weelo.logistics.data.model.HoldPhase
 import kotlinx.coroutines.launch
 
 private fun DriverAssignmentAvailability.chipStatus(): ChipStatus {
@@ -75,13 +83,25 @@ fun DriverAssignmentScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    
+    val assignmentViewModel: DriverAssignmentViewModel = viewModel()
+
+    // F-C-29: when FF is ON, surface the VM's uiState so the Screen can read it
+    // the same way the rest of the app reads MVVM-backed state. Keeping the
+    // read unconditional (FF checked later) lets future rollouts enable the
+    // migration without touching imports.
+    val vmUiState: DriverAssignmentUiState by assignmentViewModel.uiState.collectAsStateWithLifecycle()
+    if (BuildConfig.FF_DRIVER_ASSIGNMENT_VM_MIGRATION) {
+        // Observation side-effect: surfaces the VM state to Compose without
+        // causing a recomposition-cycle. Screen still owns the mutation path.
+        timber.log.Timber.v("[F-C-29] VM uiState: %s", vmUiState::class.simpleName)
+    }
+
     // Real repositories connected to backend
     val broadcastRepository = remember { BroadcastRepository.getInstance(context) }
     val assignmentCoordinator = remember { BroadcastAssignmentCoordinator(broadcastRepository) }
     val vehicleRepository = remember { VehicleRepository.getInstance(context) }
     val driverRepository = remember { DriverRepository.getInstance(context) }
-    
+
     var broadcast by remember { mutableStateOf<BroadcastTrip?>(null) }
     var vehicles by remember { mutableStateOf<List<Vehicle>>(emptyList()) }
     var fleetDrivers by remember { mutableStateOf<List<Driver>>(emptyList()) }
@@ -91,11 +111,20 @@ fun DriverAssignmentScreen(
     var isSubmitting by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val fleetDriversById = remember(fleetDrivers) { fleetDrivers.associateBy { it.id } }
-    
+
     val resolvedHoldId = remember(holdId) { holdId.trim().takeUnless { it.isBlank() } }
 
+    // F-C-34: hold phase — sourced from the server via getMyActiveHold when
+    // the FF is ON. Until backend F-C-25 extension ships the phase field
+    // publicly we default to UNKNOWN so the UI falls back to the legacy block.
+    var holdPhase by remember { mutableStateOf(HoldPhase.UNKNOWN) }
+    var canExtendHold by remember { mutableStateOf(false) }
+
+    // F-C-47: banner state — surfaced when a driver goes offline mid-assignment.
+    var ejectedDriverName by remember { mutableStateOf<String?>(null) }
+
     // ── Hold expiry countdown (Phase 2 timer) ──
-    // Backend hold is 180s total. Phase 1 (TruckHoldConfirmScreen) used some of that.
+    // Backend hold is 180s total. Phase 1 (VehicleHoldConfirmScreen) used some of that.
     // Here we show remaining time so transporter knows how long they have to assign drivers.
     var holdRemainingSeconds by remember { mutableStateOf(-1) } // -1 = not loaded yet
     var holdExpired by remember { mutableStateOf(false) }
@@ -110,20 +139,37 @@ fun DriverAssignmentScreen(
                     vehicleSubtype = requiredVehicleSubtype
                 )
             }
-            val expiresAtStr = response.body()?.data?.expiresAt
+            val myActiveHold = response.body()?.data
+            // F-C-34: pull phase + canExtend from backend when present.
+            // Nullable fallback -> UNKNOWN -> LegacyCountdownBlock.
+            holdPhase = myActiveHold?.phase ?: HoldPhase.UNKNOWN
+            canExtendHold = myActiveHold?.canExtend == true && holdPhase == HoldPhase.FLEX
+            val expiresAtStr = myActiveHold?.expiresAt
             if (expiresAtStr != null) {
                 val expiresAtMs = try {
                     java.time.Instant.parse(expiresAtStr).toEpochMilli()
                 } catch (_: Exception) { 0L }
                 if (expiresAtMs > 0) {
-                    var remaining = ((expiresAtMs - System.currentTimeMillis()) / 1000).toInt().coerceAtLeast(0)
-                    holdRemainingSeconds = remaining
-                    while (remaining > 0 && !isSubmitting) {
-                        kotlinx.coroutines.delay(1000)
-                        remaining--
-                        holdRemainingSeconds = remaining
+                    // F-C-27: pin a monotonic deadline and recompute every tick.
+                    // Doze-safe because SystemClock.elapsedRealtime keeps ticking in sleep
+                    // and isn't affected by wall-clock jumps.
+                    val deadlineElapsedMs = ServerDeadlineTimer.deadlineElapsedFromServerExpiry(
+                        expiresAtWallMs = expiresAtMs,
+                        nowWallMs = System.currentTimeMillis(),
+                        nowElapsedMs = SystemClock.elapsedRealtime()
+                    )
+                    holdRemainingSeconds = ServerDeadlineTimer.remainingSecondsFromDeadline(
+                        deadlineElapsedMs = deadlineElapsedMs,
+                        nowElapsedMs = SystemClock.elapsedRealtime()
+                    )
+                    while (holdRemainingSeconds > 0 && !isSubmitting) {
+                        kotlinx.coroutines.delay(500)
+                        holdRemainingSeconds = ServerDeadlineTimer.remainingSecondsFromDeadline(
+                            deadlineElapsedMs = deadlineElapsedMs,
+                            nowElapsedMs = SystemClock.elapsedRealtime()
+                        )
                     }
-                    if (remaining <= 0 && !isSubmitting) {
+                    if (holdRemainingSeconds <= 0 && !isSubmitting) {
                         holdExpired = true
                     }
                 }
@@ -245,20 +291,44 @@ fun DriverAssignmentScreen(
     LaunchedEffect(Unit) {
         SocketIOService.driverStatusChanged.collect { event ->
             timber.log.Timber.i("📡 [DriverAssignment] Real-time status: ${event.driverName} → ${if (event.isOnline) "ONLINE" else "OFFLINE"}")
-            
+
             // Check if this driver is currently assigned to a vehicle
             if (!event.isOnline) {
                 val isAssigned = driverAssignments.values.contains(event.driverId)
                 if (isAssigned) {
                     timber.log.Timber.w("⚠️ Assigned driver ${event.driverName} went OFFLINE — assignment invalidated")
-                    Toast.makeText(
-                        context,
-                        "${event.driverName} went offline. Please reassign.",
-                        Toast.LENGTH_LONG
-                    ).show()
+
+                    if (BuildConfig.FF_PROACTIVE_DRIVER_EVICTION) {
+                        // F-C-47: remove the vehicle -> driver entry and reopen the
+                        // picker for the affected vehicle. Before this fix the chip
+                        // went dim but the assignment stayed valid, so the
+                        // "Send to Drivers" button submitted an offline driver and
+                        // the backend silently rejected the whole batch.
+                        val affectedVehicleId = driverAssignments.entries
+                            .firstOrNull { it.value == event.driverId }?.key
+                        if (affectedVehicleId != null) {
+                            driverAssignments = driverAssignments - affectedVehicleId
+                            ejectedDriverName = event.driverName
+                            // Analytics breadcrumb — grep string must stay stable.
+                            timber.log.Timber.i(
+                                "driverEjectedMidAssignment driverId=%s vehicleId=%s",
+                                event.driverId,
+                                affectedVehicleId
+                            )
+                            // Auto-reopen the picker so the transporter has a
+                            // frictionless path to replace the ejected driver.
+                            showDriverPicker = affectedVehicleId
+                        }
+                    } else {
+                        Toast.makeText(
+                            context,
+                            "${event.driverName} went offline. Please reassign.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                 }
             }
-            
+
             fleetDrivers = fleetDrivers.map { driver ->
                 if (driver.id == event.driverId) {
                     driver.copy(isAvailable = event.isOnline)
@@ -319,41 +389,50 @@ fun DriverAssignmentScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Hold Expiry Timer (visible during Phase 2)
+                // F-C-34: phase-aware timer card (FF_PHASE_AWARE_TIMER).
+                // When FF is OFF — or when the server returns HoldPhase.UNKNOWN
+                // (e.g. prior to backend F-C-25 extension landing) — render the
+                // legacy block so this is a non-breaking diff. Both paths are
+                // covered by PhaseTimerCardTest.
                 if (holdRemainingSeconds >= 0) {
                     item {
-                        val timerColor = when {
-                            holdRemainingSeconds > 30 -> Success
-                            holdRemainingSeconds > 10 -> Warning
-                            else -> Error
-                        }
-                        val minutes = holdRemainingSeconds / 60
-                        val seconds = holdRemainingSeconds % 60
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(timerColor.copy(alpha = 0.1f))
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    Icons.Default.Timer,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(20.dp),
-                                    tint = timerColor
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    "Hold expires in ${minutes}:${"%02d".format(seconds)}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = timerColor
-                                )
+                        val useLegacy = !BuildConfig.FF_PHASE_AWARE_TIMER ||
+                            holdPhase == HoldPhase.UNKNOWN
+                        if (useLegacy) {
+                            LegacyCountdownBlock(remainingSeconds = holdRemainingSeconds)
+                        } else {
+                            val total = when (holdPhase) {
+                                HoldPhase.FLEX -> 130
+                                HoldPhase.CONFIRMED -> 180
+                                else -> 0
                             }
+                            PhaseTimerCard(
+                                phase = holdPhase,
+                                remaining = holdRemainingSeconds,
+                                total = total,
+                                canExtend = canExtendHold,
+                                onExtend = {
+                                    // Extend is only valid in FLEX — the card
+                                    // already gates, but double-check so a
+                                    // stale canExtend cannot hit a CONFIRMED
+                                    // hold. See PhaseTimerCardTest.
+                                    if (holdPhase == HoldPhase.FLEX && canExtendHold) {
+                                        timber.log.Timber.i("[F-C-34] Extend +30s requested")
+                                    }
+                                }
+                            )
                         }
+                    }
+                }
+
+                // F-C-47: ejection banner — shown when a driver goes offline
+                // mid-assignment. Tapping the picker clears the banner.
+                if (BuildConfig.FF_PROACTIVE_DRIVER_EVICTION && ejectedDriverName != null) {
+                    item {
+                        DriverEjectionBanner(
+                            driverName = ejectedDriverName!!,
+                            onDismiss = { ejectedDriverName = null }
+                        )
                     }
                 }
 
@@ -590,7 +669,11 @@ fun DriverAssignmentScreen(
     showDriverPicker?.let { vehicleId ->
         DriverPickerBottomSheet(
             drivers = fleetDrivers.filter { driver ->
-                !driverAssignments.values.contains(driver.id) // Don't show already assigned drivers
+                // Industry standard: show ONLY online + available drivers.
+                // Offline and on-trip drivers are hidden — not selectable at backend level anyway.
+                // The real-time driverStatusChanged listener (above) keeps this list fresh.
+                !driverAssignments.values.contains(driver.id) &&
+                driver.assignmentAvailability() == DriverAssignmentAvailability.ACTIVE
             },
             onDriverSelected = { driver ->
                 driverAssignments = driverAssignments + (vehicleId to driver.id)
@@ -603,363 +686,10 @@ fun DriverAssignmentScreen(
 
 }
 
-/**
- * VEHICLE DRIVER ASSIGNMENT CARD
- * Shows truck with assigned driver or assignment button
- */
-@Composable
-fun VehicleDriverAssignmentCard(
-    vehicle: Vehicle,
-    assignedDriver: Driver?,
-    onAssignDriver: () -> Unit,
-    onRemoveDriver: () -> Unit,
-    index: Int
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (assignedDriver != null)
-                    Modifier.border(2.dp, Success, RoundedCornerShape(12.dp))
-                else Modifier
-            ),
-        colors = CardDefaults.cardColors(
-            containerColor = if (assignedDriver != null) Success.copy(alpha = 0.05f) else White
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
-            // Truck Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Number Badge
-                Surface(
-                    shape = CircleShape,
-                    color = Primary
-                ) {
-                    Text(
-                        "$index",
-                        modifier = Modifier.padding(8.dp),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = White
-                    )
-                }
-                
-                Spacer(Modifier.width(12.dp))
-                
-                Icon(
-                    Icons.Default.LocalShipping,
-                    null,
-                    modifier = Modifier.size(32.dp),
-                    tint = Primary
-                )
-                
-                Spacer(Modifier.width(12.dp))
-                
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        vehicle.vehicleNumber,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        vehicle.displayName,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-                }
-                
-                // Status Badge
-                if (assignedDriver != null) {
-                    Icon(
-                        Icons.Default.CheckCircle,
-                        null,
-                        tint = Success,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-            }
-            
-            Spacer(Modifier.height(16.dp))
-            Divider()
-            Spacer(Modifier.height(16.dp))
-            
-            // Assigned Driver or Assignment Button
-            if (assignedDriver != null) {
-                val assignedStatus = assignedDriver.assignmentAvailability()
-                val assignedStatusColor = when (assignedStatus) {
-                    DriverAssignmentAvailability.ACTIVE -> Success
-                    DriverAssignmentAvailability.OFFLINE -> TextSecondary
-                    DriverAssignmentAvailability.ON_TRIP -> Warning
-                }
 
-                // Show assigned driver
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Driver Avatar
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(assignedStatusColor.copy(alpha = 0.2f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Person,
-                            null,
-                            tint = assignedStatusColor,
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
-                    
-                    Spacer(Modifier.width(12.dp))
-                    
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            assignedDriver.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        StatusChip(
-                            text = assignedStatus.displayName(),
-                            status = assignedStatus.chipStatus(),
-                            size = ChipSize.SMALL
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Star,
-                                null,
-                                modifier = Modifier.size(14.dp),
-                                tint = Warning
-                            )
-                            Text(
-                                " ${assignedDriver.rating} • ${assignedDriver.totalTrips} trips",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextSecondary
-                            )
-                        }
-                    }
-                    
-                    IconButton(onClick = onRemoveDriver) {
-                        Icon(Icons.Default.Close, "Remove", tint = Error)
-                    }
-                }
-            } else {
-                // Assign Driver Button
-                OutlinedButton(
-                    onClick = onAssignDriver,
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Primary
-                    ),
-                    border = ButtonDefaults.outlinedButtonBorder.copy(width = 2.dp)
-                ) {
-                    Icon(Icons.Default.PersonAdd, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "Assign Driver",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * DRIVER PICKER BOTTOM SHEET
- * Modal to select driver from available list
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun DriverPickerBottomSheet(
-    drivers: List<Driver>,
-    onDriverSelected: (Driver) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var showSheet by remember { mutableStateOf(true) }
-    
-    if (showSheet) {
-        ModalBottomSheet(
-            onDismissRequest = {
-                showSheet = false
-                onDismiss()
-            },
-            containerColor = White
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Text(
-                    "Select Driver",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold
-                )
-                
-                Spacer(Modifier.height(8.dp))
-                
-                Text(
-                    "${drivers.size} drivers shown",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary
-                )
-                
-                Spacer(Modifier.height(16.dp))
-                
-                if (drivers.isEmpty()) {
-                    IllustratedEmptyState(
-                        illustrationRes = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.drawableRes,
-                        title = stringResource(R.string.empty_title_no_assignment_drivers),
-                        subtitle = stringResource(R.string.empty_subtitle_no_assignment_drivers),
-                        maxIllustrationWidthDp = EmptyStateLayoutStyle.MODAL_COMPACT.maxIllustrationWidthDp,
-                        maxTextWidthDp = EmptyStateLayoutStyle.MODAL_COMPACT.maxTextWidthDp,
-                        showFramedIllustration = EmptyStateLayoutStyle.MODAL_COMPACT.showFramedIllustration,
-                        sectionBackgroundColor = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.blendPalette().sectionBackground,
-                        sectionBlendMode = SectionBlendMode.PANEL,
-                        paletteHaloOverride = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.blendPalette().haloColor,
-                        paletteHaloAlphaOverride = EmptyStateArtwork.ASSIGNMENT_BUSY_DRIVERS.blendPalette().haloAlpha
-                    )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // OPTIMIZATION: Add keys to prevent unnecessary recompositions
-                        items(
-                            items = drivers,
-                            key = { it.id }
-                        ) { driver ->
-                            DriverSelectCard(
-                                driver = driver,
-                                onClick = {
-                                    onDriverSelected(driver)
-                                    showSheet = false
-                                }
-                            )
-                        }
-                    }
-                }
-                
-                Spacer(Modifier.height(32.dp))
-            }
-        }
-    }
-}
-
-/**
- * DRIVER SELECT CARD - Driver option in bottom sheet
- */
-@Composable
-fun DriverSelectCard(
-    driver: Driver,
-    onClick: () -> Unit
-) {
-    val driverStatus = driver.assignmentAvailability()
-    val isSelectable = driverStatus.isSelectableForAssignment()
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        onClick = { if (isSelectable) onClick() },
-        enabled = isSelectable,
-        colors = CardDefaults.cardColors(
-            if (isSelectable) White else SurfaceVariant
-        ),
-        elevation = CardDefaults.cardElevation(2.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Avatar
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(CircleShape)
-                    .background(
-                        when (driverStatus) {
-                            DriverAssignmentAvailability.ACTIVE -> Success.copy(alpha = 0.12f)
-                            DriverAssignmentAvailability.OFFLINE -> TextSecondary.copy(alpha = 0.12f)
-                            DriverAssignmentAvailability.ON_TRIP -> Warning.copy(alpha = 0.12f)
-                        }
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Default.Person,
-                    null,
-                    tint = when (driverStatus) {
-                        DriverAssignmentAvailability.ACTIVE -> Success
-                        DriverAssignmentAvailability.OFFLINE -> TextSecondary
-                        DriverAssignmentAvailability.ON_TRIP -> Warning
-                    },
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-            
-            Spacer(Modifier.width(16.dp))
-            
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    driver.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isSelectable) TextPrimary else TextSecondary
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    driver.mobileNumber,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Star, null, modifier = Modifier.size(16.dp), tint = Warning)
-                    Text(
-                        " ${driver.rating} • ${driver.totalTrips} trips",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-                StatusChip(
-                    text = driverStatus.displayName(),
-                    status = driverStatus.chipStatus(),
-                    size = ChipSize.SMALL
-                )
-                if (!isSelectable) {
-                    val blockedReason = when (driverStatus) {
-                        DriverAssignmentAvailability.ON_TRIP -> "On trip, cannot assign right now"
-                        DriverAssignmentAvailability.OFFLINE -> "Offline, cannot assign right now"
-                        DriverAssignmentAvailability.ACTIVE -> "Unavailable for assignment"
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        blockedReason,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Warning
-                    )
-                }
-            }
-            
-            Icon(
-                if (isSelectable) Icons.Default.ArrowForward else Icons.Default.Block,
-                null,
-                tint = if (isSelectable) Primary else Warning
-            )
-        }
-    }
-}
+// VehicleDriverAssignmentCard, DriverPickerBottomSheet, DriverSelectCard
+// extracted to DriverAssignmentParts.kt for 800-line compliance.
+//
+// F-C-34 PhaseTimerCard + LegacyCountdownBlock and F-C-47 DriverEjectionBanner
+// live in PhaseTimerCard.kt (same package, internal visibility) for the same
+// reason. The Screen remains the state owner — the cards are pure renderers.

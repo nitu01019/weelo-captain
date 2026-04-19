@@ -13,6 +13,7 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import android.provider.Settings
 import java.io.File
 import java.io.IOException
 import java.security.KeyStore
@@ -22,6 +23,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
@@ -90,10 +93,9 @@ object RetrofitClient {
     private const val WRITE_TIMEOUT = 15L     // was 30L — request upload is small
     private const val MAX_RETRIES = 3
     
-    // Token refresh lock to prevent multiple simultaneous refreshes
-    @Volatile
-    private var isRefreshing = false
-    private val refreshLock = Object()
+    // Single Mutex for token refresh — prevents concurrent refresh races
+    // (Industry pattern: hoc081098 Refresh-Token-Sample, Auth0 Android SDK)
+    private val refreshMutex = Mutex()
     
     /**
      * Initialize RetrofitClient with application context
@@ -289,6 +291,17 @@ object RetrofitClient {
                         timber.log.Timber.d("✅ Authorization header already present (from @Header)")
                     }
                 }
+
+                // Device binding: send X-Device-Id on every request so backend
+                // can verify the JWT's embedded deviceId matches the caller
+                try {
+                    appContext?.let { ctx ->
+                        val deviceId = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ANDROID_ID)
+                        if (!deviceId.isNullOrBlank()) {
+                            header("X-Device-Id", deviceId)
+                        }
+                    }
+                } catch (_: Exception) { /* best-effort — skip if unavailable */ }
             }
             .build()
         
@@ -315,9 +328,7 @@ object RetrofitClient {
         chain.proceed(request)
     }
     
-    /**
-     * Offline interceptor - Serve cached data when offline
-     */
+    /** Offline interceptor - Serve cached data when offline */
     private val offlineCacheInterceptor = Interceptor { chain ->
         var request = chain.request()
         
@@ -338,9 +349,7 @@ object RetrofitClient {
         chain.proceed(request)
     }
     
-    /**
-     * Retry interceptor with exponential backoff
-     */
+    /** Retry interceptor with exponential backoff */
     private val retryInterceptor = Interceptor { chain ->
         val request = chain.request()
         var response: Response? = null
@@ -386,58 +395,60 @@ object RetrofitClient {
     }
     
     /**
-     * Token refresh interceptor - Auto-refresh on 401
+     * Token refresh authenticator — proper OkHttp Authenticator (not Interceptor).
+     *
+     * Industry pattern (hoc081098/Auth0): single Mutex + stale-token check.
+     * - Mutex serializes concurrent 401 handlers (replaces synchronized + @Volatile)
+     * - Stale-token check: if token changed since our request, skip refresh (another thread won)
+     * - responseCount limit prevents infinite retry loops
+     * - No Thread.sleep — Mutex.withLock suspends the coroutine (non-blocking)
      */
-    private val tokenRefreshInterceptor = Interceptor { chain ->
-        val request = chain.request()
-        val response = chain.proceed(request)
-        
-        // Check if unauthorized and not a refresh/auth request
-        if (response.code == 401 && !request.url.encodedPath.contains("/auth/")) {
-            synchronized(refreshLock) {
-                // Check if another thread already refreshed
-                if (!isRefreshing) {
-                    isRefreshing = true
-                    
-                    try {
-                        val refreshToken = getRefreshToken()
-                        if (refreshToken != null) {
-                            timber.log.Timber.d("🔄 Token expired, attempting refresh...")
-                            
-                            // Try to refresh token (synchronous call)
-                            val refreshed = refreshTokenSync(refreshToken)
-                            
-                            if (refreshed) {
-                                timber.log.Timber.i("✅ Token refreshed successfully")
-                                
-                                // Retry original request with new token
-                                response.close()
-                                val newToken = getAccessToken()
-                                val newRequest = request.newBuilder()
-                                    .removeHeader("Authorization")
-                                    .addHeader("Authorization", "Bearer $newToken")
-                                    .build()
-                                
-                                isRefreshing = false
-                                return@Interceptor chain.proceed(newRequest)
-                            }
-                        }
-                        
-                        timber.log.Timber.w("⚠️ Token refresh failed, user needs to re-login")
-                        
-                    } finally {
-                        isRefreshing = false
-                    }
+    private val tokenAuthenticator = Authenticator { _, response ->
+        // Prevent infinite retry loops (max 3 attempts)
+        if (responseCount(response) >= 3) return@Authenticator null
+
+        // Don't try to refresh auth endpoints themselves
+        if (response.request.url.encodedPath.contains("/auth/")) return@Authenticator null
+
+        val failedToken = response.request.header("Authorization")
+
+        val newToken = runBlocking {
+            refreshMutex.withLock {
+                val currentToken = getAccessToken()
+                // Another thread already refreshed — use the new token
+                if (currentToken != null && "Bearer $currentToken" != failedToken) {
+                    return@withLock currentToken
                 }
+                // Actually refresh
+                val refreshToken = getRefreshToken() ?: return@withLock null
+                timber.log.Timber.d("Token expired, attempting refresh...")
+                if (refreshTokenSync(refreshToken)) getAccessToken() else null
             }
         }
-        
-        response
+
+        if (newToken != null) {
+            timber.log.Timber.i("Token refreshed, retrying request")
+            response.request.newBuilder()
+                .header("Authorization", "Bearer $newToken")
+                .build()
+        } else {
+            timber.log.Timber.w("Token refresh failed, user needs to re-login")
+            null
+        }
+    }
+
+    /** Count prior responses to detect retry loops (OkHttp Authenticator pattern). */
+    private fun responseCount(response: Response): Int {
+        var count = 1
+        var prior = response.priorResponse
+        while (prior != null) {
+            count++
+            prior = prior.priorResponse
+        }
+        return count
     }
     
-    /**
-     * Synchronous token refresh
-     */
+    /** Synchronous token refresh */
     private fun refreshTokenSync(refreshToken: String): Boolean {
         return try {
             val response = runBlocking {
@@ -467,9 +478,7 @@ object RetrofitClient {
     // CONNECTION POOL & CLIENT
     // ==========================================================================
     
-    /**
-     * Connection pool for TCP connection reuse
-     */
+    /** Connection pool for TCP connection reuse */
     private val connectionPool = ConnectionPool(
         maxIdleConnections = MAX_IDLE_CONNECTIONS,
         keepAliveDuration = KEEP_ALIVE_DURATION_MINUTES,
@@ -477,28 +486,24 @@ object RetrofitClient {
     )
     
     /**
-     * Certificate Pinning for production security
-     * 
-     * These are SHA-256 hashes of the server's public key certificates.
-     * When you deploy to production with real certificates, add pins here.
-     * 
-     * To get certificate pins for your domain:
-     * openssl s_client -connect api.weelo.in:443 | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64
+     * Certificate Pinning — intentionally empty (no pins added).
+     *
+     * The backend currently runs over plain HTTP (no SSL certificate on the
+     * ALB), so ENABLE_CERTIFICATE_PINNING in Constants is false and this
+     * pinner is never attached to the OkHttpClient. It exists as a ready-made
+     * builder so that enabling pinning later requires only:
+     *   1. Add real pin hashes below (generate with openssl — see Constants.kt)
+     *   2. Set ENABLE_CERTIFICATE_PINNING = true
      */
     private val certificatePinner: CertificatePinner by lazy {
         CertificatePinner.Builder()
-            // Production domain pins (add real pins when deploying)
-            // .add("api.weelo.in", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-            // .add("api.weelo.in", "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=") // Backup pin
-            
-            // Staging domain pins
-            // .add("staging-api.weelo.in", "sha256/CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=")
+            // Add real pins after HTTPS migration:
+            // .add("api.weelo.in", "sha256/<primary-pin-hash>")
+            // .add("api.weelo.in", "sha256/<backup-pin-hash>")
             .build()
     }
     
-    /**
-     * Create SSL Socket Factory with modern TLS settings
-     */
+    /** Create SSL Socket Factory with modern TLS settings */
     private fun createSecureSocketFactory(): Pair<javax.net.ssl.SSLSocketFactory, X509TrustManager>? {
         return try {
             // Use system default trust manager
@@ -582,7 +587,7 @@ object RetrofitClient {
             // Interceptors (order matters!)
             .addInterceptor(offlineCacheInterceptor)  // Handle offline first
             .addInterceptor(authInterceptor)          // Add auth header
-            .addInterceptor(tokenRefreshInterceptor)  // Auto-refresh on 401 (was missing!)
+            .authenticator(tokenAuthenticator)         // Auto-refresh on 401 (proper OkHttp Authenticator)
             .addInterceptor(retryInterceptor)         // Retry on failure (SCALABILITY: handles transient errors)
             .addNetworkInterceptor(cacheInterceptor)        // Cache responses (SCALABILITY: HTTP cache)
             .addInterceptor(responseSanitizerInterceptor)   // Strip PII from responses BEFORE logging
@@ -631,19 +636,45 @@ object RetrofitClient {
         builder.build()
     }
     
-    /**
-     * Lenient Gson for parsing - handles some edge cases better
-     */
+    /** Lenient Gson for parsing - handles some edge cases better */
     private val gson by lazy {
         com.google.gson.GsonBuilder()
             .setLenient()  // Allow lenient parsing
             .serializeNulls()  // Include null values in JSON
+            // F-C-78: forward-compatible HoldPhase enum with UNKNOWN sentinel.
+            // Uses a TypeAdapter (NOT JsonDeserializer) because JsonDeserializer
+            // is not invoked for JSON null — Gson short-circuits to Kotlin null,
+            // which would violate the non-null `phase: HoldPhase` DTO contract.
+            // TypeAdapter.read IS called for null tokens, so we can always map
+            // backend strings (known, unknown, missing, or JSON null) through
+            // HoldPhase.fromBackendString.
+            .registerTypeAdapter(
+                com.weelo.logistics.data.model.HoldPhase::class.java,
+                object : com.google.gson.TypeAdapter<com.weelo.logistics.data.model.HoldPhase>() {
+                    override fun write(
+                        out: com.google.gson.stream.JsonWriter,
+                        value: com.weelo.logistics.data.model.HoldPhase?
+                    ) {
+                        if (value == null) out.nullValue() else out.value(value.name)
+                    }
+
+                    override fun read(
+                        reader: com.google.gson.stream.JsonReader
+                    ): com.weelo.logistics.data.model.HoldPhase {
+                        val token = reader.peek()
+                        return if (token == com.google.gson.stream.JsonToken.NULL) {
+                            reader.nextNull()
+                            com.weelo.logistics.data.model.HoldPhase.UNKNOWN
+                        } else {
+                            com.weelo.logistics.data.model.HoldPhase.fromBackendString(reader.nextString())
+                        }
+                    }
+                }
+            )
             .create()
     }
     
-    /**
-     * Retrofit instance
-     */
+    /** Retrofit instance */
     private val retrofit: Retrofit by lazy {
         timber.log.Timber.i("🌐 BASE_URL: ${Constants.API.BASE_URL}")
         Retrofit.Builder()
@@ -663,9 +694,7 @@ object RetrofitClient {
         retrofit.create(VehicleApiService::class.java)
     }
     
-    /**
-     * Truck Hold API - BookMyShow-style truck holding
-     */
+    /** Truck Hold API - BookMyShow-style truck holding */
     val truckHoldApi: com.weelo.logistics.data.api.TruckHoldApiService by lazy {
         retrofit.create(com.weelo.logistics.data.api.TruckHoldApiService::class.java)
     }
@@ -739,23 +768,17 @@ object RetrofitClient {
     
     // ============== Token Management ==============
     
-    /**
-     * Get access token from secure storage
-     */
+    /** Get access token from secure storage */
     fun getAccessToken(): String? {
         return securePrefs?.getString(KEY_ACCESS_TOKEN, null)
     }
     
-    /**
-     * Get refresh token from secure storage
-     */
+    /** Get refresh token from secure storage */
     fun getRefreshToken(): String? {
         return securePrefs?.getString(KEY_REFRESH_TOKEN, null)
     }
     
-    /**
-     * Save tokens after successful login
-     */
+    /** Save tokens after successful login */
     fun saveTokens(accessToken: String, refreshToken: String) {
         securePrefs?.edit()?.apply {
             putString(KEY_ACCESS_TOKEN, accessToken)
@@ -765,9 +788,7 @@ object RetrofitClient {
         _authState.value = accessToken.isNotBlank()
     }
     
-    /**
-     * Save user info after login
-     */
+    /** Save user info after login */
     fun saveUserInfo(userId: String, role: String) {
         securePrefs?.edit()?.apply {
             putString(KEY_USER_ID, userId)
@@ -776,38 +797,28 @@ object RetrofitClient {
         }
     }
     
-    /**
-     * Get stored user ID
-     */
+    /** Get stored user ID */
     fun getUserId(): String? {
         return securePrefs?.getString(KEY_USER_ID, null)
     }
     
-    /**
-     * Get stored user role
-     */
+    /** Get stored user role */
     fun getUserRole(): String? {
         return securePrefs?.getString(KEY_USER_ROLE, null)
     }
     
-    /**
-     * Check if user is logged in
-     */
+    /** Check if user is logged in */
     fun isLoggedIn(): Boolean {
         return getAccessToken() != null
     }
     
-    /**
-     * Clear all tokens and user data (logout)
-     */
+    /** Clear all tokens and user data (logout) */
     fun clearAllData() {
         securePrefs?.edit()?.clear()?.commit()
         _authState.value = false
     }
     
-    /**
-     * Get authorization header string
-     */
+    /** Get authorization header string */
     fun getAuthHeader(): String {
         return "Bearer ${getAccessToken() ?: ""}"
     }
